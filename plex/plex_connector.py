@@ -60,7 +60,7 @@ class PlexConnector:
                 test_socket.close()
 
                 if result != 0:
-                    print(f"Connection refused (error code: {result})")
+                    debug_me(f"Connection refused (error code: {result})")
                     raise PlexConnectorException(
                         f'Cannot reach Plex server at {self.base_url}. Please check that the server is running and the address is correct.',
                         f"Connection refused (error code: {result})")
