@@ -3,7 +3,7 @@ REGISTRY=jabrown
 TAG ?= $(shell git describe --tags --always --dirty)
 PLATFORMS=linux/amd64,linux/arm64
 
-.PHONY: build docker-build docker-push
+.PHONY: docker-build docker-release
 
 docker-build:
 	docker buildx build \
