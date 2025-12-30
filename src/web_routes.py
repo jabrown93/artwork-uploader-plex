@@ -14,6 +14,7 @@ import base64
 import os
 import pprint
 import re
+import socket as socket_module
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,99 @@ from processors.media_metadata import parse_title
 from services import UtilityService, AuthenticationService
 from utils import utils
 from utils.notifications import update_log, update_status, notify_web, debug_me
+
+
+def is_ipv6_available():
+    """
+    Check if IPv6 is available on the system.
+
+    Returns:
+        bool: True if IPv6 is available, False otherwise
+    """
+    try:
+        # Try to create an IPv6 socket and bind to the IPv6 loopback address
+        test_socket = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+        try:
+            test_socket.bind(('::1', 0))
+            test_socket.close()
+            return True
+        except OSError:
+            test_socket.close()
+            return False
+    except (OSError, AttributeError):
+        # AF_INET6 not available or socket creation failed
+        return False
+
+
+def is_dual_stack_supported():
+    """
+    Test if binding to :: actually enables dual-stack (IPv4 + IPv6) listening.
+
+    This is important for Windows compatibility where the IPV6_V6ONLY socket
+    option might prevent dual-stack behavior.
+
+    Returns:
+        bool: True if :: binding supports both IPv4 and IPv6, False otherwise
+    """
+    # First check if IPv6 is available at all
+    if not is_ipv6_available():
+        return False
+
+    try:
+        # Create a test server socket bound to :: (all interfaces, IPv6)
+        server_socket = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+
+        # Set socket options to allow reuse
+        server_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
+
+        # Try to disable IPV6_V6ONLY if possible (enables dual-stack)
+        # This might not be available on all platforms
+        try:
+            server_socket.setsockopt(socket_module.IPPROTO_IPV6, socket_module.IPV6_V6ONLY, 0)
+        except (OSError, AttributeError):
+            # IPV6_V6ONLY not available or can't be set
+            pass
+
+        # Bind to :: on a random port
+        server_socket.bind(('::', 0))
+        server_socket.listen(1)
+
+        # Get the port that was assigned
+        port = server_socket.getsockname()[1]
+
+        # Test results
+        ipv4_works = False
+        ipv6_works = False
+
+        # Test IPv6 connection
+        try:
+            ipv6_client = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+            ipv6_client.settimeout(1)
+            ipv6_client.connect(('::1', port))
+            ipv6_client.close()
+            ipv6_works = True
+        except (OSError, socket_module.timeout):
+            pass
+
+        # Test IPv4 connection (this is the key test for dual-stack)
+        try:
+            ipv4_client = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
+            ipv4_client.settimeout(1)
+            ipv4_client.connect(('127.0.0.1', port))
+            ipv4_client.close()
+            ipv4_works = True
+        except (OSError, socket_module.timeout):
+            pass
+
+        # Clean up
+        server_socket.close()
+
+        # Dual-stack works if both IPv4 and IPv6 connections succeeded
+        return ipv4_works and ipv6_works
+
+    except Exception as e:
+        debug_me(f"Error testing dual-stack support: {e}", "is_dual_stack_supported")
+        return False
 
 
 def login_required(f):
@@ -713,14 +807,58 @@ def extract_and_list_zip(
     return sorted_data
 
 
-def start_web_server(web_app, web_host: str, web_port: int, debug: bool = False):
+def start_web_server(web_app, web_host: str, web_port: int, debug: bool = False, ip_binding: str = "auto"):
     """
-    Start the Flask web server.
+    Start the Flask web server with support for IPv4, IPv6, or dual-stack.
 
     Args:
         web_app: Flask application instance
-        web_host: Host to bind to
+        web_host: Host to bind to (legacy parameter, overridden by ip_binding)
         web_port: Port to bind to
         debug: Whether to run in debug mode
+        ip_binding: IP binding mode - "auto" (dual-stack), "ipv4", or "ipv6"
     """
-    globals.web_socket.run(web_app, host=web_host, port=web_port, debug=debug)
+    # Determine the binding address based on ip_binding configuration
+    ipv6_available = is_ipv6_available()
+    dual_stack_supported = False
+
+    if ip_binding == "auto":
+        # Dual-stack: Listen on both IPv4 and IPv6
+        if ipv6_available:
+            print("Checking dual-stack support...")
+            dual_stack_supported = is_dual_stack_supported()
+
+            if dual_stack_supported:
+                # "::" enables both IPv4 and IPv6
+                binding_host = "::"
+                print(f"✓ Starting web server on dual-stack (IPv4 and IPv6) at port {web_port}")
+                print(f"  - IPv4: http://127.0.0.1:{web_port}")
+                print(f"  - IPv6: http://[::1]:{web_port}")
+            else:
+                # Dual-stack not supported, fall back to IPv4 only
+                binding_host = "0.0.0.0"
+                print(f"! Dual-stack not supported on this system, using IPv4 only at port {web_port}")
+                print(f"  - IPv4: http://127.0.0.1:{web_port}")
+        else:
+            # IPv6 not available, fall back to IPv4 only
+            binding_host = "0.0.0.0"
+            print(f"! IPv6 not available, using IPv4 only at port {web_port}")
+            print(f"  - IPv4: http://127.0.0.1:{web_port}")
+    elif ip_binding == "ipv6":
+        # IPv6 only
+        if ipv6_available:
+            binding_host = "::"
+            print(f"Starting web server on IPv6 only at port {web_port}")
+            print(f"  - IPv6: http://[::1]:{web_port}")
+        else:
+            # IPv6 requested but not available, fall back to IPv4
+            binding_host = "0.0.0.0"
+            print(f"! IPv6 requested but not available, falling back to IPv4 at port {web_port}")
+            print(f"  - IPv4: http://127.0.0.1:{web_port}")
+    else:
+        # IPv4 only (default fallback)
+        binding_host = "0.0.0.0"
+        print(f"Starting web server on IPv4 only at port {web_port}")
+        print(f"  - IPv4: http://127.0.0.1:{web_port}")
+
+    globals.web_socket.run(web_app, host=binding_host, port=web_port, debug=debug)
