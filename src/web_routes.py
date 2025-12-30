@@ -103,7 +103,7 @@ def is_dual_stack_supported():
                     ipv6_client.settimeout(1)
                     ipv6_client.connect(('::1', port))
                     ipv6_works = True
-            except (OSError):
+            except OSError:
                 pass
 
             # Test IPv4 connection (this is the key test for dual-stack)
@@ -112,7 +112,7 @@ def is_dual_stack_supported():
                     ipv4_client.settimeout(1)
                     ipv4_client.connect(('127.0.0.1', port))
                     ipv4_works = True
-            except (OSError):
+            except OSError:
                 pass
 
             # Dual-stack works if both IPv4 and IPv6 connections succeeded

@@ -152,13 +152,13 @@ class ThePosterDBScraper:
                 self.author = soup.find('p',
                                         class_='uploaded-by text-white d-inline-block text-truncate w-100').a.string
                 debug_me(f"set author: {self.author}", GET_SET_AUTHOR)
-            except:
+            except Exception:
                 debug_me(f"author lookup failed {soup}", GET_SET_AUTHOR)
         elif "/user/" in self.url:
             try:
                 self.author = soup.find('p', class_='h1 mb-0 mr-md-1').a.string
                 debug_me(f"author: {self.author}", GET_SET_AUTHOR)
-            except:
+            except Exception:
                 debug_me(f"author lookup failed {soup}", GET_SET_AUTHOR)
 
     def get_posters(self, poster_div: Any) -> None:

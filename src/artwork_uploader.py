@@ -54,7 +54,7 @@ try:
     from PIL import Image
     from flask import Flask, render_template
     from flask_socketio import SocketIO
-except (ImportError) as e:
+except ImportError as e:
     print("=" * 70)
     print("ERROR: Required dependencies are missing or incompatible")
     print("=" * 70)
