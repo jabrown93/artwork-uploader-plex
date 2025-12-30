@@ -709,6 +709,7 @@ if __name__ == "__main__":
         f"Logging initialized (debug={'enabled' if debug_mode else 'disabled'})")
 
     # Set module logger for use in functions
+    global module_logger
     module_logger = get_logger(__name__)
 
     # Create services
