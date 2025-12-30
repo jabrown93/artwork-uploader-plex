@@ -90,7 +90,7 @@ class ThePosterDBScraper:
                             DB_SCRAPER_NAME)
                         logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                        pprint(self.movie_artwork)
+                        from pprint import pformat; logger.debug(pformat(self.movie_artwork))
                         logger.debug(
                             f"*************************************************************{ANSI_RESET}")
                     if self.tv_artwork:
