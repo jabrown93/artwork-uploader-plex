@@ -75,7 +75,7 @@ class Config:
                 f"[DEBUG Config.load] After create(), file exists: {os.path.isfile(self.path)}")
 
         # Load the configuration from the config.json file
-        print("[DEBUG Config.load] Attempting to open config file for reading")
+        print(f"[DEBUG Config.load] Attempting to open config file for reading: {self.path}")
         try:
             with open(self.path, "r", encoding="utf-8") as config_file:
                 config = json.load(config_file)
