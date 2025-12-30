@@ -7,7 +7,11 @@ from utils.notifications import debug_me
 from models.options import Options
 from core.exceptions import ScraperException
 from core.enums import MediaType, ScraperSource, FileType
-from core.constants import ANSI_BOLD, ANSI_RESET, BOOTSTRAP_COLORS, MEDIUX_API_BASE_URL, MEDIUX_QUALITY_SUFFIX
+from core.constants import (
+    ANSI_BOLD, ANSI_RESET, BOOTSTRAP_COLORS,
+    MEDIUX_API_BASE_URL, MEDIUX_BASE_URL, MEDIUX_QUALITY_SUFFIX,
+    SEASON_COVER, SEASON_BACKDROP, EPISODE_COVER
+)
 from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 import time
 
@@ -129,7 +133,7 @@ class MediuxScraper:
             Dictionary containing full set data with complete metadata, or None if fetch fails
         """
         try:
-            set_url = f"https://mediux.pro/sets/{set_id}"
+            set_url = f"{MEDIUX_BASE_URL}/sets/{set_id}"
             debug_me(f"Fetching full set data from {set_url}", "MediuxScraper/_fetch_full_set_data")
 
             set_soup = soup_utils.cook_soup(set_url)
@@ -275,7 +279,7 @@ class MediuxScraper:
 
                     if show_id_backdrop is not None:
                         debug_me(f"Backdrop: {show_id_backdrop}", "MediuxScraper/_process_set")
-                        season = "Backdrop"
+                        season = SEASON_BACKDROP
                         episode = None
                         file_type = "background"
                     else:
@@ -324,12 +328,12 @@ class MediuxScraper:
                         else:
                             # No seasons array, get directly from season_id
                             season = season_id_data.get("season_number", 0)
-                        episode = "Cover"
+                        episode = EPISODE_COVER
                         file_type = "season_cover"
                     elif file_show_id is not None:
                         # This is a show cover
                         debug_me(f"Show cover detected", "MediuxScraper/_process_set")
-                        season = "Cover"
+                        season = SEASON_COVER
                         episode = None
                         file_type = "show_cover"
                     else:

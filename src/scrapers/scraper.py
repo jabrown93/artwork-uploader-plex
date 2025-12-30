@@ -1,6 +1,7 @@
 from typing import Optional
 from urllib.parse import urlparse
 
+from core.constants import TPDB_BASE_URL, MEDIUX_BASE_URL, SOURCE_THEPOSTERDB, SOURCE_MEDIUX
 from models.options import Options
 from core.exceptions import ScraperException
 from scrapers.theposterdb_scraper import ThePosterDBScraper
@@ -38,10 +39,10 @@ class Scraper:
         # Set source based on the contents of the URL
         parsed_url = urlparse(url)
         host = parsed_url.hostname
-        if host == "theposterdb.com":
-            self.source = "theposterdb"
-        elif host == "mediux.pro" and ("/sets/" in url or "/boxsets/" in url):
-            self.source = "mediux"
+        if host == urlparse(TPDB_BASE_URL).hostname:
+            self.source = SOURCE_THEPOSTERDB
+        elif host == urlparse(MEDIUX_BASE_URL).hostname and ("/sets/" in url or "/boxsets/" in url):
+            self.source = SOURCE_MEDIUX
         elif ".html" in url:
             self.source = "html"
 
@@ -61,9 +62,9 @@ class Scraper:
         """
         try:
             debug_me(f"Scraping from {self.source}","Scraper/scrape")
-            if self.source == "theposterdb":
+            if self.source == SOURCE_THEPOSTERDB:
                 self.scrape_theposterdb()
-            elif self.source == "mediux":
+            elif self.source == SOURCE_MEDIUX:
                 self.scrape_mediux()
             elif self.source == "html":
                 return self.scrape_html()

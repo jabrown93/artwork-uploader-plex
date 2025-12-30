@@ -2,10 +2,11 @@
 Application-wide constants.
 """
 
+import os
 from core.__version__ import __version__, __url__
 
 # Application metadata
-APP_NAME = "Artwork Uploader for Plex"
+APP_NAME = "Media Artwork Uploader for Plex/Kometa"
 CURRENT_VERSION = f"v{__version__}"
 GITHUB_REPO = __url__.replace("https://github.com/", "")
 
@@ -17,9 +18,14 @@ MIN_PYTHON_MINOR = 10
 DEFAULT_WEB_PORT = 4567
 DEFAULT_WEB_HOST = "0.0.0.0"
 
-# File paths
-DEFAULT_CONFIG_PATH = "config.json"
-DEFAULT_BULK_IMPORTS_DIR = "bulk_imports"
+# Detect Docker environment
+RUNNING_IN_DOCKER = os.getenv("RUNNING_IN_DOCKER") == "1"
+
+# File paths - environment-aware defaults
+# Docker: absolute paths for volume mounts
+# Non-Docker: relative paths in execution directory
+DEFAULT_CONFIG_PATH = "/config/config.json" if RUNNING_IN_DOCKER else "config.json"
+DEFAULT_BULK_IMPORTS_DIR = "/bulk_imports" if RUNNING_IN_DOCKER else "bulk_imports"
 DEFAULT_BULK_IMPORT_FILE = "bulk_import.txt"
 
 # Plex library defaults

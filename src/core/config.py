@@ -6,6 +6,7 @@ import json
 import os
 from typing import List, Dict, Any
 
+from core.constants import DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from utils.notifications import debug_me
 
@@ -36,13 +37,13 @@ class Config:
         auth_password_hash: Hashed password for web server authentication
     """
 
-    def __init__(self, config_path: str = "config.json") -> None:
+    def __init__(self, config_path: str = DEFAULT_CONFIG_PATH) -> None:
         self.path: str = config_path
         self.base_url: str = ""
         self.token: str = ""
-        self.bulk_txt: str = "bulk_import.txt"
-        self.tv_library: List[str] = ["TV Shows"]
-        self.movie_library: List[str] = ["Movies"]
+        self.bulk_txt: str = DEFAULT_BULK_IMPORT_FILE
+        self.tv_library: List[str] = DEFAULT_TV_LIBRARY
+        self.movie_library: List[str] = DEFAULT_MOVIE_LIBRARY
         self.mediux_filters: List[str] = ["title_card", "background", "season_cover", "show_cover", "movie_poster", "collection_poster"]
         self.tpdb_filters: List[str] = ["title_card", "background", "season_cover", "show_cover", "movie_poster", "collection_poster"]
         self.kometa_base: str = "C:\\Temp\\assets"

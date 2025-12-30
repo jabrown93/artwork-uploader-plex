@@ -13,15 +13,28 @@ from typing import Optional
 class BulkFileService:
     """Handles bulk import file I/O operations."""
 
-    def __init__(self, base_dir: str) -> None:
+    def __init__(self, base_dir: str, bulk_imports_dir: Optional[str] = None) -> None:
         """
         Initialize the bulk file service.
 
         Args:
             base_dir: Base directory (usually from get_exe_dir())
+            bulk_imports_dir: Bulk imports directory path. If absolute, ignores base_dir.
+                             If None, uses BULK_IMPORTS_DIR env var or DEFAULT_BULK_IMPORTS_DIR.
         """
-        self.base_dir = base_dir
-        self.bulk_imports_path = "bulk_imports/"
+        from core.constants import DEFAULT_BULK_IMPORTS_DIR
+
+        # Priority: explicit arg > env var > default constant
+        if bulk_imports_dir is None:
+            bulk_imports_dir = os.getenv("BULK_IMPORTS_DIR", DEFAULT_BULK_IMPORTS_DIR)
+
+        # If absolute path, don't join with base_dir
+        if os.path.isabs(bulk_imports_dir):
+            self.base_dir = ""
+            self.bulk_imports_path = bulk_imports_dir
+        else:
+            self.base_dir = base_dir
+            self.bulk_imports_path = bulk_imports_dir
 
     def get_bulk_file_path(self, filename: Optional[str] = None) -> str:
         """
@@ -33,8 +46,24 @@ class BulkFileService:
         Returns:
             Full path to the bulk import file
         """
-        bulk_filename = filename if filename else "bulk_import.txt"
-        return os.path.join(self.base_dir, self.bulk_imports_path, bulk_filename)
+        from core.constants import DEFAULT_BULK_IMPORT_FILE
+
+        bulk_filename = filename if filename else DEFAULT_BULK_IMPORT_FILE
+
+        if self.base_dir:
+            return os.path.join(self.base_dir, self.bulk_imports_path, bulk_filename)
+        return os.path.join(self.bulk_imports_path, bulk_filename)
+
+    def get_bulk_imports_directory(self) -> Path:
+        """
+        Get the full path to the bulk imports directory.
+
+        Returns:
+            Path object representing the bulk imports directory
+        """
+        if self.base_dir:
+            return Path(self.base_dir) / self.bulk_imports_path
+        return Path(self.bulk_imports_path)
 
     def file_exists(self, filename: Optional[str] = None) -> bool:
         """

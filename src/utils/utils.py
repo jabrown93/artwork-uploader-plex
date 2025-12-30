@@ -1,9 +1,15 @@
 import hashlib
 import json
 import re
+from urllib.parse import urlparse
 
 import validators
 
+from core.constants import (
+    TPDB_BASE_URL, MEDIUX_BASE_URL,
+    SEASON_COVER, SEASON_BACKDROP, EPISODE_COVER,
+    FILTER_SHOW_COVER, FILTER_BACKGROUND, FILTER_SEASON_COVER, FILTER_TITLE_CARD
+)
 from utils.notifications import debug_me
 from models.options import Options
 from models.url_item import URLItem
@@ -133,12 +139,12 @@ def validate_scraper_url(url: str) -> tuple:
             return False, f"Invalid URL format: {url}"
 
         # Check for supported sources
-        if parsed.netloc == "theposterdb.com":
+        if parsed.netloc == urlparse(TPDB_BASE_URL).hostname:
             if "/set/" in url or "/poster/" in url or "/user/" in url:
                 return True, ""
             return False, "Unsupported ThePosterDB URL type. Must contain /set/, /poster/, or /user/"
 
-        elif parsed.netloc == "mediux.pro":
+        elif parsed.netloc == urlparse(MEDIUX_BASE_URL).hostname:
             if "/sets/" in url or "/boxsets/" in url:
                 return True, ""
             return False, "Unsupported MediUX URL type. Must contain /sets/ or /boxsets/"
@@ -147,7 +153,9 @@ def validate_scraper_url(url: str) -> tuple:
             return True, ""
 
         else:
-            return False, f"Unsupported scraper source: {parsed.netloc}. Supported: theposterdb.com, mediux.pro"
+            tpdb_host = urlparse(TPDB_BASE_URL).hostname
+            mediux_host = urlparse(MEDIUX_BASE_URL).hostname
+            return False, f"Unsupported scraper source: {parsed.netloc}. Supported: {tpdb_host}, {mediux_host}"
 
     except Exception as e:
         return False, f"URL validation error: {str(e)}"
@@ -238,22 +246,22 @@ def get_artwork_type(artwork):
     artwork_type = None
     filter_type = None
 
-    if artwork["season"] == "Cover":
+    if artwork["season"] == SEASON_COVER:
         artwork_type = "Show cover"
-        filter_type = "show_cover"
-    elif artwork["season"] == "Backdrop":
+        filter_type = FILTER_SHOW_COVER
+    elif artwork["season"] == SEASON_BACKDROP:
         artwork_type = "Background"
-        filter_type = "background"
+        filter_type = FILTER_BACKGROUND
     elif artwork["season"] >= 0:
-        if artwork["episode"] == "Cover":
+        if artwork["episode"] == EPISODE_COVER:
             artwork_type = "Season cover"
-            filter_type = "season_cover"
+            filter_type = FILTER_SEASON_COVER
         elif artwork["episode"] is None:
             artwork_type = "Season cover"
-            filter_type = "season_cover"
+            filter_type = FILTER_SEASON_COVER
         elif artwork["episode"] >= 0:
             artwork_type = "Title card"
-            filter_type = "title_card"
+            filter_type = FILTER_TITLE_CARD
 
     return artwork_type, filter_type
 
