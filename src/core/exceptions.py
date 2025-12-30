@@ -17,6 +17,7 @@ class ArtworkUploaderException(Exception):
 
 class ConfigurationError(ArtworkUploaderException):
     """Base class for configuration-related errors."""
+
     def __init__(self, message: str) -> None:
         super().__init__(message)
 
@@ -42,6 +43,7 @@ class ConfigCreationError(ConfigurationError):
 
 class PlexError(ArtworkUploaderException):
     """Base class for Plex-related errors."""
+
     def __init__(self, message: str, gui_message: str = None) -> None:
         super().__init__(message)
         self.gui_message = gui_message if gui_message is not None else message
@@ -63,6 +65,7 @@ class LibraryNotFound(PlexError):
 
 class ScraperError(ArtworkUploaderException):
     """Base class for scraper-related errors."""
+
     def __init__(self, message: str) -> None:
         super().__init__(message)
 
@@ -78,6 +81,7 @@ class ScraperException(ScraperError):
 
 class UploadError(ArtworkUploaderException):
     """Base class for upload-related errors."""
+
     def __init__(self, message: str) -> None:
         super().__init__(message)
 

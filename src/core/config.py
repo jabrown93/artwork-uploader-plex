@@ -44,8 +44,10 @@ class Config:
         self.bulk_txt: str = DEFAULT_BULK_IMPORT_FILE
         self.tv_library: List[str] = DEFAULT_TV_LIBRARY
         self.movie_library: List[str] = DEFAULT_MOVIE_LIBRARY
-        self.mediux_filters: List[str] = ["title_card", "background", "season_cover", "show_cover", "movie_poster", "collection_poster"]
-        self.tpdb_filters: List[str] = ["title_card", "background", "season_cover", "show_cover", "movie_poster", "collection_poster"]
+        self.mediux_filters: List[str] = ["title_card", "background", "season_cover", "show_cover", "movie_poster",
+                                          "collection_poster"]
+        self.tpdb_filters: List[str] = ["title_card", "background", "season_cover", "show_cover", "movie_poster",
+                                        "collection_poster"]
         self.kometa_base: str = "C:\\Temp\\assets"
         self.temp_dir: str = "C:\\Temp\\assets\\temp"
         self.save_to_kometa: bool = False
@@ -57,7 +59,6 @@ class Config:
         self.auth_enabled: bool = False
         self.auth_username: str = ""
         self.auth_password_hash: str = ""
-
 
     def load(self) -> None:
         """Load the configuration from the JSON file."""
@@ -101,8 +102,10 @@ class Config:
             "bulk_txt": "bulk_import.txt",
             "tv_library": ["TV Shows"],
             "movie_library": ["Movies"],
-            "mediux_filters": ["title_card", "background", "season_cover", "show_cover", "movie_poster", "collection_poster"],
-            "tpdb_filters": ["title_card", "background", "season_cover", "show_cover", "movie_poster", "collection_poster"],
+            "mediux_filters": ["title_card", "background", "season_cover", "show_cover", "movie_poster",
+                               "collection_poster"],
+            "tpdb_filters": ["title_card", "background", "season_cover", "show_cover", "movie_poster",
+                             "collection_poster"],
             "kometa_base": "",
             "temp_dir": "",
             "save_to_kometa": False,

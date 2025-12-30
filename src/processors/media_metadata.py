@@ -1,5 +1,3 @@
-import re
-
 from core.constants import (
     SEASON_COVER, SEASON_BACKDROP, SEASON_SPECIALS,
     MEDIA_TYPE_TV_SHOW, MEDIA_TYPE_COLLECTION,
@@ -28,24 +26,23 @@ def parse_show(media_title):
     return title, season, year
 
 
-
 # Rewrote to use a regex because it was not working for one movie with actual brackets in the title
 # Birdman (or The Unexpected Virtue of Ignorance) (2014)
 
 def parse_movie(movie_title):
-
     try:
         match = re.match(r'^(.*?)(?:\s*\((\d{4})\))?$', movie_title.strip())
         if match:
             title = match.group(1).strip()
             year = int(match.group(2)) if match.group(2) else None
             return title, year
-    except (AttributeError, ValueError, TypeError) as e:
+    except (AttributeError, ValueError, TypeError):
         debug_me(f"Couldn't match {movie_title}", "parse_movie")
         return None, None
 
 
 import re
+
 
 def parse_title(title: str):
     # Strip any trailing spaces before the extension
@@ -60,7 +57,7 @@ def parse_title(title: str):
 
     movie_or_show_pattern = r"^(?P<title>.+)\s\((?P<year>\d{4})\)"
     background_pattern = rf"^(?P<title>.+)\s\((?P<year>\d{4})\)\s-\s{SEASON_BACKDROP}"
-    collection_pattern = r"^(?!.*\(\d{4}\))(?P<title>.+)$" # Some collection poster files don't have the word "Collection" in them
+    collection_pattern = r"^(?!.*\(\d{4}\))(?P<title>.+)$"  # Some collection poster files don't have the word "Collection" in them
 
     episode_match = re.match(episode_pattern, title, re.IGNORECASE)
     if episode_match:
@@ -105,7 +102,9 @@ def parse_title(title: str):
             "type": type,
             "author": None
         }
-        debug_me(f"Matched '{title}' as TV Show {"Title Card" if episode is not None else "Season Cover"} for '{artwork['title']}{f" ({artwork['year']})" if artwork['year'] else ''}', Season {artwork['season']}{f", Episode {artwork['episode']}" if artwork['episode'] is not None else ''}", "media_metadata/parse_title")
+        debug_me(
+            f"Matched '{title}' as TV Show {"Title Card" if episode is not None else "Season Cover"} for '{artwork['title']}{f" ({artwork['year']})" if artwork['year'] else ''}', Season {artwork['season']}{f", Episode {artwork['episode']}" if artwork['episode'] is not None else ''}",
+            "media_metadata/parse_title")
         return artwork
 
     # Check if it's a TV show background
@@ -120,7 +119,8 @@ def parse_title(title: str):
             "type": FILTER_BACKGROUND,
             "author": None
         }
-        debug_me(f"Matched '{title}' as TV Show Background for '{artwork['title']} ({artwork['year']})'", "media_metadata/parse_title")
+        debug_me(f"Matched '{title}' as TV Show Background for '{artwork['title']} ({artwork['year']})'",
+                 "media_metadata/parse_title")
         return artwork
 
     # Check if it's a movie
@@ -135,7 +135,8 @@ def parse_title(title: str):
             "type": "poster",
             "author": None
         }
-        debug_me(f"Matched '{title}' as either Movie or TV Show poster for '{artwork['title']} ({artwork['year']})'", "media_metadata/parse_title")
+        debug_me(f"Matched '{title}' as either Movie or TV Show poster for '{artwork['title']} ({artwork['year']})'",
+                 "media_metadata/parse_title")
         return artwork
 
     # Check if it's a collection (case insensitive)
@@ -153,7 +154,3 @@ def parse_title(title: str):
         return artwork
 
     return {"media": "Unknown", "message": "The title format is unrecognized."}
-
-
-
-

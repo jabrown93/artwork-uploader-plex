@@ -10,35 +10,31 @@ The routes are organized into:
 - Helper functions for file uploads and processing
 """
 
+import base64
 import os
 import pprint
-import sys
 import re
-import uuid
-import base64
+import subprocess
+import sys
 import tempfile
 import zipfile
-import threading
-import subprocess
-import pprint
-from pathlib import Path
-from packaging import version
-
-from flask import render_template, send_from_directory, request, redirect, url_for, session
-import schedule
 from functools import wraps
 
+from flask import render_template, send_from_directory, request, redirect, url_for, session
+from packaging import version
+
 from core import globals
-from utils import utils
-from models.instance import Instance
 from core.config import Config
+from models.instance import Instance
 from processors.media_metadata import parse_title
-from utils.notifications import update_log, update_status, notify_web, debug_me
 from services import UtilityService, AuthenticationService
+from utils import utils
+from utils.notifications import update_log, update_status, notify_web, debug_me
 
 
 def login_required(f):
     """Decorator to require authentication for routes."""
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Get config from globals
@@ -53,6 +49,7 @@ def login_required(f):
             return redirect(url_for('login'))
 
         return f(*args, **kwargs)
+
     return decorated_function
 
 
@@ -64,6 +61,7 @@ def setup_routes(web_app, config: Config):
         web_app: Flask application instance
         config: Configuration object
     """
+
     @web_app.route("/login", methods=["GET", "POST"])
     def login():
         """Handle user login."""
@@ -120,8 +118,8 @@ def setup_routes(web_app, config: Config):
 
 
 def setup_socket_handlers(
-    config: Config,
-    filename_pattern: re.Pattern
+        config: Config,
+        filename_pattern: re.Pattern
 ):
     """
     Set up Socket.IO event handlers.
@@ -142,7 +140,6 @@ def setup_socket_handlers(
         load_bulk_import_file,
         rename_bulk_import_file,
         delete_bulk_import_file,
-        process_uploaded_artwork,
         add_file_to_schedule_thread,
         update_scheduled_jobs,
         get_latest_version,
@@ -504,7 +501,7 @@ def setup_socket_handlers(
         instance = Instance(data.get("instance_id"), "web")
 
         if file_name in upload_chunks and len(upload_chunks[file_name]["chunks"]) == int(
-            upload_chunks[file_name]["total_chunks"]
+                upload_chunks[file_name]["total_chunks"]
         ):
             debug_me(f"Upload complete for {file_name}, saving file...", "handle_upload_complete")
             save_uploaded_file(
@@ -539,16 +536,16 @@ def setup_socket_handlers(
 
 
 def save_uploaded_file(
-    instance: Instance,
-    file_name: str,
-    options: list,
-    filters: list,
-    plex_title: str,
-    plex_year: int,
-    upload_chunks: dict,
-    filename_pattern: re.Pattern,
-    check_image_orientation_func,
-    sort_key_func
+        instance: Instance,
+        file_name: str,
+        options: list,
+        filters: list,
+        plex_title: str,
+        plex_year: int,
+        upload_chunks: dict,
+        filename_pattern: re.Pattern,
+        check_image_orientation_func,
+        sort_key_func
 ):
     """
     Assemble chunks and save the uploaded file.
@@ -566,7 +563,7 @@ def save_uploaded_file(
     """
     from artwork_uploader import process_uploaded_artwork
 
-    #temp_zip_path = tempfile.mktemp(suffix=".zip")
+    # temp_zip_path = tempfile.mktemp(suffix=".zip")
     temp_zip_folder = tempfile.mkdtemp()
     temp_zip_path = os.path.join(temp_zip_folder, file_name)
     debug_me(f"Saving uploaded file {file_name} to temporary path: {temp_zip_folder}", "save_uploaded_file")
@@ -604,12 +601,12 @@ def save_uploaded_file(
 
 
 def extract_and_list_zip(
-    zip_path: str,
-    filename_pattern: re.Pattern,
-    plex_title: str,
-    plex_year: int,
-    check_image_orientation_func,
-    sort_key_func
+        zip_path: str,
+        filename_pattern: re.Pattern,
+        plex_title: str,
+        plex_year: int,
+        check_image_orientation_func,
+        sort_key_func
 ) -> list:
     """
     Extract a ZIP file, flatten directories, and return a list of valid image files.
@@ -641,7 +638,8 @@ def extract_and_list_zip(
 
             if filename == "source.txt":
                 zip_source = "mediux"
-                with zip_ref.open(zip_info.filename) as source, open(os.path.join(extract_dir, "source.txt"), "wb") as target:
+                with zip_ref.open(zip_info.filename) as source, open(os.path.join(extract_dir, "source.txt"),
+                                                                     "wb") as target:
                     target.write(source.read())
                 with open(os.path.join(extract_dir, "source.txt"), "r", encoding="utf-8") as source_file:
                     for line in source_file:
@@ -650,7 +648,7 @@ def extract_and_list_zip(
                             debug_me(f"Detected MediUX source, author: {author}", "extract_and_list_zip")
                             break
                 os.remove(os.path.join(extract_dir, "source.txt"))  # Clean up source.txt after obtaining author info
-                
+
             elif filename_pattern.match(filename):
                 extracted_path = os.path.join(extract_dir, filename)
 

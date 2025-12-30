@@ -16,10 +16,10 @@ class Instance:
     """
 
     def __init__(
-        self,
-        id: Optional[str] = None,
-        mode: Literal["cli", "web"] = "web",
-        broadcast: bool = False
+            self,
+            id: Optional[str] = None,
+            mode: Literal["cli", "web"] = "web",
+            broadcast: bool = False
     ) -> None:
         self.id = id
         self.mode = mode

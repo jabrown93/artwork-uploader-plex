@@ -5,12 +5,12 @@ Extracted from artwork_uploader.py to reduce file size and improve
 maintainability.
 """
 
-from typing import Optional, Callable
-from packaging import version
 import threading
 import time
-import requests
+from typing import Optional, Callable
 
+import requests
+from packaging import version
 from utils.notifications import debug_me
 
 
@@ -18,10 +18,10 @@ class UpdateService:
     """Handles checking for application updates from GitHub."""
 
     def __init__(
-        self,
-        github_repo: str,
-        current_version: str,
-        check_interval: int = 3600
+            self,
+            github_repo: str,
+            current_version: str,
+            check_interval: int = 3600
     ) -> None:
         """
         Initialize the update service.
@@ -50,7 +50,8 @@ class UpdateService:
             if response.status_code == 200:
                 return response.json()["tag_name"]
             else:
-                debug_me(f"Failed to fetch latest version. GitHub API returned status code: {response.status_code}", "UpdateService/get_latest_version")
+                debug_me(f"Failed to fetch latest version. GitHub API returned status code: {response.status_code}",
+                         "UpdateService/get_latest_version")
         except Exception:
             pass
         return None
@@ -69,7 +70,8 @@ class UpdateService:
             current_normalized = self.current_version.lstrip('v')
 
             if version.parse(latest_normalized) > version.parse(current_normalized):
-                debug_me(f"Update available! Current version: {self.current_version}. Latest version: {latest_version}", "UpdateService/check_for_update")
+                debug_me(f"Update available! Current version: {self.current_version}. Latest version: {latest_version}",
+                         "UpdateService/check_for_update")
                 return latest_version
             else:
                 debug_me(f"No update available.", "UpdateService/check_for_update")
@@ -78,8 +80,8 @@ class UpdateService:
         return None
 
     def start_periodic_check(
-        self,
-        on_update_available: Callable[[str], None]
+            self,
+            on_update_available: Callable[[str], None]
     ) -> bool:
         """
         Start periodic update checking in a background thread.
@@ -109,8 +111,8 @@ class UpdateService:
             self.update_thread.join(timeout=2)
 
     def _check_periodically(
-        self,
-        on_update_available: Callable[[str], None]
+            self,
+            on_update_available: Callable[[str], None]
     ) -> None:
         """
         Internal method that runs in the update checking thread.

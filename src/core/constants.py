@@ -3,6 +3,7 @@ Application-wide constants.
 """
 
 import os
+
 from core.__version__ import __version__, __url__
 
 # Application metadata

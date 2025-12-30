@@ -1,4 +1,3 @@
-
 // ==================================================
 // App initialisation and startup
 // ==================================================
@@ -12,7 +11,7 @@ let barTimer = null;            // Timer for progress bar
 
 const socket = io();
 const instanceId = getInstanceId();
-const bootstrapColors = ['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'light', 'dark'];
+
 const CHUNK_SIZE = 1024 * 64; // 64 KB per chunk for uploads
 
 
@@ -55,7 +54,7 @@ function validResponse(data, broadcast = false) {
 // Generate a UUID to create an instance ID in local storage
 function getInstanceId() {
     // Fallback for browsers that don't support crypto.randomUUID()
-    const fallbackUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const fallbackUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
         const r = (Math.random() * 16) | 0, v = c === 'x' ? r : (r & 0x3) | 0x8;
         return v.toString(16);
     });
@@ -67,7 +66,6 @@ function getInstanceId() {
     }
     return uuid;
 }
-
 
 
 // ==================================================
@@ -91,6 +89,7 @@ function element_disable(element_ids, mode = true) {
         }
     });
 }
+
 socket.on("element_disable", (data) => {
     if (validResponse(data)) {
         element_disable(data.element, data.mode);
@@ -99,7 +98,7 @@ socket.on("element_disable", (data) => {
 
 
 // Update the status bar
-function updateStatus(message, color = "info", sticky = false, spinner = false, icon = false) {
+function updateStatus(message, color = "info", sticky = false, spinner = false, icon = '') {
 
     const statusEl = document.getElementById("status");
     const spinnerEl = document.getElementById("status_spinner"); // Get the spinner element
@@ -168,6 +167,7 @@ function updateStatus(message, color = "info", sticky = false, spinner = false, 
     }
 
 }
+
 socket.on("status_update", (data) => {
     if (validResponse(data, true)) {
         updateStatus(data.message, data.color, data.sticky, data.spinner, data.icon);
@@ -180,13 +180,14 @@ function updateLog(message, color = null, artwork_title = null) {
     let statusElement = document.getElementById("scraping_log");
 
     // Get current timestamp
-    let timestamp = new Date().toLocaleTimeString("en-GB", { hour12: false });
+    let timestamp = new Date().toLocaleTimeString("en-GB", {hour12: false});
 
     // Prepend the new message with timestamp
-    statusElement.innerHTML = '<div class="log_message">[' + timestamp +'] ' + message + '</div>' + statusElement.innerHTML;
+    statusElement.innerHTML = '<div class="log_message">[' + timestamp + '] ' + message + '</div>' + statusElement.innerHTML;
 }
+
 socket.on("log_update", (data) => {
-    if (validResponse(data,true)) {
+    if (validResponse(data, true)) {
         updateLog(data.message, data.artwork_title);
     }
 });
@@ -210,16 +211,17 @@ function progress_bar(percent, message = "") {
         bar.innerHTML = message || ""
     }
 
-    if (percent == 100) {
+    if (percent === 100) {
         barTimer = setTimeout(() => {
             bar_container.classList.remove('show'); // Fade out the progress bar after a second
         }, 2000);
     }
 }
+
 socket.on("progress_bar", (data) => {
     if (validResponse(data)) {
         progress_bar(data.percent, data.message)
-        }
+    }
 })
 
 
@@ -258,96 +260,96 @@ socket.on("add_to_bulk_list", (data) => {
 // Sort the bulk list into order by media title
 function processAndSortUrls(inputText, newTitle, newUrl) {
 
-  // Initialize data structures
-  const titleMap = {};
-  const mediUXUrls = [];
-  const thePosterDBUrls = [];
+    // Initialize data structures
+    const titleMap = {};
+    const mediUXUrls = [];
+    const thePosterDBUrls = [];
 
-  // Function to remove leading articles from a title
-  const removeLeadingArticles = (title) => {
-    const articles = ['a', 'an', 'the'];
-    const words = title.toLowerCase().split(' ');
-    if (words.length > 1 && articles.includes(words[0])) {
-      words.shift(); // Remove the leading article
-    }
-    return words.join(' ');
-  };
-
-  // Function to add a new title and its URL
-  const addTitleAndUrl = (title, url) => {
-    if (title && url) {
-      titleMap[title] = titleMap[title] || [];
-      titleMap[title].push(url);
-    }
-  };
-
-  // Split the input data into lines
-  const lines = inputText.split('\n');
-  let currentTitle = '';
-
-  // Process each line
-  lines.forEach(line => {
-    line = line.trim();
-    if (line.startsWith('//')) {
-      // New title
-      currentTitle = line.substring(3).trim();
-      titleMap[currentTitle] = [];
-    } else if (line === '') {
-      // Blank line
-      currentTitle = '';
-    } else if (line) {
-      // URL line
-      if (currentTitle) {
-        // Associated with a title
-        titleMap[currentTitle].push(line);
-      } else {
-        // Standalone URL
-        if (line.includes('mediux.pro')) {
-          mediUXUrls.push(line);
-        } else if (line.includes('theposterdb.com')) {
-          thePosterDBUrls.push(line);
+    // Function to remove leading articles from a title
+    const removeLeadingArticles = (title) => {
+        const articles = ['a', 'an', 'the'];
+        const words = title.toLowerCase().split(' ');
+        if (words.length > 1 && articles.includes(words[0])) {
+            words.shift(); // Remove the leading article
         }
-      }
+        return words.join(' ');
+    };
+
+    // Function to add a new title and its URL
+    const addTitleAndUrl = (title, url) => {
+        if (title && url) {
+            titleMap[title] = titleMap[title] || [];
+            titleMap[title].push(url);
+        }
+    };
+
+    // Split the input data into lines
+    const lines = inputText.split('\n');
+    let currentTitle = '';
+
+    // Process each line
+    lines.forEach(line => {
+        line = line.trim();
+        if (line.startsWith('//')) {
+            // New title
+            currentTitle = line.substring(3).trim();
+            titleMap[currentTitle] = [];
+        } else if (line === '') {
+            // Blank line
+            currentTitle = '';
+        } else if (line) {
+            // URL line
+            if (currentTitle) {
+                // Associated with a title
+                titleMap[currentTitle].push(line);
+            } else {
+                // Standalone URL
+                if (line.includes('mediux.pro')) {
+                    mediUXUrls.push(line);
+                } else if (line.includes('theposterdb.com')) {
+                    thePosterDBUrls.push(line);
+                }
+            }
+        }
+    });
+
+    // Add the new title and URL
+    addTitleAndUrl(newTitle, newUrl);
+
+    // Format the output
+    let output = '';
+    // Sort titles alphabetically, ignoring leading articles
+    const sortedTitles = Object.keys(titleMap).sort((a, b) => {
+        const aTitle = removeLeadingArticles(a);
+        const bTitle = removeLeadingArticles(b);
+        return aTitle.localeCompare(bTitle);
+    });
+    // Add title sections
+    sortedTitles.forEach(title => {
+        output += `// ${title}\n`;
+        titleMap[title].forEach(url => {
+            output += `${url}\n`;
+        });
+        output += '\n';
+    });
+    // Add MediUX URLs section
+    if (mediUXUrls.length > 0) {
+        output += '// MediUX URLs\n';
+        mediUXUrls.forEach(url => {
+            output += `${url}\n`;
+        });
+        output += '\n';
     }
-  });
+    // Add The Poster DB URLs section
+    if (thePosterDBUrls.length > 0) {
+        output += '// The Poster DB URLs\n';
+        thePosterDBUrls.forEach(url => {
+            output += `${url}\n`;
+        });
+        output += '\n';
+    }
 
-  // Add the new title and URL
-  addTitleAndUrl(newTitle, newUrl);
-
-  // Format the output
-  let output = '';
-  // Sort titles alphabetically, ignoring leading articles
-  const sortedTitles = Object.keys(titleMap).sort((a, b) => {
-    const aTitle = removeLeadingArticles(a);
-    const bTitle = removeLeadingArticles(b);
-    return aTitle.localeCompare(bTitle);
-  });
-  // Add title sections
-  sortedTitles.forEach(title => {
-    output += `// ${title}\n`;
-    titleMap[title].forEach(url => {
-      output += `${url}\n`;
-    });
-    output += '\n';
-  });
-  // Add MediUX URLs section
-  if (mediUXUrls.length > 0) {
-    output += '// MediUX URLs\n';
-    mediUXUrls.forEach(url => {
-      output += `${url}\n`;
-    });
-    output += '\n';
-  }
-  // Add The Poster DB URLs section
-  if (thePosterDBUrls.length > 0) {
-    output += '// The Poster DB URLs\n';
-    thePosterDBUrls.forEach(url => {
-      output += `${url}\n`;
-    });
-    output += '\n';
-  }
-
-  return output;
+    return output;
 }
 
 
@@ -356,7 +358,7 @@ function processAndSortUrls(inputText, newTitle, newUrl) {
 // ==================================================
 
 // Button handler for save configuration
-document.getElementById("save_config_button").addEventListener("click", function(event) {
+document.getElementById("save_config_button").addEventListener("click", function (event) {
     event.preventDefault(); // Prevent actual form submission
     saveConfig();
 });
@@ -437,10 +439,10 @@ function saveConfig() {
 
         // Wait a moment then save config
         setTimeout(() => {
-            socket.emit("save_config", { instance_id: instanceId, config: save_config });
+            socket.emit("save_config", {instance_id: instanceId, config: save_config});
         }, 500);
     } else {
-        socket.emit("save_config", { instance_id: instanceId, config: save_config });
+        socket.emit("save_config", {instance_id: instanceId, config: save_config});
     }
 
     // Prevent duplicate event listeners
@@ -461,7 +463,7 @@ function saveConfig() {
 
 // Load configuration
 function loadConfig() {
-    socket.emit("load_config", { instance_id: instanceId });
+    socket.emit("load_config", {instance_id: instanceId});
 
     socket.once("load_config", (data) => { // Use 'once' to prevent duplicate listeners
         if (validResponse(data) && data.config) {
@@ -483,13 +485,13 @@ function loadConfig() {
             // Load authentication settings
             document.getElementById("auth_enabled").checked = data.config.auth_enabled || false;
             document.getElementById("auth_username").value = data.config.auth_username || "";
-            
+
             // Toggle Kometa settings visibility
             toggleKometaSettings();
 
             // Toggle auth settings visibility
             toggleAuthSettings();
-            
+
             // Make sure Plex options visibility is set correctly on load
             togglePlexOptions();
 
@@ -568,7 +570,7 @@ function saveBulkChangesModal(filename) {
 }
 
 function startScrape() {
-    var form = document.getElementById('scraperForm');
+    const form = document.getElementById('scraperForm');
     const logTab = document.querySelector('#scraping-log-tab');
 
     // Check if the form is valid
@@ -583,7 +585,7 @@ function startScrape() {
 
         // Collect checked checkboxes with ids starting with "filter-"
         let filters = [];
-        if(!document.getElementById("scraper-filters-global").checked) {
+        if (!document.getElementById("scraper-filters-global").checked) {
             document.querySelectorAll('[id^="filter-"]:checked').forEach(checkbox => {
                 filters.push(checkbox.value);
             });
@@ -591,7 +593,13 @@ function startScrape() {
 
         const year = document.getElementById("year").value;
         const url = document.getElementById("scrape_url").value;
-        socket.emit("start_scrape", { url: url, year: year, options: options, filters: filters, instance_id: instanceId });
+        socket.emit("start_scrape", {
+            url: url,
+            year: year,
+            options: options,
+            filters: filters,
+            instance_id: instanceId
+        });
         // Switch to the log tab
         bootstrap.Tab.getOrCreateInstance(logTab).show();
     } else {
@@ -606,11 +614,7 @@ function updateBulkSaveButtonState() {
     const bulkTextArea = document.getElementById("bulk_import_text");
     const saveButton = document.getElementById("save_bulk_button");
 
-    if (bulkTextArea.value !== bulkTextAsLoaded) {
-        saveButton.disabled = false; // Enable button if text has changed
-    } else {
-        saveButton.disabled = true;  // Disable button if no changes
-    }
+    saveButton.disabled = bulkTextArea.value === bulkTextAsLoaded;
 }
 
 // Attach event listener to track changes
@@ -620,29 +624,29 @@ function updateBulkSaveButtonState() {
 // ==================================================
 
 function toggleThePosterDBElements() {
-        const urlInput = document.getElementById("scrape_url");
-        if (!urlInput) return;
+    const urlInput = document.getElementById("scrape_url");
+    if (!urlInput) return;
 
-        const url = urlInput.value;
-        const elements = document.querySelectorAll(".theposterdb");
+    const url = urlInput.value;
+    const elements = document.querySelectorAll(".theposterdb");
 
-        // Define the regex pattern from the input
-        const pattern = /^https:\/\/theposterdb\.com\/set\/\d+$/;
+    // Define the regex pattern from the input
+    const pattern = /^https:\/\/theposterdb\.com\/set\/\d+$/;
 
-        // Validate the URL before showing elements
-        if (pattern.test(url)) {
-            elements.forEach(el => el.style.display = "block");
-        } else {
-            elements.forEach(el => {
-                el.style.display = "none";
-                // Uncheck checkboxes inside hidden elements
-                el.querySelectorAll("input[type='checkbox']").forEach(checkbox => {
-                    checkbox.checked = false;
-                });
+    // Validate the URL before showing elements
+    if (pattern.test(url)) {
+        elements.forEach(el => el.style.display = "block");
+    } else {
+        elements.forEach(el => {
+            el.style.display = "none";
+            // Uncheck checkboxes inside hidden elements
+            el.querySelectorAll("input[type='checkbox']").forEach(checkbox => {
+                checkbox.checked = false;
             });
-        }
-
+        });
     }
+
+}
 
 // Run function on input change
 if (scrapeUrlInput) {
@@ -650,55 +654,57 @@ if (scrapeUrlInput) {
 }
 
 function configureTabs(afterSave = false) {
-        if (config.base_url && config.token) {
-            document.getElementById('bulk-import-tab').classList.add("show");
-            document.getElementById('scraper-tab').classList.add("show");
-            document.getElementById('scraping-log-tab').classList.add("show");
-            document.getElementById('uploader-tab').classList.add("show");
-            if (!afterSave) {
-                document.getElementById('config').classList.remove("show","active");
-                document.getElementById('config-tab').classList.remove("active");
-                document.getElementById('scraper').classList.add("show","active");
-                document.getElementById('scraper-tab').classList.add("active");
-            }
+    if (config.base_url && config.token) {
+        document.getElementById('bulk-import-tab').classList.add("show");
+        document.getElementById('scraper-tab').classList.add("show");
+        document.getElementById('scraping-log-tab').classList.add("show");
+        document.getElementById('uploader-tab').classList.add("show");
+        if (!afterSave) {
+            document.getElementById('config').classList.remove("show", "active");
+            document.getElementById('config-tab').classList.remove("active");
+            document.getElementById('scraper').classList.add("show", "active");
+            document.getElementById('scraper-tab').classList.add("active");
         }
+    }
 }
 
 /* Loading the bulk import file */
 
 function loadBulkFile(bulkImport = null) {
 
-    if (!bulkImport) {bulkImport = config.bulk_txt;}
+    if (!bulkImport) {
+        bulkImport = config.bulk_txt;
+    }
 
-    socket.emit("load_bulk_import", { instance_id: instanceId, filename: bulkImport });
+    socket.emit("load_bulk_import", {instance_id: instanceId, filename: bulkImport});
 
     socket.once("load_bulk_import", (data) => {
 
         const textArea = document.getElementById("bulk_import_text");
 
-        if(validResponse(data)) {
+        if (validResponse(data)) {
 
-                if (data.loaded) {
-                    textArea.value = data.bulk_import_text;
-                    currentBulkImport = data.filename;
-                    bulkTextAsLoaded = data.bulk_import_text;
+            if (data.loaded) {
+                textArea.value = data.bulk_import_text;
+                currentBulkImport = data.filename;
+                bulkTextAsLoaded = data.bulk_import_text;
 
-                    // Select the correct option in the dropdown
-                    const selectElement = document.getElementById("switch_bulk_file");
-                    for (const option of selectElement.options) {
-                        if (option.value === data.filename) {
-                            option.selected = true;
-                            break;
-                        }
+                // Select the correct option in the dropdown
+                const selectElement = document.getElementById("switch_bulk_file");
+                for (const option of selectElement.options) {
+                    if (option.value === data.filename) {
+                        option.selected = true;
+                        break;
                     }
-
-                    updateBulkSaveButtonState();
-                    handleDefaultCheckbox();
-                    updateSchedulerIcon();
-                    //                    updateStatus("Bulk import file '" + data.filename + "' was loaded","success", false, false, "check-circle")
-                } else {
-                    updateStatus("Bulk import file could not be loaded","danger", false, false, "cross-circle")
                 }
+
+                updateBulkSaveButtonState();
+                handleDefaultCheckbox();
+                updateSchedulerIcon();
+                //                    updateStatus("Bulk import file '" + data.filename + "' was loaded","success", false, false, "check-circle")
+            } else {
+                updateStatus("Bulk import file could not be loaded", "danger", false, false, "cross-circle")
+            }
 
 
         }
@@ -716,7 +722,7 @@ function checkBulkImportFileToSave() {
 
 function loadBulkFileList() {
 
-    socket.emit("load_bulk_filelist", { instance_id: instanceId });
+    socket.emit("load_bulk_filelist", {instance_id: instanceId});
 
     socket.once("load_bulk_filelist", (data) => {
         if (validResponse(data)) {
@@ -789,7 +795,7 @@ function saveBulkImport(filename, nowLoad = null) {
     // And wait for a response
     socket.once("save_bulk_import", data => {
         if (validResponse(data)) {
-            if (data.saved == true) {
+            if (data.saved === true) {
                 loadBulkFileList();
                 bulkTextAsLoaded = textArea.value
                 updateBulkSaveButtonState()
@@ -807,7 +813,7 @@ function runBulkImport() {
     // Switch to the log tab
     bootstrap.Tab.getOrCreateInstance(logTab).show();
 
-    socket.emit("start_bulk_import",{
+    socket.emit("start_bulk_import", {
         instance_id: instanceId,
         bulk_list: document.getElementById("bulk_import_text").value,
         filename: currentBulkImport || document.getElementById("switch_bulk_file").value || "bulk_import.txt"
@@ -819,19 +825,19 @@ function runBulkImport() {
 (function () {
     'use strict';
     // Fetch all forms we want to apply custom Bootstrap validation styles to
-    var forms = document.querySelectorAll('.needs-validation');
+    const forms = document.querySelectorAll('.needs-validation');
 
     // Loop over them and prevent submission if invalid
     Array.prototype.slice.call(forms)
         .forEach(function (form) {
-        form.addEventListener('submit', function (event) {
-            if (!form.checkValidity()) {
-                event.preventDefault();
-                event.stopPropagation();
-            }
-            form.classList.add('was-validated');
-        }, false);
-    });
+            form.addEventListener('submit', function (event) {
+                if (!form.checkValidity()) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                form.classList.add('was-validated');
+            }, false);
+        });
 })();
 
 /* =============================================
@@ -1054,7 +1060,7 @@ document.getElementById("delete_icon").addEventListener("click", function () {
 // Function to handle uploading a bulk file
 document.getElementById("create_icon").addEventListener("click", function () {
     // Create a new bulk import file
-    socket.emit("create_bulk_file", { instance_id: instanceId });
+    socket.emit("create_bulk_file", {instance_id: instanceId});
 
     socket.once("create_bulk_file", (data) => {
         if (data.created) {
@@ -1130,7 +1136,7 @@ function uploadBulkImportFile(event) {
 
         // Proceed with reading and processing the file
         const reader = new FileReader();
-        reader.onload = function(e) {
+        reader.onload = function (e) {
             const text = e.target.result;
 
             const bulkTextArea = document.getElementById("bulk_import_text");
@@ -1142,9 +1148,7 @@ function uploadBulkImportFile(event) {
                         saveBulkImport(currentBulkImport);
                     }
 
-                    if (confirmed === "cancel") {
-                        return
-                    } else {
+                    if (confirmed !== "cancel") {
                         bulkTextArea.value = text;
                         bulkTextAsLoaded = text;
                         currentBulkImport = file.name;
@@ -1220,7 +1224,7 @@ dropArea.addEventListener("drop", (e) => {
 dropArea.addEventListener("click", () => {
 
     const form = document.getElementById("upload_form");
-    
+
     if (!form.checkValidity()) {
         form.classList.add('was-validated');
         return;
@@ -1270,8 +1274,8 @@ function uploadFile(file) {
                 let options = [];
                 document.querySelectorAll('[id^="upload-option-"]:checked').forEach(checkbox => {
                     options.push(checkbox.value);
-                });   
-                
+                });
+
                 // Collect checked checkboxes with ids starting with "upload-filter-"
                 let filters = [];
                 if (!document.getElementById("upload-filters-global").checked) {
@@ -1283,8 +1287,18 @@ function uploadFile(file) {
                 const plex_year = document.getElementById("plex_year").value;
                 const plex_title = document.getElementById("plex_title").value;
 
-                socket.emit("display_message", {"message": `Successfully uploaded '${file.name}'`, "title": "uploadFile"});
-                socket.emit("upload_complete", {instance_id: instanceId, fileName: file.name, options: options, filters: filters, plex_title: plex_title, plex_year: plex_year });
+                socket.emit("display_message", {
+                    "message": `Successfully uploaded '${file.name}'`,
+                    "title": "uploadFile"
+                });
+                socket.emit("upload_complete", {
+                    instance_id: instanceId,
+                    fileName: file.name,
+                    options: options,
+                    filters: filters,
+                    plex_title: plex_title,
+                    plex_year: plex_year
+                });
                 progress_bar(100, "Upload complete!");
 
                 return; // Ensure no further execution in this function
@@ -1322,14 +1336,14 @@ function uploadFile(file) {
 }
 
 socket.on("upload_progress", function (data) {
-    if(validResponse(data)) {
+    if (validResponse(data)) {
         progress_bar(data.progress);
     }
 });
 
 socket.on("upload_complete", function (data) {
-    if(validResponse(data)) {
-        progress_bar(100,"Upload complete!");
+    if (validResponse(data)) {
+        progress_bar(100, "Upload complete!");
     }
 });
 
@@ -1337,109 +1351,109 @@ socket.on("upload_complete", function (data) {
 // Scheduler
 // =====================
 
-    function updateOrAddSchedule(fileName, newTime, jobReference = null) {
-        const schedule = schedules.find(s => s.file === fileName);
-        if (schedule) {
-            schedule.time = newTime;
-            schedule.jobReference = jobReference;
-        } else {
-            schedules.push({ file: fileName, time: newTime });
-        }
+function updateOrAddSchedule(fileName, newTime, jobReference = null) {
+    const schedule = schedules.find(s => s.file === fileName);
+    if (schedule) {
+        schedule.time = newTime;
+        schedule.jobReference = jobReference;
+    } else {
+        schedules.push({file: fileName, time: newTime});
     }
+}
 
-    // Show the time selector when the clock icon is clicked
-    scheduleIcon.addEventListener("click", function () {
+// Show the time selector when the clock icon is clicked
+scheduleIcon.addEventListener("click", function () {
 
-        const iconRect = scheduleIcon.getBoundingClientRect();
+    const iconRect = scheduleIcon.getBoundingClientRect();
 
-        // Position tooltip relative to the icon
-        timeSelectBox.style.top = `${iconRect.bottom + window.scrollY + 10}px`; // Below the icon
-        timeSelectBox.style.right = `${window.innerWidth - iconRect.right - window.scrollX - 15}px`; // Align right edge
+    // Position tooltip relative to the icon
+    timeSelectBox.style.top = `${iconRect.bottom + window.scrollY + 10}px`; // Below the icon
+    timeSelectBox.style.right = `${window.innerWidth - iconRect.right - window.scrollX - 15}px`; // Align right edge
 
-        // Toggle visibility
-        timeSelectBox.classList.toggle("show-tooltip");
+    // Toggle visibility
+    timeSelectBox.classList.toggle("show-tooltip");
 
-    });
+});
 
-    document.addEventListener("click", function (event) {
-        if (!timeSelectBox.contains(event.target) && !scheduleIcon.contains(event.target)) {
-            timeSelectBox.classList.remove("show-tooltip");
-        }
-    });
+document.addEventListener("click", function (event) {
+    if (!timeSelectBox.contains(event.target) && !scheduleIcon.contains(event.target)) {
+        timeSelectBox.classList.remove("show-tooltip");
+    }
+});
 
-    // Handle setting the time
-    setTimeBtn.addEventListener("click", function () {
-        const selectedTime = scheduleTimeInput.value;
-        if (selectedTime) {
-            socket.emit("add_schedule",{instance_id:instanceId, file: currentBulkImport, time: selectedTime})
+// Handle setting the time
+setTimeBtn.addEventListener("click", function () {
+    const selectedTime = scheduleTimeInput.value;
+    if (selectedTime) {
+        socket.emit("add_schedule", {instance_id: instanceId, file: currentBulkImport, time: selectedTime})
 
-            // Wait for response on add schedule
-            socket.once("add_schedule", (data) => {
-                if (validResponse(data)) {
-                    if (data.added) {
-                        updateOrAddSchedule(data.file, data.time, data.jobReference);
-                        updateSchedulerIcon();
-                        timeSelectBox.classList.remove("show-tooltip");
-                    }
-                }
-            });
-
-        }
-    });
-
-    // Handle cancelling the schedule
-    cancelTimeBtn.addEventListener("click", function () {
-        socket.emit("delete_schedule",{instance_id:instanceId, file: currentBulkImport})
-
-        // Wait for response
-        socket.once("delete_schedule", (data) => {
+        // Wait for response on add schedule
+        socket.once("add_schedule", (data) => {
             if (validResponse(data)) {
-                if (data.deleted) {
-                    // Get the value of the default bulk file from the hidden field
-                    console.log(schedules)
-                    updateOrAddSchedule(data.file, null, null)
-                    console.log(schedules)
+                if (data.added) {
+                    updateOrAddSchedule(data.file, data.time, data.jobReference);
                     updateSchedulerIcon();
-                } else {
-
+                    timeSelectBox.classList.remove("show-tooltip");
                 }
-            timeSelectBox.classList.remove("show-tooltip");
             }
         });
 
+    }
+});
+
+// Handle cancelling the schedule
+cancelTimeBtn.addEventListener("click", function () {
+    socket.emit("delete_schedule", {instance_id: instanceId, file: currentBulkImport})
+
+    // Wait for response
+    socket.once("delete_schedule", (data) => {
+        if (validResponse(data)) {
+            if (data.deleted) {
+                // Get the value of the default bulk file from the hidden field
+                console.log(schedules)
+                updateOrAddSchedule(data.file, null, null)
+                console.log(schedules)
+                updateSchedulerIcon();
+            } else {
+
+            }
+            timeSelectBox.classList.remove("show-tooltip");
+        }
     });
 
-    function updateSchedulerIcon(){
-        let details = getScheduleDetails(currentBulkImport);
-        // console.log(schedules)
-        if (details && details['time']) {
-            scheduleIcon.classList.remove("bi-clock");
-            scheduleIcon.classList.add("bi-clock-fill"); // Change to filled icon
-            setContainer.classList.remove("show"); // Hide set button
-            cancelContainer.classList.add("show"); // Show cancel button
-            scheduleTimeInput.value = details['time'];
-            scheduleTimeInput.readOnly = true;
-            scheduleIcon.classList.add("text-success");
-        } else {
-            scheduleIcon.classList.add("bi-clock");
-            scheduleIcon.classList.remove("bi-clock-fill"); // Change to filled icon
-            scheduleIcon.classList.remove("text-success");
-            setContainer.classList.add("show"); // Show set button
-            cancelContainer.classList.remove("show"); // Hide cancel button
-            scheduleTimeInput.value = "";
-            scheduleTimeInput.readOnly = false;
-        }
-    }
+});
 
-    function getScheduleDetails(fileName) {
-        return schedules.find(s => s.file === fileName);
+function updateSchedulerIcon() {
+    let details = getScheduleDetails(currentBulkImport);
+    // console.log(schedules)
+    if (details && details['time']) {
+        scheduleIcon.classList.remove("bi-clock");
+        scheduleIcon.classList.add("bi-clock-fill"); // Change to filled icon
+        setContainer.classList.remove("show"); // Hide set button
+        cancelContainer.classList.add("show"); // Show cancel button
+        scheduleTimeInput.value = details['time'];
+        scheduleTimeInput.readOnly = true;
+        scheduleIcon.classList.add("text-success");
+    } else {
+        scheduleIcon.classList.add("bi-clock");
+        scheduleIcon.classList.remove("bi-clock-fill"); // Change to filled icon
+        scheduleIcon.classList.remove("text-success");
+        setContainer.classList.add("show"); // Show set button
+        cancelContainer.classList.remove("show"); // Hide cancel button
+        scheduleTimeInput.value = "";
+        scheduleTimeInput.readOnly = false;
     }
+}
+
+function getScheduleDetails(fileName) {
+    return schedules.find(s => s.file === fileName);
+}
 
 // Check for update on page load
-socket.emit("check_for_update", { instance_id: instanceId});
+socket.emit("check_for_update", {instance_id: instanceId});
 
-socket.on("update_available", function(data) {
-    if(validResponse(data)){
+socket.on("update_available", function (data) {
+    if (validResponse(data)) {
         updateLog("Update available: " + data.version, "info");
         document.getElementById("latest_version").innerText = data.version;
         document.getElementById("version_notifier").style.display = "block";
@@ -1448,15 +1462,15 @@ socket.on("update_available", function(data) {
 
 function updateApp() {
     document.getElementById("version_notifier").style.display = "none";
-    socket.emit("update_app", { instance_id: instanceId});
+    socket.emit("update_app", {instance_id: instanceId});
 }
 
-socket.on("update_failed", function(data) {
+socket.on("update_failed", function (data) {
     alert("Update failed: " + data.error);
 });
 
 
-socket.on("backend_restarting", function() {
+socket.on("backend_restarting", function () {
     console.log("Backend restarting, refreshing frontend too...");
     setTimeout(() => {
         location.reload();  // Reload the page
@@ -1464,13 +1478,13 @@ socket.on("backend_restarting", function() {
 });
 
 // Detect when the WebSocket connection is lost
-    socket.on("disconnect", function() {
-        console.log("WebSocket disconnected, attempting to reconnect...");
-        // Refresh the page to reconnect to the WebSocket
-        setTimeout(() => {
-            location.reload();  // Reload to attempt reconnection
-        }, 3000);  // Delay for 3 seconds before refresh to allow connection retry
-    });
+socket.on("disconnect", function () {
+    console.log("WebSocket disconnected, attempting to reconnect...");
+    // Refresh the page to reconnect to the WebSocket
+    setTimeout(() => {
+        location.reload();  // Reload to attempt reconnection
+    }, 3000);  // Delay for 3 seconds before refresh to allow connection retry
+});
 
 // ==================================================
 // Authentication Settings Toggle
@@ -1561,7 +1575,7 @@ function toggleTempCheckbox() {
     const tempDir = document.getElementById("temp_dir").value.trim();
     const tempCheckbox = document.getElementById("option-temp");
     const tempCheckboxUpload = document.getElementById("upload-option-temp");
-    
+
     // Only show temp option in the scraper tab if Kometa is enabled AND temp dir has a value
     if (saveToKometa && tempDir) {
         tempCheckbox.parentElement.style.display = "block";
@@ -1588,7 +1602,7 @@ function togglePlexOptions() {
         trackArtworkIDs.style.display = "none";
         resetOverlay.style.display = "none";
         document.getElementById("track_artwork_ids").checked = true;
-    //    document.getElementById("reset_overlay").checked = false;
+        //    document.getElementById("reset_overlay").checked = false;
     }
 }
 

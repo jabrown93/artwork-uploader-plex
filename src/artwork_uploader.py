@@ -1,37 +1,24 @@
 import eventlet
-eventlet.monkey_patch()
 
-import base64
-from pathlib import Path
+eventlet.monkey_patch()
 
 import uuid
 import os
 import re
-import zipfile
-import tempfile
 
-import requests
-import subprocess
-import schedule, time
 from core import globals
 import threading
 import sys
 
-from utils import utils
 from models import arguments
 from models.instance import Instance
-from processors.media_metadata import parse_title
 from utils.notifications import update_log, update_status, notify_web, debug_me
 from core.config import Config
 from core.exceptions import ConfigLoadError, PlexConnectorException, ScraperException
 from scrapers.theposterdb_scraper import ThePosterDBScraper
-from processors.upload_processor import UploadProcessor
-from scrapers.scraper import Scraper
 from utils.utils import is_not_comment, parse_url_and_options
 from models.options import Options
 from plex.plex_connector import PlexConnector
-from core.exceptions import CollectionNotFound, MovieNotFound, ShowNotFound, NotProcessedByFilter, \
-    NotProcessedByExclusion
 from core.constants import (
     CURRENT_VERSION,
     GITHUB_REPO,
@@ -42,7 +29,7 @@ from core.constants import (
     MIN_PYTHON_MAJOR,
     MIN_PYTHON_MINOR
 )
-from core.enums import InstanceMode, ScraperSource
+from core.enums import InstanceMode
 from services import (
     BulkFileService,
     ImageService,
@@ -59,7 +46,8 @@ current_version = CURRENT_VERSION
 # ----------------------------------------------
 
 if sys.version_info[0] != MIN_PYTHON_MAJOR or sys.version_info[1] < MIN_PYTHON_MINOR:
-    print(f"Version: {sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]} is not compatible with Artwork Uploader, please upgrade to Python {MIN_PYTHON_MAJOR}.{MIN_PYTHON_MINOR}+")
+    print(
+        f"Version: {sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]} is not compatible with Artwork Uploader, please upgrade to Python {MIN_PYTHON_MAJOR}.{MIN_PYTHON_MINOR}+")
     sys.exit(0)
 
 try:
@@ -86,8 +74,6 @@ except (ModuleNotFoundError, ImportError) as e:
     print("=" * 70)
     sys.exit(1)
 
-
-
 # ! Interactive CLI mode flag
 interactive_cli = False  # Set to False when building the executable with PyInstaller for it launches the web UI by default
 mode = InstanceMode.CLI.value
@@ -96,13 +82,12 @@ scheduled_jobs_by_file = {}  # Legacy - kept for backwards compatibility
 # Services moved to core.globals for proper cross-module access
 config = None  # Initialized in main
 
-
 github_repo = GITHUB_REPO  # For autoupdater
+
 
 # ---------------------- CORE FUNCTIONS ----------------------
 
 def parse_bulk_file_from_cli(instance: Instance, file_path):
-
     """
     Load and parse the URLs from a bulk file, then scrape them with any options set for that URL.
     """
@@ -148,7 +133,6 @@ def get_exe_dir():
 
 
 def process_scrape_url_from_web(instance: Instance, url: str) -> None:
-
     """
     Process the URL and any options, then scrape for posters and updates the GUI with the results
     Now switches to the session log tab when you hit the button so that you can see the results as they happen
@@ -190,11 +174,11 @@ def process_scrape_url_from_web(instance: Instance, url: str) -> None:
 
     finally:
         if instance.mode == "web":
-            notify_web(instance, "element_disable", {"element": ["scrape_url", "scrape_button", "bulk_button"], "mode": False})
+            notify_web(instance, "element_disable",
+                       {"element": ["scrape_url", "scrape_button", "bulk_button"], "mode": False})
 
 
-def run_bulk_import_scrape_in_thread(instance: Instance, web_list = None, filename = None):
-
+def run_bulk_import_scrape_in_thread(instance: Instance, web_list=None, filename=None):
     """Run the bulk import scrape in a separate thread."""
 
     parsed_urls = []
@@ -213,7 +197,8 @@ def run_bulk_import_scrape_in_thread(instance: Instance, web_list = None, filena
         update_status(instance, "No bulk import entries found.", color="danger")
 
     if instance.mode == "web":
-        notify_web(instance, "element_disable", {"element": ["scrape_url", "scrape_button", "bulk_button"], "mode": True})
+        notify_web(instance, "element_disable",
+                   {"element": ["scrape_url", "scrape_button", "bulk_button"], "mode": True})
 
     # Pass the processing of the parsed URLs off to a thread
     if instance.mode == "web":
@@ -224,7 +209,6 @@ def run_bulk_import_scrape_in_thread(instance: Instance, web_list = None, filena
 
 
 def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename: str = None) -> None:
-
     """
     Process the bulk import scrape, based on the contents of the Bulk Import tab in the GUI.
 
@@ -251,7 +235,7 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
         update_log(instance, f"🎬 Bulk process started - {display_filename}")
 
         # Show the progress bar on the web UI
-        notify_web(instance, "progress_bar", {"percent" : 0})
+        notify_web(instance, "progress_bar", {"percent": 0})
 
         # Loop through the bulk list
         for i, parsed_line in enumerate(parsed_urls):
@@ -271,10 +255,12 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
                     pass
 
             percent = ((i + 1) / len(parsed_urls)) * 100
-            notify_web(instance, "progress_bar", {"message": f"{i + 1} / {len(parsed_urls)} ({percent.__round__()}%)", "percent" : percent})
+            notify_web(instance, "progress_bar",
+                       {"message": f"{i + 1} / {len(parsed_urls)} ({percent.__round__()}%)", "percent": percent})
 
         # All done, update the UI
-        notify_web(instance, "progress_bar", {"message": f"{len(parsed_urls)} of {len(parsed_urls)} (100%)", "percent" : 100})
+        notify_web(instance, "progress_bar",
+                   {"message": f"{len(parsed_urls)} of {len(parsed_urls)} (100%)", "percent": 100})
         update_status(instance, "Bulk import scraping completed.", color="success")
 
         # Log the completion of the bulk import process
@@ -286,12 +272,12 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
         update_status(instance, f"Error during bulk import: {bulk_import_exception}", color="danger")
 
     finally:
-        notify_web(instance, "element_disable", {"element": ["scrape_url", "scrape_button", "bulk_button"], "mode": False})
+        notify_web(instance, "element_disable",
+                   {"element": ["scrape_url", "scrape_button", "bulk_button"], "mode": False})
 
 
 # Scrape all pages of a TPDb user's uploaded artwork
 def scrape_tpdb_user(instance: Instance, url, options, success_counter=None):
-
     if "?" in url:
         cleaned_url = url.split("?")[0]
         url = cleaned_url
@@ -301,7 +287,7 @@ def scrape_tpdb_user(instance: Instance, url, options, success_counter=None):
         user_scraper.scrape_user_info()
         pages = user_scraper.user_pages
     except ScraperException as cannot_scrape:
-        debug_me(str(cannot_scrape),"scrape_tpdb_user")
+        debug_me(str(cannot_scrape), "scrape_tpdb_user")
         raise
 
     try:
@@ -320,6 +306,7 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None):
     This is now a thin wrapper around ArtworkProcessor that handles
     UI updates via callbacks.
     """
+
     # Create callbacks for UI updates
     def status_callback(message: str, color: str, spinner: bool, sticky: bool):
         update_status(instance, message, color, sticky=sticky, spinner=spinner)
@@ -342,13 +329,14 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None):
         raise
 
 
-def process_uploaded_artwork(instance: Instance, file_list, options, filters, plex_title = None, plex_year = None):
+def process_uploaded_artwork(instance: Instance, file_list, options, filters, plex_title=None, plex_year=None):
     """
     Process uploaded artwork files and upload to Plex or save to Kometa asset directory.
 
     This is now a thin wrapper around ArtworkProcessor that handles
     UI updates via callbacks.
     """
+
     # Create callbacks for UI updates
     def status_callback(message: str, color: str, spinner: bool, sticky: bool):
         update_status(instance, message, color, sticky=sticky, spinner=spinner)
@@ -374,19 +362,22 @@ def process_uploaded_artwork(instance: Instance, file_list, options, filters, pl
     # Use the service to do the actual work
     if plex_year:
         plex_year = int(plex_year)
-        opts = Options(filters=filters, year=plex_year, temp=True if "temp" in options else False, stage=True if "stage" in options else False, force=True if "force" in options else False)
+        opts = Options(filters=filters, year=plex_year, temp=True if "temp" in options else False,
+                       stage=True if "stage" in options else False, force=True if "force" in options else False)
     else:
-        opts = Options(filters=filters, temp=True if "temp" in options else False, stage=True if "stage" in options else False, force=True if "force" in options else False)
+        opts = Options(filters=filters, temp=True if "temp" in options else False,
+                       stage=True if "stage" in options else False, force=True if "force" in options else False)
     processor = ArtworkProcessor(globals.plex)
     processor.process_uploaded_files(file_list, opts, callbacks, override_title=plex_title)
 
 
 # * Bulk import file I/O functions ---
-def load_bulk_import_file(instance: Instance, filename = None):
+def load_bulk_import_file(instance: Instance, filename=None):
     """Load the bulk import file into the text area."""
     try:
         # Get the current bulk_txt value from the config
-        bulk_import_filename = filename if filename is not None else (config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt")
+        bulk_import_filename = filename if filename is not None else (
+            config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt")
 
         # Check if file exists
         if not globals.bulk_file_service.file_exists(bulk_import_filename):
@@ -400,7 +391,8 @@ def load_bulk_import_file(instance: Instance, filename = None):
         content = globals.bulk_file_service.read_file(bulk_import_filename)
 
         if instance.mode == "web":
-            notify_web(instance, "load_bulk_import", {"loaded": True, "filename": bulk_import_filename, "bulk_import_text": content})
+            notify_web(instance, "load_bulk_import",
+                       {"loaded": True, "filename": bulk_import_filename, "bulk_import_text": content})
 
     except FileNotFoundError as e:
         debug_me(f"File not found: {str(e)}", "load_bulk_import_file")
@@ -418,9 +410,10 @@ def rename_bulk_import_file(instance: Instance, old_name, new_name):
     if old_name != new_name:
         try:
             globals.bulk_file_service.rename_file(old_name, new_name)
-            notify_web(instance, "rename_bulk_file", {"renamed": True, "old_filename": old_name, "new_filename": new_name})
+            notify_web(instance, "rename_bulk_file",
+                       {"renamed": True, "old_filename": old_name, "new_filename": new_name})
             update_status(instance, f"Renamed to {new_name}", "success")
-        except Exception as e:
+        except Exception:
             notify_web(instance, "rename_bulk_file", {"renamed": False, "old_filename": old_name})
             update_status(instance, f"Could not rename {old_name}", "warning")
 
@@ -431,16 +424,17 @@ def delete_bulk_import_file(instance: Instance, file_name):
             globals.bulk_file_service.delete_file(file_name)
             notify_web(instance, "delete_bulk_file", {"deleted": True, "filename": file_name})
             update_status(instance, f"Deleted {file_name}", "success")
-        except Exception as e:
+        except Exception:
             notify_web(instance, "delete_bulk_file", {"deleted": False, "filename": file_name})
             update_status(instance, f"Could not delete {file_name}", "warning")
 
 
-def save_bulk_import_file(instance: Instance, contents = None, filename = None, now_load = None):
+def save_bulk_import_file(instance: Instance, contents=None, filename=None, now_load=None):
     """Save the bulk import text area content to a file relative to the executable location."""
     if contents:
         try:
-            bulk_import_filename = filename if filename is not None else (config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt")
+            bulk_import_filename = filename if filename is not None else (
+                config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt")
 
             debug_me(f"Saving {bulk_import_filename}", "save_bulk_import_file")
 
@@ -448,7 +442,7 @@ def save_bulk_import_file(instance: Instance, contents = None, filename = None, 
 
             update_status(instance, message=f"Bulk import file {filename} saved", color="success")
             notify_web(instance, "save_bulk_import", {"saved": True, "now_load": now_load})
-        except Exception as e:
+        except Exception:
             update_status(instance, message="Error saving bulk import file", color="danger")
             notify_web(instance, "save_bulk_import", {"saved": False, "now_load": now_load})
 
@@ -458,14 +452,15 @@ def check_for_bulk_import_file(instance: Instance):
     try:
         bulk_import_filename = config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt"
         globals.bulk_file_service.ensure_default_file_exists(bulk_import_filename)
-    except Exception as e:
+    except Exception:
         update_status(instance, message="Error creating bulk import file", color="danger")
 
 
 def find_bulk_file(filename: str = None):
     """Find a bulk import file - returns full path if exists, None otherwise."""
     # Get the current bulk_txt value from the config
-    bulk_import_filename = filename if filename is not None else (config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt")
+    bulk_import_filename = filename if filename is not None else (
+        config.bulk_txt if config and config.bulk_txt is not None else "bulk_import.txt")
 
     # Use the service to check if file exists
     if globals.bulk_file_service.file_exists(bulk_import_filename):
@@ -495,15 +490,18 @@ def check_image_orientation(image_path):
     """Check image orientation using ImageService."""
     return ImageService.check_orientation(image_path)
 
+
 def sort_key(item):
     """Sort key for artwork items - uses UtilityService."""
     return UtilityService.sort_key(item)
+
 
 # Autoupdate functions
 
 def get_latest_version():
     """Fetch the latest release version from GitHub."""
     return globals.update_service.get_latest_version() if globals.update_service else None
+
 
 def check_for_updates_periodically():
     """Background task to check for updates periodically - now handled by UpdateService."""
@@ -512,15 +510,12 @@ def check_for_updates_periodically():
     pass
 
 
-
-
 def add_file_to_schedule_thread(instance: Instance, filename):
     if instance:
         threading.Thread(target=process_bulk_file_on_schedule, args=(instance, filename,)).start()
 
 
 def process_bulk_file_on_schedule(instance: Instance, filename):
-
     instance.broadcast = True
 
     try:
@@ -544,7 +539,7 @@ def process_bulk_file_on_schedule(instance: Instance, filename):
 # Kept for backwards compatibility but no longer used internally
 
 
-#Initialises the scheduler when the script is run
+# Initialises the scheduler when the script is run
 def setup_scheduler_on_first_load(instance: Instance):
     """
     Initialises the scheduler when the script is run and sets up each schedule from the config file.
@@ -715,7 +710,7 @@ if __name__ == "__main__":
             try:
                 scrape_tpdb_user(cli_instance, cli_command, cli_options)
             except Exception as e:
-                debug_me(f"Error scraping user: {str(e)}","__main__")
+                debug_me(f"Error scraping user: {str(e)}", "__main__")
                 print(f"Error scraping TPDb user: {str(e)}")
 
         # User passed in a poster or set URL, so let's process that
@@ -723,7 +718,7 @@ if __name__ == "__main__":
             try:
                 scrape_and_upload(cli_instance, cli_command, cli_options)
             except Exception as e:
-                update_status(cli_instance, str(e),color="danger")
+                update_status(cli_instance, str(e), color="danger")
     else:
 
         # If no CLI arguments, proceed with UI creation (if not in interactive CLI mode)
@@ -760,17 +755,19 @@ if __name__ == "__main__":
             # Configure session for authentication
             import secrets
             from datetime import timedelta
+
             web_app.config['SECRET_KEY'] = secrets.token_hex(32)
             web_app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
             globals.web_socket = SocketIO(web_app, cors_allowed_origins="*", async_mode="eventlet")
+
 
             # Start update checker using UpdateService
             def on_update_available(version: str):
                 debug_me(f"Update available. Latest version: {version}", "update_service")
                 notify_web(Instance(broadcast=True), "update_available", {"version": version})
 
+
             globals.update_service.start_periodic_check(on_update_available)
 
             setup_web_sockets()
-

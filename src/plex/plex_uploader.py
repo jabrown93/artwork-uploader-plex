@@ -1,24 +1,23 @@
-import os
-from typing import Union, Optional
 import time
+from typing import Union, Optional
 
-from plexapi.video import Movie, Show, Season, Episode
+from core.constants import TPDB_RATE_LIMIT_DELAY, KOMETA_OVERLAY_LABEL
+from core.enums import ScraperSource, ArtworkIDPrefix
+from models.artwork_types import AnyArtwork
+from models.options import Options
 from plexapi.collection import Collection
-
+from plexapi.video import Movie, Show, Season, Episode
 from utils import utils
 from utils.notifications import debug_me
-from models.options import Options
-from core.enums import ScraperSource, ArtworkIDPrefix
-from core.constants import TPDB_RATE_LIMIT_DELAY, KOMETA_OVERLAY_LABEL
-from models.artwork_types import AnyArtwork
+
 
 class PlexUploader:
 
     def __init__(
-        self,
-        upload_target: Union[Movie, Show, Season, Episode, Collection],
-        artwork_type: str,
-        artwork_id: str
+            self,
+            upload_target: Union[Movie, Show, Season, Episode, Collection],
+            artwork_type: str,
+            artwork_id: str
     ) -> None:
         self.upload_target: Union[Movie, Show, Season, Episode, Collection] = upload_target
         self.artwork_type: str = artwork_type
@@ -38,7 +37,8 @@ class PlexUploader:
             self.label = self.artwork_id + artwork['checksum']
         else:
             self.type = "url"
-            self.label = self.artwork_id + utils.calculate_md5(self.artwork["url"].split('&_cb=')[0])  # Remove any cache buster before calculating the MD5
+            self.label = self.artwork_id + utils.calculate_md5(
+                self.artwork["url"].split('&_cb=')[0])  # Remove any cache buster before calculating the MD5
 
     def set_description(self, description: str) -> None:
         self.description = description
@@ -62,16 +62,16 @@ class PlexUploader:
 
                 if self.artwork_id == "BID:":
                     if self.type == "file":
-                        self.upload_target.uploadArt( filepath = self.artwork['path'])
+                        self.upload_target.uploadArt(filepath=self.artwork['path'])
                     else:
-                        self.upload_target.uploadArt( url = self.artwork["url"])
+                        self.upload_target.uploadArt(url=self.artwork["url"])
                     if self.track_artwork_ids:
                         self.upload_target.addLabel(self.label)
                 else:
                     if self.type == "file":
-                        self.upload_target.uploadPoster( filepath = self.artwork['path'])
+                        self.upload_target.uploadPoster(filepath=self.artwork['path'])
                     else:
-                        self.upload_target.uploadPoster( url = self.artwork["url"])
+                        self.upload_target.uploadPoster(url=self.artwork["url"])
                     if self.track_artwork_ids:
                         self.upload_target.addLabel(self.label)
                 if self.artwork["source"] == ScraperSource.THEPOSTERDB.value and self.type == "url":
@@ -87,15 +87,17 @@ class PlexUploader:
 
         for label in self.upload_target.labels:
             existing_label = str(label)  # Convert the label object to a string if it's not already
-            if existing_label.startswith(self.artwork_id): # Only check this type of ID, could be multiple IDs per item (e.g. background + cover)
+            if existing_label.startswith(
+                    self.artwork_id):  # Only check this type of ID, could be multiple IDs per item (e.g. background + cover)
                 if existing_label == self.label:
                     existing_artwork = True
                     if not self.track_artwork_ids:
-                        self.upload_target.removeLabel(existing_label, False)  # Remove the existing label as we're no longer tracking the artwork IDs
+                        self.upload_target.removeLabel(existing_label,
+                                                       False)  # Remove the existing label as we're no longer tracking the artwork IDs
                         self.upload_target.reload()
                 else:
-                    self.upload_target.removeLabel(existing_label, False)  # Remove the existing label as we're replacing the artwork
+                    self.upload_target.removeLabel(existing_label,
+                                                   False)  # Remove the existing label as we're replacing the artwork
                     self.upload_target.reload()
 
         return existing_artwork
-

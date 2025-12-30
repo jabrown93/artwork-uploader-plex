@@ -1,18 +1,18 @@
 import math
-from typing import Optional, Any
+import time
 from pprint import pprint
-from core import globals
+from typing import Optional, Any
 
+from core import globals
+from core.constants import TPDB_API_ASSETS_URL, TPDB_USER_UPLOADS_PER_PAGE, BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD
+from core.enums import MediaType, ScraperSource
+from core.exceptions import ScraperException
+from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
+from models.options import Options
 from processors import media_metadata
 from utils import soup_utils
 from utils.notifications import debug_me
-import time
-from models.options import Options
-from core.exceptions import ScraperException
 from utils.utils import get_artwork_type
-from core.enums import MediaType, ScraperSource
-from core.constants import TPDB_API_ASSETS_URL, TPDB_USER_UPLOADS_PER_PAGE, BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD
-from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 
 
 class ThePosterDBScraper:
@@ -33,14 +33,12 @@ class ThePosterDBScraper:
         self.user_uploads: int = 0
         self.user_pages: int = 0
 
-
     # Set options - otherwise will use defaults of False
     def set_options(self, options: Options) -> None:
         self.options = options
 
-
     # Scrape The Poster DB
-    def scrape(self) -> None:
+    def scrape(self) -> int:
 
         """
         If we were passed a poster link, it should have a link to its corresponding poster set.
@@ -52,7 +50,8 @@ class ThePosterDBScraper:
         """
         try:
             if "/poster/" in self.url:
-                debug_me(f"★ Got a poster URL {self.url}, looking up the correct set URL...", "ThePosterDBScraper/scrape")
+                debug_me(f"★ Got a poster URL {self.url}, looking up the correct set URL...",
+                         "ThePosterDBScraper/scrape")
                 poster_soup = soup_utils.cook_soup(self.url)
                 self.url = poster_soup.find('a', title='View Set Page')['href']
 
@@ -68,19 +67,29 @@ class ThePosterDBScraper:
 
                 if globals.debug:
                     if self.collection_artwork:
-                        debug_me(f"Found {len(self.collection_artwork)} collection asset(s) for {len({item["title"] for item in self.collection_artwork})} collection(s):", "ThePosterDBScraper/scrape")
-                        print(f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
+                        debug_me(
+                            f"Found {len(self.collection_artwork)} collection asset(s) for {len({item["title"] for item in self.collection_artwork})} collection(s):",
+                            "ThePosterDBScraper/scrape")
+                        print(
+                            f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                         pprint(self.collection_artwork)
-                        print(f"*************************************************************{ANSI_RESET}")  
+                        print(f"*************************************************************{ANSI_RESET}")
                     if self.movie_artwork:
-                        debug_me(f"Found {len(self.movie_artwork)} movie asset(s) for {len({item["title"] for item in self.movie_artwork})} movie(s):","ThePosterDBScraper/scrape")
-                        print(f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
+                        debug_me(
+                            f"Found {len(self.movie_artwork)} movie asset(s) for {len({item["title"] for item in self.movie_artwork})} movie(s):",
+                            "ThePosterDBScraper/scrape")
+                        print(
+                            f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                         pprint(self.movie_artwork)
                         print(f"*************************************************************{ANSI_RESET}")
                     if self.tv_artwork:
-                        debug_me(f"Skipped {self.exclusions} assets(s) based on exclusions.", "ThePosterDBScraper/scrape")
-                        debug_me(f"Found {len(self.tv_artwork)} TV show asset(s) for {len({item["title"] for item in self.tv_artwork})} TV show(s):", "ThePosterDBScraper/scrape")
-                        print(f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
+                        debug_me(f"Skipped {self.exclusions} assets(s) based on exclusions.",
+                                 "ThePosterDBScraper/scrape")
+                        debug_me(
+                            f"Found {len(self.tv_artwork)} TV show asset(s) for {len({item["title"] for item in self.tv_artwork})} TV show(s):",
+                            "ThePosterDBScraper/scrape")
+                        print(
+                            f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                         pprint(self.tv_artwork)
                         print(f"*************************************************************{ANSI_RESET}")
 
@@ -114,19 +123,20 @@ class ThePosterDBScraper:
 
     def get_set_title(self, soup: Any) -> None:
         try:
-            self.title = soup.find('p', id = "set-title").a.string
-        except (AttributeError, TypeError) as e:
+            self.title = soup.find('p', id="set-title").a.string
+        except (AttributeError, TypeError):
             debug_me(f"title lookup failed!", "ThePosterDBScraper/get_set_title")
         debug_me(f"set title: {self.title}", "ThePosterDBScraper/get_set_title")
 
     def get_set_author(self, soup: Any) -> None:
-        """ 
+        """
         Finds the set author by inspecting the HTML source of a set or user page
         """
         if "/set/" in self.url:
             try:
-                #self.author = soup.select_one('p#set-title span.font-italic a').string.strip()
-                self.author = soup.find('p', class_='uploaded-by text-white d-inline-block text-truncate w-100').a.string
+                # self.author = soup.select_one('p#set-title span.font-italic a').string.strip()
+                self.author = soup.find('p',
+                                        class_='uploaded-by text-white d-inline-block text-truncate w-100').a.string
                 debug_me(f"set author: {self.author}", "ThePosterDBScraper/get_set_author")
             except:
                 debug_me(f"author lookup failed {soup}", "ThePosterDBScraper/get_set_author")
@@ -157,10 +167,11 @@ class ThePosterDBScraper:
 
         for poster in posters:
 
-            media_type = poster.find('a', class_="text-white", attrs={'data-toggle': 'tooltip', 'data-placement': 'top'})['title']
+            media_type = \
+            poster.find('a', class_="text-white", attrs={'data-toggle': 'tooltip', 'data-placement': 'top'})['title']
             poster_id = poster.find('div', class_='overlay').get('data-poster-id')
 
-           # if not self.options.is_excluded(poster_id):
+            # if not self.options.is_excluded(poster_id):
 
             poster_url = f"{TPDB_API_ASSETS_URL}/{poster_id}{cache_buster}"
             title_p = poster.find('p', class_='p-0 mb-1 text-break').string
@@ -169,20 +180,29 @@ class ThePosterDBScraper:
                 title, season, year = media_metadata.parse_show(title_p)
                 if not self.options.is_excluded(poster_id, season if isinstance(season, int) else None, None):
                     if season == "Cover":
-                        show_poster = {"title": title, "author": self.author, "tmdb_id": self.tmdb_id, "url": poster_url, "season": season, "episode": None, "year": year, "source": ScraperSource.THEPOSTERDB.value, "id":poster_id, "type": "show_cover"}
+                        show_poster = {"title": title, "author": self.author, "tmdb_id": self.tmdb_id,
+                                       "url": poster_url, "season": season, "episode": None, "year": year,
+                                       "source": ScraperSource.THEPOSTERDB.value, "id": poster_id, "type": "show_cover"}
                     else:
-                        show_poster = {"title": title, "author": self.author, "tmdb_id": self.tmdb_id, "url": poster_url, "season": season, "episode": None, "year": year, "source": ScraperSource.THEPOSTERDB.value, "id":poster_id, "type": "season_cover"}
+                        show_poster = {"title": title, "author": self.author, "tmdb_id": self.tmdb_id,
+                                       "url": poster_url, "season": season, "episode": None, "year": year,
+                                       "source": ScraperSource.THEPOSTERDB.value, "id": poster_id,
+                                       "type": "season_cover"}
                     get_artwork_type(show_poster)
                     self.tv_artwork.append(show_poster)
                 else:
                     self.exclusions += 1
-                    debug_me(f"Skipping season cover for '{title} ({year})', Season {season} based on exclusions.", "ThePosterDBScraper/get_posters")
+                    debug_me(f"Skipping season cover for '{title} ({year})', Season {season} based on exclusions.",
+                             "ThePosterDBScraper/get_posters")
             elif media_type == MediaType.MOVIE.value:
                 title, year = media_metadata.parse_movie(title_p)
-                self.movie_artwork.append({"title": title, "author": self.author, "tmdb_id": self.tmdb_id, "url": poster_url, "year": year, "source": ScraperSource.THEPOSTERDB.value, "id":poster_id, "type": "poster"})
+                self.movie_artwork.append(
+                    {"title": title, "author": self.author, "tmdb_id": self.tmdb_id, "url": poster_url, "year": year,
+                     "source": ScraperSource.THEPOSTERDB.value, "id": poster_id, "type": "poster"})
             elif media_type == MediaType.COLLECTION.value:
-                self.collection_artwork.append({"title": title_p, "author": self.author, "url": poster_url, "source": ScraperSource.THEPOSTERDB.value, "id":poster_id, "type": "collection poster"})
-
+                self.collection_artwork.append({"title": title_p, "author": self.author, "url": poster_url,
+                                                "source": ScraperSource.THEPOSTERDB.value, "id": poster_id,
+                                                "type": "collection poster"})
 
     def scrape_additional_posters(self) -> None:
 
@@ -200,7 +220,6 @@ class ThePosterDBScraper:
             if additional_posters == "Additional Posters":
                 self.get_posters(poster_div)
 
-
     def scrape_additional_sets(self) -> None:
 
         debug_me("⚲ Looking for additional sets...")
@@ -215,8 +234,6 @@ class ThePosterDBScraper:
                 if set_url:
                     some_more_soup = soup_utils.cook_soup(set_url)
                     self.scrape_posters(some_more_soup)
-
-
 
     def scrape_posters(self, soup: Any) -> None:
         poster_div = soup.find('div', class_='row d-flex flex-wrap m-0 w-100 mx-n1 mt-n1')

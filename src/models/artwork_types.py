@@ -20,8 +20,8 @@ class MovieArtwork(TypedDict):
     year: Optional[int]
     source: str  # Should be ScraperSource value
     id: str
-    type: Optional[str] # Added by me
-    author: Optional[str] # Added by me
+    type: Optional[str]  # Added by me
+    author: Optional[str]  # Added by me
     tmdb_id: Optional[int]  # Added by me
 
 
@@ -57,8 +57,8 @@ class CollectionArtwork(TypedDict):
     url: str
     source: str  # Should be ScraperSource value
     id: str
-    type: Optional[str] # Added by me
-    year: Optional[int] # Added by me
+    type: Optional[str]  # Added by me
+    year: Optional[int]  # Added by me
     author: Optional[str]  # Added by me
 
 
@@ -83,7 +83,6 @@ class UploadedFileArtwork(TypedDict):
 MovieArtworkList = list[MovieArtwork]
 TVArtworkList = list[TVArtwork]
 CollectionArtworkList = list[CollectionArtwork]
-
 
 # Union type for any artwork
 AnyArtwork = Union[MovieArtwork, TVArtwork, CollectionArtwork, UploadedFileArtwork]

@@ -2,15 +2,15 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from core.constants import TPDB_BASE_URL, MEDIUX_BASE_URL, SOURCE_THEPOSTERDB, SOURCE_MEDIUX
-from models.options import Options
 from core.exceptions import ScraperException
-from scrapers.theposterdb_scraper import ThePosterDBScraper
-from scrapers.mediux_scraper import MediuxScraper
-from utils.notifications import debug_me
 from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
+from models.options import Options
+from scrapers.mediux_scraper import MediuxScraper
+from scrapers.theposterdb_scraper import ThePosterDBScraper
+from utils.notifications import debug_me
+
 
 class Scraper:
-
     """
     A class to scrape one of the supported providers
 
@@ -46,11 +46,9 @@ class Scraper:
         elif ".html" in url:
             self.source = "html"
 
-
     # Set options - otherwise will use defaults of False
     def set_options(self, options: Options) -> None:
         self.options = options
-
 
     def scrape(self) -> None:
 
@@ -61,7 +59,7 @@ class Scraper:
             None
         """
         try:
-            debug_me(f"Scraping from {self.source}","Scraper/scrape")
+            debug_me(f"Scraping from {self.source}", "Scraper/scrape")
             if self.source == SOURCE_THEPOSTERDB:
                 self.scrape_theposterdb()
             elif self.source == SOURCE_MEDIUX:
@@ -70,7 +68,7 @@ class Scraper:
                 return self.scrape_html()
             else:
                 raise ScraperException(f"Invalid source provided ({self.source if self.source else 'empty source'})")
-        except Exception as e:
+        except Exception:
             raise
 
     def scrape_theposterdb(self) -> None:
@@ -85,11 +83,10 @@ class Scraper:
             self.tv_artwork = theposterdb_scraper.tv_artwork
             self.collection_artwork = theposterdb_scraper.collection_artwork
 
-        except ScraperException as scraper_exception:
+        except ScraperException:
             raise
         except Exception as e:
             raise Exception(f"Unexpected error: {e}")
-
 
     def scrape_mediux(self) -> None:
 
@@ -119,7 +116,6 @@ class Scraper:
         except Exception as e:
             raise Exception(f"Unexpected error: {e}")
 
-
     def scrape_html(self) -> None:
 
         """
@@ -133,4 +129,3 @@ class Scraper:
         """
 
         self.scrape_theposterdb()
-

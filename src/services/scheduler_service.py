@@ -5,11 +5,12 @@ Extracted from artwork_uploader.py to reduce file size and improve
 maintainability.
 """
 
-from typing import Dict, Callable, Optional
 import threading
-import schedule
 import time
 import uuid
+from typing import Dict, Callable, Optional
+
+import schedule
 
 
 class SchedulerService:
@@ -29,10 +30,10 @@ class SchedulerService:
         self.is_running = False
 
     def add_schedule(
-        self,
-        filename: str,
-        schedule_time: str,
-        callback: Callable[[str], None]
+            self,
+            filename: str,
+            schedule_time: str,
+            callback: Callable[[str], None]
     ) -> str:
         """
         Add a new scheduled job.

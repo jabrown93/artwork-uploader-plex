@@ -5,8 +5,8 @@ Extracted from artwork_uploader.py to reduce file size and improve
 maintainability.
 """
 
-import sys
 import os
+import sys
 from typing import Any, Tuple
 
 
@@ -40,9 +40,11 @@ class UtilityService:
         Returns:
             Tuple for sorting (media, season_value, episode_value, source_value)
         """
+
         def parse_season(season: Any) -> float:
             # If the season is missing, None, or non-numeric, treat it as the highest possible value
-            if season is None or not isinstance(season, (int, str)) or (isinstance(season, str) and not season.isdigit()):
+            if season is None or not isinstance(season, (int, str)) or (
+                    isinstance(season, str) and not season.isdigit()):
                 return float('inf')
             return int(season)
 

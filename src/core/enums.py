@@ -2,7 +2,7 @@
 Enumerations for type-safe constants throughout the application.
 """
 
-from enum import Enum, auto
+from enum import Enum
 
 
 class FilterType(str, Enum):

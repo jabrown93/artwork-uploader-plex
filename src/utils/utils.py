@@ -1,23 +1,20 @@
 import hashlib
 import json
 import re
-from urllib.parse import urlparse
+from pathlib import PureWindowsPath, PurePosixPath
 
 import validators
-
 from core.constants import (
     TPDB_BASE_URL, MEDIUX_BASE_URL,
     SEASON_COVER, SEASON_BACKDROP, EPISODE_COVER,
     FILTER_SHOW_COVER, FILTER_BACKGROUND, FILTER_SEASON_COVER, FILTER_TITLE_CARD
 )
-from utils.notifications import debug_me
 from models.options import Options
 from models.url_item import URLItem
-from pathlib import PureWindowsPath, PurePosixPath
+from utils.notifications import debug_me
+
 
 # ---------------------- HELPER CLASSES ----------------------
-
-
 
 
 # Calculate the MD5 of a string - used for artwork IDs stored in labels
@@ -52,7 +49,6 @@ def is_numeric(value):
 
 
 def title_cleaner(string):
-
     if " (" in string:
         title = string.split(" (")[0]
     elif " -" in string:
@@ -63,8 +59,6 @@ def title_cleaner(string):
     title = title.strip()
 
     return title
-
-
 
 
 def parse_string_to_dict(input_string):
@@ -81,7 +75,6 @@ def parse_string_to_dict(input_string):
     # Parse JSON data into a dictionary
     parsed_dict = json.loads(json_data)
     return parsed_dict
-
 
 
 def remove_duplicates(lst):
@@ -101,10 +94,8 @@ def remove_duplicates(lst):
     return unique
 
 
-
 # Check if the URL is not a comment or empty line.
 def is_not_comment(url):
-
     """
     Check if the URL is not a comment or empty line.
     """
@@ -162,7 +153,6 @@ def validate_scraper_url(url: str) -> tuple:
 
 
 def parse_url_and_options(line):
-
     """
     Parse a line from the bulk URL file or the scrape URL in the GUI
     Each line could contain the URL and any options
@@ -219,7 +209,7 @@ def parse_url_and_options(line):
         add_sets='--add-sets' in parts,
         add_to_bulk='--add-to-bulk' in parts,
         force='--force' in parts,
-        kometa= '--kometa' in parts,
+        kometa='--kometa' in parts,
         stage='--stage' in parts,
         temp='--temp' in parts,
         filters=filters,  # Store the list of filters or None
@@ -229,9 +219,9 @@ def parse_url_and_options(line):
 
     return URLItem(url, options)
 
-def is_valid_url(line):
 
-    # Split the line by spaces - to handle a line with an url and options
+def is_valid_url(line):
+    # Split the line by spaces - to handle a line with a url and options
     parts = line.strip().split()
 
     # The first part should be the URL
@@ -240,9 +230,7 @@ def is_valid_url(line):
     return validators.url(url) is True
 
 
-
 def get_artwork_type(artwork):
-
     artwork_type = None
     filter_type = None
 
@@ -265,7 +253,8 @@ def get_artwork_type(artwork):
 
     return artwork_type, filter_type
 
-def get_path_parts(path: str) -> list:
+
+def get_path_parts(path: str) -> tuple[str, ...] | None:
     if path is None:
         return None
 
@@ -277,6 +266,3 @@ def get_path_parts(path: str) -> list:
         return PureWindowsPath(path).parts
     else:
         return PurePosixPath(path).parts
-
-
-

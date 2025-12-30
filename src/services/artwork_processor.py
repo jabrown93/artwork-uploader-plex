@@ -6,13 +6,9 @@ it for upload to Plex, separating it from UI/notification concerns.
 """
 
 import os
-from typing import Optional, Callable, Any
 from dataclasses import dataclass
+from typing import Optional, Callable
 
-from scrapers.scraper import Scraper
-from processors.upload_processor import UploadProcessor
-from plex.plex_connector import PlexConnector
-from models.options import Options
 from core.exceptions import (
     PlexConnectorException,
     ScraperException,
@@ -22,6 +18,10 @@ from core.exceptions import (
     NotProcessedByFilter,
     NotProcessedByExclusion
 )
+from models.options import Options
+from plex.plex_connector import PlexConnector
+from processors.upload_processor import UploadProcessor
+from scrapers.scraper import Scraper
 
 
 @dataclass
@@ -36,7 +36,8 @@ class ProcessingCallbacks:
     on_log_update: Optional[Callable[[str], None]] = None  # (message)
     on_progress_update: Optional[Callable[[int, int], None]] = None  # (current, total) - for progress bars
     on_debug: Optional[Callable[[str, str], None]] = None  # (message, context) - for debug messages
-    success_counter: Optional[list] = None  # Mutable list to track successful uploads (contains count as single element)
+    success_counter: Optional[
+        list] = None  # Mutable list to track successful uploads (contains count as single element)
 
 
 class ArtworkProcessor:
@@ -46,10 +47,10 @@ class ArtworkProcessor:
         self.plex = plex
 
     def scrape_and_process(
-        self,
-        url: str,
-        options: Options,
-        callbacks: Optional[ProcessingCallbacks] = None
+            self,
+            url: str,
+            options: Options,
+            callbacks: Optional[ProcessingCallbacks] = None
     ) -> Optional[str]:
         """
         Scrape artwork from a URL and process it for upload to Plex.
@@ -80,10 +81,12 @@ class ArtworkProcessor:
         processor.set_options(options)
 
         if callbacks and callbacks.on_log_update:
-            #callbacks.on_log_update(f"🔍 Scraping artwork{f" for '{title}'" if title else ""} by '{scraper.author}'")
-            callbacks.on_log_update(f"🔍 {title} : {scraper.author} | Scraping from {f"ThePosterDB" if scraper.source == "theposterdb" else "Mediux"}")
+            # callbacks.on_log_update(f"🔍 Scraping artwork{f" for '{title}'" if title else ""} by '{scraper.author}'")
+            callbacks.on_log_update(
+                f"🔍 {title} : {scraper.author} | Scraping from {f"ThePosterDB" if scraper.source == "theposterdb" else "Mediux"}")
             if scraper.exclusions > 0:
-                callbacks.on_log_update(f"⏩ {title} : {scraper.author} | Skipped {scraper.exclusions} asset(s) based on exclusions.")
+                callbacks.on_log_update(
+                    f"⏩ {title} : {scraper.author} | Skipped {scraper.exclusions} asset(s) based on exclusions.")
 
         # Process collections
         for artwork in scraper.collection_artwork:
@@ -111,11 +114,11 @@ class ArtworkProcessor:
         callbacks.on_log_update("✔️ Scraping completed")
         return title
 
+    @staticmethod
     def _process_single_artwork(
-        self,
-        artwork: dict,
-        process_func: Callable[[dict], str],
-        callbacks: Optional[ProcessingCallbacks]
+            artwork: dict,
+            process_func: Callable[[dict], str],
+            callbacks: Optional[ProcessingCallbacks]
     ) -> None:
         """
         Process a single piece of artwork with error handling.
@@ -132,18 +135,19 @@ class ArtworkProcessor:
                     f'Processing artwork for {artwork["title"]}',
                     "info",
                     True,  # spinner
-                    True   # sticky
+                    True  # sticky
                 )
 
             # Process the artwork
             results = process_func(artwork)
 
             for result in results:
-            # Track successful uploads (those starting with ✅ or ♻️)
-                if callbacks and callbacks.success_counter is not None and (result.startswith('✅') or result.startswith('♻️')):
+                # Track successful uploads (those starting with ✅ or ♻️)
+                if callbacks and callbacks.success_counter is not None and (
+                        result.startswith('✅') or result.startswith('♻️')):
                     callbacks.success_counter[0] += 1
 
-            # Log the result
+                # Log the result
                 if callbacks and callbacks.on_log_update:
                     callbacks.on_log_update(result)
 
@@ -175,15 +179,15 @@ class ArtworkProcessor:
                     f"Error: {str(e)}",
                     "danger",
                     False,  # no spinner
-                    False   # not sticky
+                    False  # not sticky
                 )
 
     def process_uploaded_files(
-        self,
-        file_list: list[dict],
-        options: Options,
-        callbacks: Optional[ProcessingCallbacks] = None,
-        override_title: Optional[str] = None
+            self,
+            file_list: list[dict],
+            options: Options,
+            callbacks: Optional[ProcessingCallbacks] = None,
+            override_title: Optional[str] = None
     ) -> None:
         """
         Process a list of uploaded artwork files.
@@ -212,8 +216,9 @@ class ArtworkProcessor:
             callbacks.on_progress_update(0, total_files)
 
         if callbacks and callbacks.on_log_update:
-            #callbacks.on_log_update(f"⚙️ Processing {source} ZIP file by {author} for {title} ({year}).")
-            callbacks.on_log_update(f"⚙️ {title}{f" ({year})" if year else ''} : {author} | Processing uploaded {source} ZIP file.")
+            # callbacks.on_log_update(f"⚙️ Processing {source} ZIP file by {author} for {title} ({year}).")
+            callbacks.on_log_update(
+                f"⚙️ {title}{f" ({year})" if year else ''} : {author} | Processing uploaded {source} ZIP file.")
 
         for index, artwork in enumerate(file_list, start=1):
             # Update progress
@@ -234,12 +239,14 @@ class ArtworkProcessor:
                 process_func = processor.process_tv_artwork
             elif media_type == "unavailable":
                 if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⚠️ {artwork['title']} {f"({artwork['year']})" if artwork.get('year') else ''} : {artwork['author']} | Not available in Plex.")
+                    callbacks.on_log_update(
+                        f"⚠️ {artwork['title']} {f"({artwork['year']})" if artwork.get('year') else ''} : {artwork['author']} | Not available in Plex.")
                     os.remove(artwork['path'])  # Remove the temporary file after processing
                     try:
                         os.rmdir(os.path.dirname(artwork['path']))  # Remove the temporary directory if empty
-                        callbacks.on_debug(f"Deleted temporary directory: {os.path.dirname(artwork['path'])}", "process_uploaded_artwork")
-                    except OSError as e:
+                        callbacks.on_debug(f"Deleted temporary directory: {os.path.dirname(artwork['path'])}",
+                                           "process_uploaded_artwork")
+                    except OSError:
                         pass
                     continue
             else:
@@ -262,7 +269,7 @@ class ArtworkProcessor:
                     status_msg,
                     "info",
                     True,  # spinner
-                    True   # sticky
+                    True  # sticky
                 )
 
             # Process the artwork
@@ -306,12 +313,13 @@ class ArtworkProcessor:
                         f"Error: {str(e)}",
                         "danger",
                         False,  # no spinner
-                        False   # not sticky
+                        False  # not sticky
                     )
             os.remove(artwork['path'])  # Remove the temporary file after processing
             try:
                 os.rmdir(os.path.dirname(artwork['path']))  # Remove the temporary directory if empty
-                callbacks.on_debug(f"Deleted temporary directory: {os.path.dirname(artwork['path'])}", "process_uploaded_artwork")
+                callbacks.on_debug(f"Deleted temporary directory: {os.path.dirname(artwork['path'])}",
+                                   "process_uploaded_artwork")
             except OSError:
                 pass
         # Final progress update

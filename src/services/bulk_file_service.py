@@ -56,10 +56,10 @@ class BulkFileService:
 
     def get_bulk_imports_directory(self) -> Path:
         """
-        Get the full path to the bulk imports directory.
+        Get the full path to the bulk_imports directory.
 
         Returns:
-            Path object representing the bulk imports directory
+            Path object representing the bulk_imports directory
         """
         if self.base_dir:
             return Path(self.base_dir) / self.bulk_imports_path

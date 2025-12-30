@@ -4,6 +4,7 @@ Command line or bulk file arguments, just a container to pass them around easily
 
 from dataclasses import dataclass, field
 from typing import List, Optional
+
 from core.enums import FilterType
 
 
@@ -80,7 +81,7 @@ class Options:
             if episode is not None:
                 episode_patterns = [
                     f"s{season:02d}e{episode:02d}",  # s01e05
-                    f"s{season}e{episode}",          # s1e5
+                    f"s{season}e{episode}",  # s1e5
                 ]
                 for pattern in episode_patterns:
                     if any(pattern.lower() == excl.lower() for excl in self.exclude):
@@ -89,7 +90,7 @@ class Options:
             # Format: s01 or s1 (whole season exclusion)
             season_patterns = [
                 f"s{season:02d}",  # s01
-                f"s{season}",      # s1
+                f"s{season}",  # s1
             ]
             for pattern in season_patterns:
                 if any(pattern.lower() == excl.lower() for excl in self.exclude):

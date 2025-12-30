@@ -5,7 +5,6 @@ Provides secure password hashing using bcrypt and session management.
 """
 
 import bcrypt
-from typing import Optional
 
 
 class AuthenticationService:
