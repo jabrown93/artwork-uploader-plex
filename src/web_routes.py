@@ -69,56 +69,50 @@ def is_dual_stack_supported():
 
     try:
         # Create a test server socket bound to :: (all interfaces, IPv6)
-        server_socket = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+        with socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM) as server_socket:
 
-        # Set socket options to allow reuse
-        server_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
+            # Set socket options to allow reuse
+            server_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
 
-        # Try to disable IPV6_V6ONLY if possible (enables dual-stack)
-        # This might not be available on all platforms
-        try:
-            server_socket.setsockopt(socket_module.IPPROTO_IPV6, socket_module.IPV6_V6ONLY, 0)
-        except (OSError, AttributeError):
-            # IPV6_V6ONLY not available or can't be set
-            pass
+            # Try to disable IPV6_V6ONLY if possible (enables dual-stack)
+            # This might not be available on all platforms
+            try:
+                server_socket.setsockopt(socket_module.IPPROTO_IPV6, socket_module.IPV6_V6ONLY, 0)
+            except (OSError, AttributeError):
+                # IPV6_V6ONLY not available or can't be set
+                pass
 
-        # Bind to :: on a random port
-        server_socket.bind(('::', 0))
-        server_socket.listen(1)
+            # Bind to :: on a random port
+            server_socket.bind(('::', 0))
+            server_socket.listen(1)
 
-        # Get the port that was assigned
-        port = server_socket.getsockname()[1]
+            # Get the port that was assigned
+            port = server_socket.getsockname()[1]
 
-        # Test results
-        ipv4_works = False
-        ipv6_works = False
+            # Test results
+            ipv4_works = False
+            ipv6_works = False
 
-        # Test IPv6 connection
-        try:
-            ipv6_client = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
-            ipv6_client.settimeout(1)
-            ipv6_client.connect(('::1', port))
-            ipv6_client.close()
-            ipv6_works = True
-        except (OSError, socket_module.timeout):
-            pass
+            # Test IPv6 connection
+            try:
+                with socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM) as ipv6_client:
+                    ipv6_client.settimeout(1)
+                    ipv6_client.connect(('::1', port))
+                    ipv6_works = True
+            except (OSError, socket_module.timeout):
+                pass
 
-        # Test IPv4 connection (this is the key test for dual-stack)
-        try:
-            ipv4_client = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
-            ipv4_client.settimeout(1)
-            ipv4_client.connect(('127.0.0.1', port))
-            ipv4_client.close()
-            ipv4_works = True
-        except (OSError, socket_module.timeout):
-            pass
+            # Test IPv4 connection (this is the key test for dual-stack)
+            try:
+                with socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM) as ipv4_client:
+                    ipv4_client.settimeout(1)
+                    ipv4_client.connect(('127.0.0.1', port))
+                    ipv4_works = True
+            except (OSError, socket_module.timeout):
+                pass
 
-        # Clean up
-        server_socket.close()
-
-        # Dual-stack works if both IPv4 and IPv6 connections succeeded
-        return ipv4_works and ipv6_works
-
+            # Dual-stack works if both IPv4 and IPv6 connections succeeded
+            return ipv4_works and ipv6_works
     except Exception as e:
         debug_me(f"Error testing dual-stack support: {e}", "is_dual_stack_supported")
         return False
