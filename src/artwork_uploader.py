@@ -823,30 +823,28 @@ if __name__ == "__main__":
             try:
                 globals.plex.set_tv_libraries(config.tv_library)
             except PlexConnectorException as e:
-                logger.warning("=" * 70)
                 logger.warning(
-                    "WARNING: Could not connect to Plex TV libraries")
-                logger.warning("=" * 70)
-                logger.warning(f"{e}\n")
-                logger.warning(
-                    "The web UI will still start, but you won't be able to upload artwork")
-                logger.warning(
-                    "until you fix the Plex connection in Settings.\n")
+                    f"{'=' * 70}\n"
+                    f"WARNING: Could not connect to Plex TV libraries\n"
+                    f"{'=' * 70}\n"
+                    f"{e}\n\n"
+                    f"The web UI will still start, but you won't be able to upload artwork\n"
+                    f"until you fix the Plex connection in Settings.\n"
+                )
                 plex_connected = False
 
             try:
                 globals.plex.set_movie_libraries(config.movie_library)
             except PlexConnectorException as e:
                 if plex_connected:  # Only log if we didn't already log for TV
-                    logger.warning("=" * 70)
                     logger.warning(
-                        "WARNING: Could not connect to Plex Movie libraries")
-                    logger.warning("=" * 70)
-                    logger.warning(f"{e}\n")
-                    logger.warning(
-                        "The web UI will still start, but you won't be able to upload artwork")
-                    logger.warning(
-                        "until you fix the Plex connection in Settings.\n")
+                        f"{'=' * 70}\n"
+                        f"WARNING: Could not connect to Plex Movie libraries\n"
+                        f"{'=' * 70}\n"
+                        f"{e}\n\n"
+                        f"The web UI will still start, but you won't be able to upload artwork\n"
+                        f"until you fix the Plex connection in Settings.\n"
+                    )
 
             # Create the app and web server
 
