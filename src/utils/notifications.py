@@ -49,7 +49,7 @@ def update_log(instance: Instance, update_text: str, artwork_title: str = None, 
     except Exception as e:
         # Fail silently for logging errors to avoid cascading failures
         if globals.debug:
-            logger.error(f"Error in update_log: {e}")
+            logger.error(f"Error in update_log: {e}", exc_info=True)
 
 
 def notify_web(instance: Instance, event, data_to_include=None):

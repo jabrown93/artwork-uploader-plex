@@ -601,7 +601,8 @@ def setup_socket_handlers(
             decoded_chunk = base64.b64decode(chunk_data)
             upload_chunks[file_name]["chunks"].append(decoded_chunk)
         except Exception as e:
-            logger.error(f"Error decoding chunk {chunk_index}: {e}")
+            logger.error(
+                f"Error decoding chunk {chunk_index}: {e}", exc_info=True)
 
     @globals.web_socket.on("upload_complete")
     def handle_upload_complete(data):
