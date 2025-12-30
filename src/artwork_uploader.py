@@ -753,27 +753,30 @@ if __name__ == "__main__":
         try:
             globals.plex.set_tv_libraries(config.tv_library)
         except PlexConnectorException as e:
-            logger.error("=" * 70)
-            logger.error("ERROR: Could not connect to Plex server")
-            logger.error("=" * 70)
-            logger.error(f"{e}\n")
-            logger.error("Please check your config.json settings:")
-            logger.error(f"  - base_url: {config.base_url}")
-            token_display = f"  - token: {config.token[:10]}..." if config.token else "  - token: (not set)"
-            logger.error(token_display)
+            token_display = f"{config.token[:10]}..." if config.token else "(not set)"
             logger.error(
-                "\nEnsure your Plex server is running and accessible.")
-            logger.error("=" * 70)
+                f"{'=' * 70}\n"
+                f"ERROR: Could not connect to Plex server\n"
+                f"{'=' * 70}\n"
+                f"{e}\n\n"
+                f"Please check your config.json settings:\n"
+                f"  - base_url: {config.base_url}\n"
+                f"  - token: {token_display}\n\n"
+                f"Ensure your Plex server is running and accessible.\n"
+                f"{'=' * 70}"
+            )
             sys.exit(1)
 
         try:
             globals.plex.set_movie_libraries(config.movie_library)
         except PlexConnectorException as e:
-            logger.error("=" * 70)
-            logger.error("ERROR: Could not connect to Plex movie libraries")
-            logger.error("=" * 70)
-            logger.error(f"{e}")
-            logger.error("=" * 70)
+            logger.error(
+                f"{'=' * 70}\n"
+                f"ERROR: Could not connect to Plex movie libraries\n"
+                f"{'=' * 70}\n"
+                f"{e}\n"
+                f"{'=' * 70}"
+            )
             sys.exit(1)
 
         # Handle the CLI options if we're not using the web ui
