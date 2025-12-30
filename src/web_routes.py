@@ -14,7 +14,7 @@ import base64
 import os
 import pprint
 import re
-import socket as socket_module
+import socket
 import subprocess
 import sys
 import tempfile
@@ -42,7 +42,7 @@ def is_ipv6_available():
     """
     try:
         # Try to create an IPv6 socket and bind to the IPv6 loopback address
-        test_socket = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+        test_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         try:
             test_socket.bind(('::1', 0))
             test_socket.close()
@@ -71,15 +71,15 @@ def is_dual_stack_supported():
 
     try:
         # Create a test server socket bound to :: (all interfaces, IPv6)
-        server_socket = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+        server_socket = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
 
         # Set socket options to allow reuse
-        server_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Try to disable IPV6_V6ONLY if possible (enables dual-stack)
         # This might not be available on all platforms
         try:
-            server_socket.setsockopt(socket_module.IPPROTO_IPV6, socket_module.IPV6_V6ONLY, 0)
+            server_socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         except (OSError, AttributeError):
             # IPV6_V6ONLY not available or can't be set
             pass
@@ -97,22 +97,22 @@ def is_dual_stack_supported():
 
         # Test IPv6 connection
         try:
-            ipv6_client = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
+            ipv6_client = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             ipv6_client.settimeout(1)
             ipv6_client.connect(('::1', port))
             ipv6_client.close()
             ipv6_works = True
-        except (OSError, socket_module.timeout):
+        except (OSError, socket.timeout):
             pass
 
         # Test IPv4 connection (this is the key test for dual-stack)
         try:
-            ipv4_client = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
+            ipv4_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             ipv4_client.settimeout(1)
             ipv4_client.connect(('127.0.0.1', port))
             ipv4_client.close()
             ipv4_works = True
-        except (OSError, socket_module.timeout):
+        except (OSError, socket.timeout):
             pass
 
         # Clean up
