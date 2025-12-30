@@ -62,12 +62,17 @@ class Config:
 
     def load(self) -> None:
         """Load the configuration from the JSON file."""
+        print(f"[DEBUG Config.load] Config path: {self.path}")
+        print(f"[DEBUG Config.load] File exists: {os.path.isfile(self.path)}")
 
         # If a config file doesn't exist, create one with default values
         if not os.path.isfile(self.path):
+            print(f"[DEBUG Config.load] Config file does not exist, calling create()")
             self.create()
+            print(f"[DEBUG Config.load] After create(), file exists: {os.path.isfile(self.path)}")
 
         # Load the configuration from the config.json file
+        print(f"[DEBUG Config.load] Attempting to open config file for reading")
         try:
             with open(self.path, "r", encoding="utf-8") as config_file:
                 config = json.load(config_file)
@@ -96,6 +101,11 @@ class Config:
 
     def create(self) -> None:
         """Create a new configuration file with default values."""
+        print(f"[DEBUG Config.create] Creating config at: {self.path}")
+        print(f"[DEBUG Config.create] Path is absolute: {os.path.isabs(self.path)}")
+        print(f"[DEBUG Config.create] Parent directory: {os.path.dirname(self.path)}")
+        print(f"[DEBUG Config.create] Parent dir exists: {os.path.isdir(os.path.dirname(self.path)) if os.path.dirname(self.path) else 'N/A (current dir)'}")
+
         config_json = {
             "base_url": "",
             "token": "",
@@ -118,12 +128,26 @@ class Config:
 
         # Create the config.json file if it doesn't exist
         if not os.path.isfile(self.path):
+            print(f"[DEBUG Config.create] File does not exist, attempting to create")
             try:
+                # Ensure parent directory exists
+                parent_dir = os.path.dirname(self.path)
+                if parent_dir and not os.path.isdir(parent_dir):
+                    print(f"[DEBUG Config.create] Creating parent directory: {parent_dir}")
+                    os.makedirs(parent_dir, exist_ok=True)
+
+                print(f"[DEBUG Config.create] Opening file for writing: {self.path}")
                 with open(self.path, "w", encoding="utf-8") as config_file:
                     json.dump(config_json, config_file, indent=4)
+                print(f"[DEBUG Config.create] File written successfully")
                 debug_me(f"Config file '{self.path}' created with default settings.", "Config/create")
             except Exception as e:
+                print(f"[ERROR Config.create] Exception: {type(e).__name__}: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 raise ConfigCreationError(f"Failed to create config file at {self.path}: {str(e)}") from e
+        else:
+            print(f"[DEBUG Config.create] File already exists, skipping creation")
 
     def save(self) -> None:
         """Save the current configuration to the file."""

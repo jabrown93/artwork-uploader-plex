@@ -1,21 +1,23 @@
-FROM dhi.io/python:3.14.2
+FROM dhi.io/python:3.14.2-dev AS builder
+
+ENV PATH="/app/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Copy requirements first for layer caching
+RUN python -m venv /app/venv
 COPY requirements.txt .
 
-# Install dependencies (this layer is cached)
 RUN pip install --no-cache-dir -r requirements.txt
+
+FROM dhi.io/python:3.14.2
 
 # Copy only runtime code from src/
 COPY src/ /app/src/
+COPY --from=builder /app/venv /app/venv
 
-# Set Python path to find modules in src/
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/app/venv/bin:$PATH"
 ENV PYTHONPATH=/app/src:$PYTHONPATH
-
-# Create directories for volume mounts
-RUN mkdir -p /bulk_imports /config /logs
 
 EXPOSE 4567
 

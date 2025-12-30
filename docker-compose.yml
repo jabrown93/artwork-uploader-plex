@@ -7,10 +7,8 @@ services:
     volumes:
       # Bulk imports: now at /bulk_imports in container
       - ./bulk_imports:/bulk_imports:rw
-
       # Config: now at /config/config.json in container
       - ./config.json:/config/config.json:rw
-
       # Logs
       - ./logs:/logs:rw
     environment:

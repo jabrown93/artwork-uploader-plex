@@ -5,6 +5,7 @@ eventlet.monkey_patch()
 import uuid
 import os
 import re
+import traceback
 
 from core import globals
 import threading
@@ -629,11 +630,23 @@ if __name__ == "__main__":
     globals.config = config  # Also store in globals for cross-module access
 
     # Load the config from the config.json file
+    print(f"[DEBUG] Attempting to load config from: {config_path}")
+    print(f"[DEBUG] Config file exists: {os.path.isfile(config_path)}")
+    print(f"[DEBUG] Current working directory: {os.getcwd()}")
+    print(f"[DEBUG] Config path is absolute: {os.path.isabs(config_path)}")
+
     try:
         config.load()
-    except ConfigLoadError:
+        print(f"[DEBUG] Config loaded successfully from {config_path}")
+    except ConfigLoadError as e:
+        print(f"[ERROR] ConfigLoadError: {str(e)}")
+        print("[ERROR] Stack trace:")
+        traceback.print_exc()
         sys.exit("Can't load config.json file.  Please check that the file exists and is in the correct format.")
     except Exception as config_load_exception:
+        print(f"[ERROR] Unexpected error when loading config.json file: {str(config_load_exception)}")
+        print("[ERROR] Stack trace:")
+        traceback.print_exc()
         sys.exit(f"Unexpected error when loading config.json file: {str(config_load_exception)}")
 
     # Create services
