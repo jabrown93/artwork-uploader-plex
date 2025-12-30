@@ -24,7 +24,7 @@ def parse_arguments():
     # Adds all the arguments we might want to use
     parser.add_argument('command', help="Run mode (leave blank for interactive)", nargs='?', default=None)
     parser.add_argument('bulk_file', help="Bulk file (when using bulk as run mode)", nargs='?', default=None)
-    parser.add_argument("--config", type=str, default="config.json", help="Path to config file (default: config.json)")
+    parser.add_argument("--config", type=str, default=None, help="Path to config file (default: config.json)")
     parser.add_argument('--add-sets', action='store_true', help="Scrape additional sets from same page - TPDb only")
     parser.add_argument('--add-posters', action='store_true',
                         help="Scrape additional posters from same page - TPDb only")

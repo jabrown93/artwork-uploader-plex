@@ -23,6 +23,7 @@ from plex.plex_connector import PlexConnector
 from core.constants import (
     CURRENT_VERSION,
     GITHUB_REPO,
+    DEFAULT_CONFIG_PATH,
     DEFAULT_WEB_PORT,
     DEFAULT_WEB_HOST,
     SCHEDULER_CHECK_INTERVAL,
@@ -624,6 +625,9 @@ if __name__ == "__main__":
 
     # Determine config path: environment variable (for Docker) takes precedence over CLI argument
     config_path = os.environ.get("CONFIG_PATH", args.config)
+    if not config_path:
+        config_path = DEFAULT_CONFIG_PATH
+
 
     # Create config as a global object
     config = Config(config_path=config_path)
