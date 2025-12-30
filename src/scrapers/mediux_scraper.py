@@ -1,23 +1,22 @@
-import time
-from pprint import pprint
-from typing import Optional, Any
-from logging_config import get_logger
-
-logger = get_logger(__name__)
-
-from core import globals
+from utils.notifications import debug_me
+from utils import utils
+from utils import soup_utils
+from models.options import Options
+from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
+from core.exceptions import ScraperException
+from core.enums import MediaType, ScraperSource, FileType
 from core.constants import (
     ANSI_BOLD, ANSI_RESET, BOOTSTRAP_COLORS,
     MEDIUX_API_BASE_URL, MEDIUX_BASE_URL, MEDIUX_QUALITY_SUFFIX,
     SEASON_COVER, SEASON_BACKDROP, EPISODE_COVER
 )
-from core.enums import MediaType, ScraperSource, FileType
-from core.exceptions import ScraperException
-from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
-from models.options import Options
-from utils import soup_utils
-from utils import utils
-from utils.notifications import debug_me
+from core import globals
+import time
+from pprint import pformat
+from typing import Optional, Any
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class MediuxScraper:
@@ -106,7 +105,7 @@ class MediuxScraper:
                         "MediuxScraper/scrape")
                     logger.debug(
                         f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                    from pprint import pformat; logger.debug(pformat(self.collection_artwork))
+                    logger.debug(pformat(self.collection_artwork))
                     logger.debug(
                         f"*************************************************************{ANSI_RESET}")
                 if self.movie_artwork:
@@ -115,7 +114,7 @@ class MediuxScraper:
                         "MediuxScraper/scrape")
                     logger.debug(
                         f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                    from pprint import pformat; logger.debug(pformat(self.movie_artwork))
+                    logger.debug(pformat(self.movie_artwork))
                     logger.debug(
                         f"*************************************************************{ANSI_RESET}")
                 if self.tv_artwork:
@@ -126,7 +125,7 @@ class MediuxScraper:
                         "MediuxScraper/scrape")
                     logger.debug(
                         f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                    from pprint import pformat; logger.debug(pformat(self.tv_artwork))
+                    logger.debug(pformat(self.tv_artwork))
                     logger.debug(
                         f"*************************************************************{ANSI_RESET}")
 

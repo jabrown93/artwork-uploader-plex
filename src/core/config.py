@@ -75,10 +75,12 @@ class Config:
         if not os.path.isfile(self.path):
             logger.debug("Config file does not exist, calling create()")
             self.create()
-            logger.debug(f"After create(), file exists: {os.path.isfile(self.path)}")
+            logger.debug(
+                f"After create(), file exists: {os.path.isfile(self.path)}")
 
         # Load the configuration from the config.json file
-        logger.debug(f"Attempting to open config file for reading: {self.path}")
+        logger.debug(
+            f"Attempting to open config file for reading: {self.path}")
         try:
             with open(self.path, "r", encoding="utf-8") as config_file:
                 config = json.load(config_file)
@@ -114,7 +116,8 @@ class Config:
         logger.debug(f"Creating config at: {self.path}")
         logger.debug(f"Path is absolute: {os.path.isabs(self.path)}")
         logger.debug(f"Parent directory: {os.path.dirname(self.path)}")
-        parent_exists = os.path.isdir(os.path.dirname(self.path)) if os.path.dirname(self.path) else 'N/A (current dir)'
+        parent_exists = os.path.isdir(os.path.dirname(self.path)) if os.path.dirname(
+            self.path) else 'N/A (current dir)'
         logger.debug(f"Parent dir exists: {parent_exists}")
 
         config_json = {
@@ -152,9 +155,11 @@ class Config:
                 with open(self.path, "w", encoding="utf-8") as config_file:
                     json.dump(config_json, config_file, indent=4)
                 logger.debug("File written successfully")
-                logger.info(f"Config file '{self.path}' created with default settings.")
+                logger.info(
+                    f"Config file '{self.path}' created with default settings.")
             except Exception as e:
-                logger.error(f"Failed to create config file at {self.path}", exc_info=True)
+                logger.error(
+                    f"Failed to create config file at {self.path}", exc_info=True)
                 raise ConfigCreationError(
                     f"Failed to create config file at {self.path}: {str(e)}") from e
         else:

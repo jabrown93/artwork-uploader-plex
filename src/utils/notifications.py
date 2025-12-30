@@ -13,7 +13,8 @@ def update_status(instance: Instance, message, color="primary", sticky=False, sp
     """Update the status label with a message and color."""
 
     if (instance.mode == "cli" and cli) or globals.debug:
-        logger.info(f"{bootstrap_colors.get(color, {}).get('ansi', None)}{message}\033[0m")
+        logger.info(
+            f"{bootstrap_colors.get(color, {}).get('ansi', None)}{message}\033[0m")
     if instance.mode == "web":
         notify_web(instance, "status_update",
                    {"message": message, "color": color, "sticky": sticky, "spinner": spinner,
@@ -23,7 +24,8 @@ def update_status(instance: Instance, message, color="primary", sticky=False, sp
 def debug_me(message: str, title: str = None):
     if globals.debug:
         if title:
-            logger.debug(f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('info').get('ansi')}[{title}] {ANSI_RESET}{message}")
+            logger.debug(
+                f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('info').get('ansi')}[{title}] {ANSI_RESET}{message}")
         else:
             logger.debug(f"{ANSI_RESET}{message}")
 

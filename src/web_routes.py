@@ -10,6 +10,14 @@ The routes are organized into:
 - Helper functions for file uploads and processing
 """
 
+from utils.notifications import update_log, update_status, notify_web, debug_me
+from utils import utils
+from services import UtilityService, AuthenticationService
+from processors.media_metadata import parse_title
+from models.instance import Instance
+from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB
+from core.config import Config
+from core import globals
 import base64
 import os
 import pprint
@@ -27,14 +35,6 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-from core import globals
-from core.config import Config
-from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB
-from models.instance import Instance
-from processors.media_metadata import parse_title
-from services import UtilityService, AuthenticationService
-from utils import utils
-from utils.notifications import update_log, update_status, notify_web, debug_me
 
 SOURCE_TXT = "source.txt"
 
@@ -867,30 +867,36 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
             if dual_stack_supported:
                 # "::" enables both IPv4 and IPv6
                 binding_host = "::"
-                logger.info(f"✓ Starting web server on dual-stack (IPv4 and IPv6) at port {web_port}")
+                logger.info(
+                    f"✓ Starting web server on dual-stack (IPv4 and IPv6) at port {web_port}")
                 logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
                 logger.info(f"  - IPv6: http://[::1]:{web_port}")
             else:
                 # Dual-stack not supported, fall back to IPv4 only
                 binding_host = "0.0.0.0"
-                logger.info(f"! Dual-stack not supported on this system, using IPv4 only at port {web_port}")
+                logger.info(
+                    f"! Dual-stack not supported on this system, using IPv4 only at port {web_port}")
                 logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
         else:
             # IPv6 not available, fall back to IPv4 only
             binding_host = "0.0.0.0"
-            logger.info(f"! IPv6 not available, using IPv4 only at port {web_port}")
+            logger.info(
+                f"! IPv6 not available, using IPv4 only at port {web_port}")
             logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
     elif ip_binding == "ipv6":
         # Prefer IPv6; may also accept IPv4 connections on dual-stack systems
         if ipv6_available:
             binding_host = "::"
-            logger.info(f"Starting web server with IPv6 binding at port {web_port}")
+            logger.info(
+                f"Starting web server with IPv6 binding at port {web_port}")
             logger.info(f"  - IPv6: http://[::1]:{web_port}")
-            logger.info("    Note: On some systems this binding may also accept IPv4 connections due to dual-stack behavior.")
+            logger.info(
+                "    Note: On some systems this binding may also accept IPv4 connections due to dual-stack behavior.")
         else:
             # IPv6 requested but not available, fall back to IPv4
             binding_host = "0.0.0.0"
-            logger.info(f"! IPv6 requested but not available, falling back to IPv4 at port {web_port}")
+            logger.info(
+                f"! IPv6 requested but not available, falling back to IPv4 at port {web_port}")
             logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
     else:
         # IPv4 only (default fallback)

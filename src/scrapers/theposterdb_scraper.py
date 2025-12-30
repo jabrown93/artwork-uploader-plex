@@ -1,22 +1,22 @@
+from utils.utils import get_artwork_type
+from utils.notifications import debug_me
+from utils import soup_utils
+from processors import media_metadata
+from models.options import Options
+from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
+from core.exceptions import ScraperException
+from core.enums import MediaType, ScraperSource
+from core.constants import TPDB_API_ASSETS_URL, TPDB_USER_UPLOADS_PER_PAGE, BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD, \
+    TPBD_SET_BASE_PATH, TPBD_USER_BASE_PATH
+from core import globals
 import math
 import time
-from pprint import pprint
+from pprint import pformat
 from typing import Optional, Any
 from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-from core import globals
-from core.constants import TPDB_API_ASSETS_URL, TPDB_USER_UPLOADS_PER_PAGE, BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD, \
-    TPBD_SET_BASE_PATH, TPBD_USER_BASE_PATH
-from core.enums import MediaType, ScraperSource
-from core.exceptions import ScraperException
-from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
-from models.options import Options
-from processors import media_metadata
-from utils import soup_utils
-from utils.notifications import debug_me
-from utils.utils import get_artwork_type
 
 POSTER_DIV_SELECTOR = 'row d-flex flex-wrap m-0 w-100 mx-n1 mt-n1'
 
@@ -81,7 +81,8 @@ class ThePosterDBScraper:
                             DB_SCRAPER_NAME)
                         logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                        from pprint import pformat; logger.debug(pformat(self.collection_artwork))
+
+                        logger.debug(pformat(self.collection_artwork))
                         logger.debug(
                             f"*************************************************************{ANSI_RESET}")
                     if self.movie_artwork:
@@ -90,7 +91,7 @@ class ThePosterDBScraper:
                             DB_SCRAPER_NAME)
                         logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                        from pprint import pformat; logger.debug(pformat(self.movie_artwork))
+                        logger.debug(pformat(self.movie_artwork))
                         logger.debug(
                             f"*************************************************************{ANSI_RESET}")
                     if self.tv_artwork:
@@ -101,7 +102,7 @@ class ThePosterDBScraper:
                             DB_SCRAPER_NAME)
                         logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
-                        from pprint import pformat; logger.debug(pformat(self.tv_artwork))
+                        logger.debug(pformat(self.tv_artwork))
                         logger.debug(
                             f"*************************************************************{ANSI_RESET}")
 

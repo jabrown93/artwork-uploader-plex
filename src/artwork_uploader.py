@@ -102,7 +102,8 @@ def parse_bulk_file_from_cli(instance: Instance, file_path):
             urls = file.readlines()
     except FileNotFoundError:
         if module_logger:
-            module_logger.error("File not found. Please enter a valid file path.")
+            module_logger.error(
+                "File not found. Please enter a valid file path.")
         else:
             print("File not found. Please enter a valid file path.")
 
@@ -136,7 +137,8 @@ def parse_bulk_file_from_cli(instance: Instance, file_path):
                         instance, parsed_url.url, parsed_url.options)
                 except Exception as e:
                     if module_logger:
-                        module_logger.error(f"Error processing {parsed_url.url}: {str(e)}")
+                        module_logger.error(
+                            f"Error processing {parsed_url.url}: {str(e)}")
                     else:
                         print(f"Error processing {parsed_url.url}: {str(e)}")
 
@@ -416,7 +418,8 @@ def load_bulk_import_file(instance: Instance, filename=None):
         if not globals.bulk_file_service.file_exists(bulk_import_filename):
             if instance.mode == "cli":
                 if module_logger:
-                    module_logger.error(f"File does not exist: {bulk_import_filename}")
+                    module_logger.error(
+                        f"File does not exist: {bulk_import_filename}")
                 else:
                     print(f"File does not exist: {bulk_import_filename}")
             if instance.mode == "web":
@@ -713,7 +716,8 @@ if __name__ == "__main__":
     # Initialize logging with debug flag from config or CLI args
     debug_mode = args.debug or config.debug
     logger = setup_logging(debug=debug_mode)
-    logger.info(f"Logging initialized (debug={'enabled' if debug_mode else 'disabled'})")
+    logger.info(
+        f"Logging initialized (debug={'enabled' if debug_mode else 'disabled'})")
 
     # Set module logger for use in functions
     module_logger = get_logger(__name__)
@@ -757,7 +761,8 @@ if __name__ == "__main__":
             logger.error(f"  - base_url: {config.base_url}")
             token_display = f"  - token: {config.token[:10]}..." if config.token else "  - token: (not set)"
             logger.error(token_display)
-            logger.error("\nEnsure your Plex server is running and accessible.")
+            logger.error(
+                "\nEnsure your Plex server is running and accessible.")
             logger.error("=" * 70)
             sys.exit(1)
 
@@ -816,11 +821,14 @@ if __name__ == "__main__":
                 globals.plex.set_tv_libraries(config.tv_library)
             except PlexConnectorException as e:
                 logger.warning("=" * 70)
-                logger.warning("WARNING: Could not connect to Plex TV libraries")
+                logger.warning(
+                    "WARNING: Could not connect to Plex TV libraries")
                 logger.warning("=" * 70)
                 logger.warning(f"{e}\n")
-                logger.warning("The web UI will still start, but you won't be able to upload artwork")
-                logger.warning("until you fix the Plex connection in Settings.\n")
+                logger.warning(
+                    "The web UI will still start, but you won't be able to upload artwork")
+                logger.warning(
+                    "until you fix the Plex connection in Settings.\n")
                 plex_connected = False
 
             try:
@@ -828,11 +836,14 @@ if __name__ == "__main__":
             except PlexConnectorException as e:
                 if plex_connected:  # Only log if we didn't already log for TV
                     logger.warning("=" * 70)
-                    logger.warning("WARNING: Could not connect to Plex Movie libraries")
+                    logger.warning(
+                        "WARNING: Could not connect to Plex Movie libraries")
                     logger.warning("=" * 70)
                     logger.warning(f"{e}\n")
-                    logger.warning("The web UI will still start, but you won't be able to upload artwork")
-                    logger.warning("until you fix the Plex connection in Settings.\n")
+                    logger.warning(
+                        "The web UI will still start, but you won't be able to upload artwork")
+                    logger.warning(
+                        "until you fix the Plex connection in Settings.\n")
 
             # Create the app and web server
 
