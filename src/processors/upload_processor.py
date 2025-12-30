@@ -24,13 +24,13 @@ from utils.utils import is_numeric, get_path_parts
 class UploadProcessor:
 
     def __init__(self, plex: PlexConnector) -> None:
-        self.staging: bool = self.kometa and (globals.config.stage_assets or self.options.stage)
         self.plex: PlexConnector = plex
         self.options: Options = Options()
         self.config: Config = Config()
         self.config.load()
         self.docker: bool = os.getenv("RUNNING_IN_DOCKER") == "1"
         self.kometa: bool = self.options.kometa or globals.config.save_to_kometa
+        self.staging: bool = self.kometa and (globals.config.stage_assets or self.options.stage)
 
     def set_options(self, options: Options) -> None:
         self.options = options
