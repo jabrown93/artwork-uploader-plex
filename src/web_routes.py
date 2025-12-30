@@ -868,41 +868,41 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
                 # "::" enables both IPv4 and IPv6
                 binding_host = "::"
                 logger.info(
-                    f"✓ Starting web server on dual-stack (IPv4 and IPv6) at port {web_port}")
-                logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
-                logger.info(f"  - IPv6: http://[::1]:{web_port}")
+                    f"✓ Starting web server on dual-stack (IPv4 and IPv6) at port {web_port}\n"
+                    f"  - IPv4: http://127.0.0.1:{web_port}\n"
+                    f"  - IPv6: http://[::1]:{web_port}")
             else:
                 # Dual-stack not supported, fall back to IPv4 only
                 binding_host = "0.0.0.0"
                 logger.info(
-                    f"! Dual-stack not supported on this system, using IPv4 only at port {web_port}")
-                logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
+                    f"! Dual-stack not supported on this system, using IPv4 only at port {web_port}\n"
+                    f"  - IPv4: http://127.0.0.1:{web_port}")
         else:
             # IPv6 not available, fall back to IPv4 only
             binding_host = "0.0.0.0"
             logger.info(
-                f"! IPv6 not available, using IPv4 only at port {web_port}")
-            logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
+                f"! IPv6 not available, using IPv4 only at port {web_port}\n"
+                f"  - IPv4: http://127.0.0.1:{web_port}")
     elif ip_binding == "ipv6":
         # Prefer IPv6; may also accept IPv4 connections on dual-stack systems
         if ipv6_available:
             binding_host = "::"
             logger.info(
-                f"Starting web server with IPv6 binding at port {web_port}")
-            logger.info(f"  - IPv6: http://[::1]:{web_port}")
-            logger.info(
+                f"Starting web server with IPv6 binding at port {web_port}\n"
+                f"  - IPv6: http://[::1]:{web_port}\n"
                 "    Note: On some systems this binding may also accept IPv4 connections due to dual-stack behavior.")
         else:
             # IPv6 requested but not available, fall back to IPv4
             binding_host = "0.0.0.0"
             logger.info(
-                f"! IPv6 requested but not available, falling back to IPv4 at port {web_port}")
-            logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
+                f"! IPv6 requested but not available, falling back to IPv4 at port {web_port}\n"
+                f"  - IPv4: http://127.0.0.1:{web_port}")
     else:
         # IPv4 only (default fallback)
         binding_host = "0.0.0.0"
-        logger.info(f"Starting web server on IPv4 only at port {web_port}")
-        logger.info(f"  - IPv4: http://127.0.0.1:{web_port}")
+        logger.info(
+            f"Starting web server on IPv4 only at port {web_port}\n"
+            f"  - IPv4: http://127.0.0.1:{web_port}")
 
     globals.web_socket.run(web_app, host=binding_host,
                            port=web_port, debug=debug)
