@@ -796,7 +796,9 @@ if __name__ == "__main__":
             except Exception as e:
                 debug_me(f"Error scraping user: {str(e)}", "__main__")
                 logger.error(
-                    f"Error scraping TPDb user: {str(e)}, exc_info=True")
+                    f"Error scraping TPDb user: {str(e)}",
+                    exc_info=True
+                )
 
         # User passed in a poster or set URL, so let's process that
         else:
