@@ -42,14 +42,12 @@ def is_ipv6_available():
     """
     try:
         # Try to create an IPv6 socket and bind to the IPv6 loopback address
-        test_socket = socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM)
-        try:
-            test_socket.bind(('::1', 0))
-            test_socket.close()
-            return True
-        except OSError:
-            test_socket.close()
-            return False
+        with socket_module.socket(socket_module.AF_INET6, socket_module.SOCK_STREAM) as test_socket:
+            try:
+                test_socket.bind(('::1', 0))
+                return True
+            except OSError:
+                return False
     except (OSError, AttributeError):
         # AF_INET6 not available or socket creation failed
         return False
