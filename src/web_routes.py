@@ -799,20 +799,18 @@ def extract_and_list_zip(
     return sorted_data
 
 
-def start_web_server(web_app, web_host: str, web_port: int, debug: bool = False, ip_binding: str = "auto"):
+def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: str = "auto"):
     """
     Start the Flask web server with support for IPv4, IPv6, or dual-stack.
 
     Args:
         web_app: Flask application instance
-        web_host: Host to bind to (legacy parameter, overridden by ip_binding)
         web_port: Port to bind to
         debug: Whether to run in debug mode
         ip_binding: IP binding mode - "auto" (dual-stack), "ipv4", or "ipv6"
     """
     # Determine the binding address based on ip_binding configuration
     ipv6_available = is_ipv6_available()
-    dual_stack_supported = False
 
     if ip_binding == "auto":
         # Dual-stack: Listen on both IPv4 and IPv6
