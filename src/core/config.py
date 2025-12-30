@@ -154,9 +154,7 @@ class Config:
                 logger.debug("File written successfully")
                 logger.info(f"Config file '{self.path}' created with default settings.")
             except Exception as e:
-                logger.error(f"Exception: {type(e).__name__}: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"Failed to create config file at {self.path}", exc_info=True)
                 raise ConfigCreationError(
                     f"Failed to create config file at {self.path}: {str(e)}") from e
         else:
