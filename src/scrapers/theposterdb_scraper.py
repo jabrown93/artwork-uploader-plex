@@ -2,6 +2,9 @@ import math
 import time
 from pprint import pprint
 from typing import Optional, Any
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 from core import globals
 from core.constants import TPDB_API_ASSETS_URL, TPDB_USER_UPLOADS_PER_PAGE, BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD, \
@@ -76,19 +79,19 @@ class ThePosterDBScraper:
                         debug_me(
                             f"Found {len(self.collection_artwork)} collection asset(s) for {len({item["title"] for item in self.collection_artwork})} collection(s):",
                             DB_SCRAPER_NAME)
-                        print(
+                        logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                         pprint(self.collection_artwork)
-                        print(
+                        logger.debug(
                             f"*************************************************************{ANSI_RESET}")
                     if self.movie_artwork:
                         debug_me(
                             f"Found {len(self.movie_artwork)} movie asset(s) for {len({item["title"] for item in self.movie_artwork})} movie(s):",
                             DB_SCRAPER_NAME)
-                        print(
+                        logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                         pprint(self.movie_artwork)
-                        print(
+                        logger.debug(
                             f"*************************************************************{ANSI_RESET}")
                     if self.tv_artwork:
                         debug_me(f"Skipped {self.exclusions} assets(s) based on exclusions.",
@@ -96,10 +99,10 @@ class ThePosterDBScraper:
                         debug_me(
                             f"Found {len(self.tv_artwork)} TV show asset(s) for {len({item["title"] for item in self.tv_artwork})} TV show(s):",
                             DB_SCRAPER_NAME)
-                        print(
+                        logger.debug(
                             f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                         pprint(self.tv_artwork)
-                        print(
+                        logger.debug(
                             f"*************************************************************{ANSI_RESET}")
 
                 # Get the additional posters if required

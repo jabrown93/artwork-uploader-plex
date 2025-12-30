@@ -1,6 +1,9 @@
 import time
 from pprint import pprint
 from typing import Optional, Any
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 from core import globals
 from core.constants import (
@@ -101,19 +104,19 @@ class MediuxScraper:
                     debug_me(
                         f"Found {len(self.collection_artwork)} collection asset(s) for {len({item['title'] for item in self.collection_artwork})} collection(s):",
                         "MediuxScraper/scrape")
-                    print(
+                    logger.debug(
                         f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                     pprint(self.collection_artwork)
-                    print(
+                    logger.debug(
                         f"*************************************************************{ANSI_RESET}")
                 if self.movie_artwork:
                     debug_me(
                         f"Found {len(self.movie_artwork)} movie asset(s) for {len({item['title'] for item in self.movie_artwork})} movie(s):",
                         "MediuxScraper/scrape")
-                    print(
+                    logger.debug(
                         f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                     pprint(self.movie_artwork)
-                    print(
+                    logger.debug(
                         f"*************************************************************{ANSI_RESET}")
                 if self.tv_artwork:
                     debug_me(
@@ -121,10 +124,10 @@ class MediuxScraper:
                     debug_me(
                         f"Found {len(self.tv_artwork)} TV show asset(s) for {len({item['title'] for item in self.tv_artwork})} TV show(s):",
                         "MediuxScraper/scrape")
-                    print(
+                    logger.debug(
                         f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('success').get('ansi')}*************************************************************")
                     pprint(self.tv_artwork)
-                    print(
+                    logger.debug(
                         f"*************************************************************{ANSI_RESET}")
 
             # Return the number of excluded assets

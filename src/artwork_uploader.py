@@ -28,6 +28,7 @@ from core.config import Config
 from utils.notifications import update_log, update_status, notify_web, debug_me
 from models.instance import Instance
 from models import arguments
+from logging_config import setup_logging, get_logger
 import sys
 import threading
 from core import globals
@@ -39,6 +40,8 @@ import eventlet
 
 eventlet.monkey_patch()
 
+# Module logger - will be properly configured after config is loaded
+module_logger = None
 
 # ----------------------------------------------
 # Important for autoupdater
@@ -98,7 +101,10 @@ def parse_bulk_file_from_cli(instance: Instance, file_path):
         with open(file_path, 'r', encoding='utf-8') as file:
             urls = file.readlines()
     except FileNotFoundError:
-        print("File not found. Please enter a valid file path.")
+        if module_logger:
+            module_logger.error("File not found. Please enter a valid file path.")
+        else:
+            print("File not found. Please enter a valid file path.")
 
     # Loop through the file, process the URL and options, then scrape according to the URL
     for line in urls:
@@ -115,15 +121,24 @@ def parse_bulk_file_from_cli(instance: Instance, file_path):
                     scrape_tpdb_user(instance, parsed_url.url,
                                      parsed_url.options)
                 except ScraperException as scraper_error:
-                    print(str(scraper_error))
+                    if module_logger:
+                        module_logger.error(str(scraper_error))
+                    else:
+                        print(str(scraper_error))
                 except Exception as unknown_error:
-                    print(str(unknown_error))
+                    if module_logger:
+                        module_logger.error(str(unknown_error))
+                    else:
+                        print(str(unknown_error))
             else:
                 try:
                     scrape_and_upload(
                         instance, parsed_url.url, parsed_url.options)
                 except Exception as e:
-                    print(f"Error processing {parsed_url.url}: {str(e)}")
+                    if module_logger:
+                        module_logger.error(f"Error processing {parsed_url.url}: {str(e)}")
+                    else:
+                        print(f"Error processing {parsed_url.url}: {str(e)}")
 
 
 # ---------------------- GUI FUNCTIONS ----------------------
@@ -400,7 +415,10 @@ def load_bulk_import_file(instance: Instance, filename=None):
         # Check if file exists
         if not globals.bulk_file_service.file_exists(bulk_import_filename):
             if instance.mode == "cli":
-                print(f"File does not exist: {bulk_import_filename}")
+                if module_logger:
+                    module_logger.error(f"File does not exist: {bulk_import_filename}")
+                else:
+                    print(f"File does not exist: {bulk_import_filename}")
             if instance.mode == "web":
                 update_status(
                     instance, f"File does not exist: {bulk_import_filename}")
@@ -669,6 +687,7 @@ if __name__ == "__main__":
     globals.config = config  # Also store in globals for cross-module access
 
     # Load the config from the config.json file
+    # Note: We use print here since logging is not yet configured
     print(f"[DEBUG] Attempting to load config from: {config_path}")
     print(f"[DEBUG] Config file exists: {os.path.isfile(config_path)}")
     print(f"[DEBUG] Current working directory: {os.getcwd()}")
@@ -690,6 +709,15 @@ if __name__ == "__main__":
         traceback.print_exc()
         sys.exit(
             f"Unexpected error when loading config.json file: {str(config_load_exception)}")
+
+    # Initialize logging with debug flag from config or CLI args
+    debug_mode = args.debug or config.debug
+    logger = setup_logging(debug=debug_mode)
+    logger.info(f"Logging initialized (debug={'enabled' if debug_mode else 'disabled'})")
+
+    # Set module logger for use in functions
+    global module_logger
+    module_logger = get_logger(__name__)
 
     # Create services
     # Initialize bulk file service with optional custom path from environment variable
@@ -722,26 +750,26 @@ if __name__ == "__main__":
         try:
             globals.plex.set_tv_libraries(config.tv_library)
         except PlexConnectorException as e:
-            print("=" * 70)
-            print("ERROR: Could not connect to Plex server")
-            print("=" * 70)
-            print(f"{e}\n")
-            print("Please check your config.json settings:")
-            print(f"  - base_url: {config.base_url}")
-            print(
-                f"  - token: {config.token[:10]}..." if config.token else "  - token: (not set)")
-            print("\nEnsure your Plex server is running and accessible.")
-            print("=" * 70)
+            logger.error("=" * 70)
+            logger.error("ERROR: Could not connect to Plex server")
+            logger.error("=" * 70)
+            logger.error(f"{e}\n")
+            logger.error("Please check your config.json settings:")
+            logger.error(f"  - base_url: {config.base_url}")
+            token_display = f"  - token: {config.token[:10]}..." if config.token else "  - token: (not set)"
+            logger.error(token_display)
+            logger.error("\nEnsure your Plex server is running and accessible.")
+            logger.error("=" * 70)
             sys.exit(1)
 
         try:
             globals.plex.set_movie_libraries(config.movie_library)
         except PlexConnectorException as e:
-            print("=" * 70)
-            print("ERROR: Could not connect to Plex movie libraries")
-            print("=" * 70)
-            print(f"{e}")
-            print("=" * 70)
+            logger.error("=" * 70)
+            logger.error("ERROR: Could not connect to Plex movie libraries")
+            logger.error("=" * 70)
+            logger.error(f"{e}")
+            logger.error("=" * 70)
             sys.exit(1)
 
         # Handle the CLI options if we're not using the web ui
@@ -770,7 +798,7 @@ if __name__ == "__main__":
                 scrape_tpdb_user(cli_instance, cli_command, cli_options)
             except Exception as e:
                 debug_me(f"Error scraping user: {str(e)}", "__main__")
-                print(f"Error scraping TPDb user: {str(e)}")
+                logger.error(f"Error scraping TPDb user: {str(e)}")
 
         # User passed in a poster or set URL, so let's process that
         else:
@@ -788,26 +816,24 @@ if __name__ == "__main__":
             try:
                 globals.plex.set_tv_libraries(config.tv_library)
             except PlexConnectorException as e:
-                print("=" * 70)
-                print("WARNING: Could not connect to Plex TV libraries")
-                print("=" * 70)
-                print(f"{e}\n")
-                print(
-                    "The web UI will still start, but you won't be able to upload artwork")
-                print("until you fix the Plex connection in Settings.\n")
+                logger.warning("=" * 70)
+                logger.warning("WARNING: Could not connect to Plex TV libraries")
+                logger.warning("=" * 70)
+                logger.warning(f"{e}\n")
+                logger.warning("The web UI will still start, but you won't be able to upload artwork")
+                logger.warning("until you fix the Plex connection in Settings.\n")
                 plex_connected = False
 
             try:
                 globals.plex.set_movie_libraries(config.movie_library)
             except PlexConnectorException as e:
-                if plex_connected:  # Only print if we didn't already print for TV
-                    print("=" * 70)
-                    print("WARNING: Could not connect to Plex Movie libraries")
-                    print("=" * 70)
-                    print(f"{e}\n")
-                    print(
-                        "The web UI will still start, but you won't be able to upload artwork")
-                    print("until you fix the Plex connection in Settings.\n")
+                if plex_connected:  # Only log if we didn't already log for TV
+                    logger.warning("=" * 70)
+                    logger.warning("WARNING: Could not connect to Plex Movie libraries")
+                    logger.warning("=" * 70)
+                    logger.warning(f"{e}\n")
+                    logger.warning("The web UI will still start, but you won't be able to upload artwork")
+                    logger.warning("until you fix the Plex connection in Settings.\n")
 
             # Create the app and web server
 
