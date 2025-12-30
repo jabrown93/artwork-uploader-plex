@@ -837,11 +837,12 @@ def start_web_server(web_app, web_host: str, web_port: int, debug: bool = False,
             print(f"! IPv6 not available, using IPv4 only at port {web_port}")
             print(f"  - IPv4: http://127.0.0.1:{web_port}")
     elif ip_binding == "ipv6":
-        # IPv6 only
+        # Prefer IPv6; may also accept IPv4 connections on dual-stack systems
         if ipv6_available:
             binding_host = "::"
-            print(f"Starting web server on IPv6 only at port {web_port}")
+            print(f"Starting web server with IPv6 binding at port {web_port}")
             print(f"  - IPv6: http://[::1]:{web_port}")
+            print("    Note: On some systems this binding may also accept IPv4 connections due to dual-stack behavior.")
         else:
             # IPv6 requested but not available, fall back to IPv4
             binding_host = "0.0.0.0"
