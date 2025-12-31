@@ -9,6 +9,7 @@ The routes are organized into:
 - Socket.IO event handlers (@socket.on)
 - Helper functions for file uploads and processing
 """
+import shutil
 
 from utils.notifications import update_log, update_status, notify_web, debug_me
 from utils import utils
@@ -740,10 +741,9 @@ def save_uploaded_file(
     temp_zip_path = os.path.join(temp_zip_folder, file_name)
 
     # Move/rename the upload temp file to processing location
-    import shutil
     try:
         shutil.move(temp_upload_path, temp_zip_path)
-    except (OSError, shutil.Error) as e:
+    except OSError as e:
         debug_me(
             f"Failed to move uploaded file from {temp_upload_path} to {temp_zip_path}: {e}",
             "save_uploaded_file",
