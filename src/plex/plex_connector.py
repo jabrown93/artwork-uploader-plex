@@ -332,7 +332,6 @@ class PlexConnector:
             except Exception as e:
                 debug_me(
                     f"Error in fuzzy search for '{title}' in library '{library.title}': {e}", "PlexConnector/movie_or_show")
-                pass
 
         debug_me(f"'{title} ({year})' not found in any library (tried exact and fuzzy matching)",
                  "PlexConnector/movie_or_show")
