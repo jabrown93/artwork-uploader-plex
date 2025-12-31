@@ -313,23 +313,22 @@ class PlexConnector:
 
                 for item in all_items:
                     if normalize_title_for_matching(item.title) == normalized_search_title:
-                        # Check year match if provided
-                        if year is None or item.year == year:
-                            tmdb_id: Optional[int] = None
-                            for guid in item.guids:
-                                if "tmdb://" in guid.id:
-                                    try:
-                                        tmdb_id = int(guid.id.split("tmdb://", 1)[-1])
-                                    except ValueError:
-                                        pass
-                                    break
-                            if tmdb_id is not None:
-                                debug_me(f"Item '{title} ({year})' found as '{item.title}' with TMDb ID: {tmdb_id} (fuzzy match)",
-                                         "PlexConnector/movie_or_show")
-                            else:
-                                debug_me(f"Item '{title} ({year})' found as '{item.title}' but TMDb ID not found (fuzzy match)",
-                                         "PlexConnector/movie_or_show")
-                            return media_type, tmdb_id, item.title, item.year
+                        # Found a title match; items are already filtered by year if provided
+                        tmdb_id: Optional[int] = None
+                        for guid in item.guids:
+                            if "tmdb://" in guid.id:
+                                try:
+                                    tmdb_id = int(guid.id.split("tmdb://", 1)[-1])
+                                except ValueError:
+                                    pass
+                                break
+                        if tmdb_id is not None:
+                            debug_me(f"Item '{title} ({year})' found as '{item.title}' with TMDb ID: {tmdb_id} (fuzzy match)",
+                                     "PlexConnector/movie_or_show")
+                        else:
+                            debug_me(f"Item '{title} ({year})' found as '{item.title}' but TMDb ID not found (fuzzy match)",
+                                     "PlexConnector/movie_or_show")
+                        return media_type, tmdb_id, item.title, item.year
             except Exception as e:
                 debug_me(
                     f"Error in fuzzy search for '{title}' in library '{library.title}': {e}", "PlexConnector/movie_or_show")
