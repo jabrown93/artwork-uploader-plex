@@ -741,7 +741,21 @@ def save_uploaded_file(
 
     # Move/rename the upload temp file to processing location
     import shutil
-    shutil.move(temp_upload_path, temp_zip_path)
+    try:
+        shutil.move(temp_upload_path, temp_zip_path)
+    except (OSError, shutil.Error) as e:
+        debug_me(
+            f"Failed to move uploaded file from {temp_upload_path} to {temp_zip_path}: {e}",
+            "save_uploaded_file",
+        )
+        # Best-effort cleanup of the temporary zip folder created for processing
+        try:
+            os.rmdir(temp_zip_folder)
+        except Exception:
+            # Ignore cleanup errors here to avoid masking the original exception
+            pass
+        # Re-raise so callers can handle the failure as before
+        raise
 
     debug_me(f"Moved uploaded file to: {temp_zip_path}", "save_uploaded_file")
 
