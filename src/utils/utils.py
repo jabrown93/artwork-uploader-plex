@@ -90,7 +90,7 @@ def normalize_title_for_matching(title: str) -> str:
     # Remove apostrophes and other common punctuation
     # Keep spaces and alphanumeric characters
     normalized = re.sub(r"[''`']", "", normalized)  # Remove apostrophes (various types)
-    normalized = re.sub(r"[^\w\s]", " ", normalized)  # Replace other punctuation with spaces
+    normalized = re.sub(r"[^\w\s]|_", " ", normalized)  # Replace other punctuation and underscores with spaces
 
     # Remove "the" prefix if present
     normalized = re.sub(r"^the\s+", "", normalized)
