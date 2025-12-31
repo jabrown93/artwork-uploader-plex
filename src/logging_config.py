@@ -41,7 +41,7 @@ def setup_logging(debug: bool = False, log_file: Optional[str] = None, log_dir: 
         log_dir_path = Path(log_dir)
 
     # Create logs directory if it doesn't exist
-    log_dir_path.mkdir(exist_ok=True)
+    log_dir_path.mkdir(exist_ok=True, parents=True)
 
     # Determine log file path
     if log_file is None:
