@@ -305,11 +305,11 @@ class PlexConnector:
 
         for library, media_type in libraries_with_type:
             try:
-                # Get all items and check normalized titles
-                search_kwargs = {}
+                # Use a filtered search to avoid loading the entire library
+                search_kwargs = {"title": title}
                 if year is not None:
-                    search_kwargs['year'] = year
-                all_items = library.search(**search_kwargs) if search_kwargs else library.all()
+                    search_kwargs["year"] = year
+                all_items = library.search(**search_kwargs)
 
                 for item in all_items:
                     if normalize_title_for_matching(item.title) == normalized_search_title:
