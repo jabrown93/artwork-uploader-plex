@@ -847,7 +847,7 @@ if __name__ == "__main__":
             web_app = Flask(__name__, template_folder="templates")
 
             # Enable CORS for all routes to allow Socket.IO connections from any origin
-            CORS(web_app, resources={r"/*": {"origins": "*"}})
+            CORS(web_app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
 
             # Configure session for authentication
             import secrets
