@@ -679,7 +679,11 @@ def setup_socket_handlers(
                 temp_path = upload_chunks[file_name]["temp_path"]
                 # Delete temp file if it still exists
                 if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                    try:
+                        os.remove(temp_path)
+                    except OSError as remove_err:
+                        logger.error(
+                            f"Error removing temp file {temp_path}: {remove_err}")
                 del upload_chunks[file_name]
             except (KeyError, OSError) as e:
                 debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
@@ -697,7 +701,11 @@ def setup_socket_handlers(
                     upload_chunks[file_name]["temp_file"].close()
                     temp_path = upload_chunks[file_name]["temp_path"]
                     if os.path.exists(temp_path):
-                        os.remove(temp_path)
+                        try:
+                            os.remove(temp_path)
+                        except OSError as remove_err:
+                            logger.error(
+                                f"Error removing temp file {temp_path}: {remove_err}")
                 del upload_chunks[file_name]
             except (KeyError, OSError) as e:
                 debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
