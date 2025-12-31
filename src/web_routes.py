@@ -609,6 +609,34 @@ def setup_socket_handlers(
         except Exception as e:
             logger.error(
                 f"Error decoding/writing chunk {chunk_index}: {e}", exc_info=True)
+            # Cleanup temp file and state to avoid resource leaks and partial uploads
+            try:
+                if file_name in upload_chunks:
+                    temp_file_obj = upload_chunks[file_name].get("temp_file")
+                    temp_path = upload_chunks[file_name].get("temp_path")
+                    if temp_file_obj is not None:
+                        try:
+                            temp_file_obj.close()
+                        except Exception as close_err:
+                            logger.warning(
+                                f"Error closing temp file for {file_name}: {close_err}",
+                                exc_info=True,
+                            )
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except OSError as remove_err:
+                            logger.warning(
+                                f"Error removing temp file {temp_path} for {file_name}: {remove_err}",
+                                exc_info=True,
+                            )
+                    # Remove the upload entry so it does not appear partially complete
+                    del upload_chunks[file_name]
+            except Exception as cleanup_err:
+                logger.error(
+                    f"Error during cleanup after failed chunk {chunk_index} for {file_name}: {cleanup_err}",
+                    exc_info=True,
+                )
 
     @globals.web_socket.on("upload_complete")
     def handle_upload_complete(data):
