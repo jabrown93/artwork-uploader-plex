@@ -180,8 +180,9 @@ class PlexConnector:
                                  "PlexConnector/find_collection")
                         collections.append(collection)
                         libraries.append(movie_library.title)
+                        continue
                     # Fall back to normalized fuzzy match
-                    elif normalize_title_for_matching(collection.title) == normalized_search_title:
+                    if normalize_title_for_matching(collection.title) == normalized_search_title:
                         debug_me(f"Found '{collection_title}' as '{collection.title}' in '{movie_library.title}' (fuzzy match)",
                                  "PlexConnector/find_collection")
                         collections.append(collection)
