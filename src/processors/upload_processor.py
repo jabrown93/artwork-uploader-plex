@@ -45,7 +45,7 @@ class UploadProcessor:
     def _episode_exists_in_plex(self, tv_show, season_number: int, episode_number: int) -> bool:
         """Check if an episode exists in the Plex library."""
         return (self._season_exists_in_plex(tv_show, season_number) and
-                episode_number in [E.index for E in tv_show.season(season_number).episodes()])
+                any(E.index == episode_number for E in tv_show.season(season_number).episodes()))
 
     def _should_process_season(self, tv_show, season_number: int, season_name: str) -> bool:
         """
