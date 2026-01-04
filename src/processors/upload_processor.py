@@ -59,18 +59,9 @@ class UploadProcessor:
         is_specials = (season_name == SEASON_SPECIALS)
 
         # Season exists in Plex
-        if self._season_exists_in_plex(tv_show, season_number):
-            return True
-
-        # Regular staging (non-specials)
-        if self.staging and not is_specials:
-            return True
-
-        # Specials staging (Kometa mode only)
-        if self.kometa and self.stage_specials and is_specials:
-            return True
-
-        return False
+        return (self._season_exists_in_plex(tv_show, season_number) or
+                (self.staging and not is_specials) or
+                (self.kometa and self.stage_specials and is_specials))
 
     def _should_process_episode(self, tv_show, season_number: int, episode_number: int, season_name: str) -> bool:
         """
