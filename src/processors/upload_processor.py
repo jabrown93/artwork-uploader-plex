@@ -333,19 +333,22 @@ class UploadProcessor:
                             continue
                     elif artwork["episode"] >= 0:
                         # Episode title card artwork
-                        if self._should_process_episode(tv_show, artwork["season"], artwork["episode"], season):
-                            if not self.kometa:
-                                upload_target = tv_show.season(artwork["season"]).episode(artwork["episode"])
-                            artwork_id = "E"
-                            artwork_type = "Title card"
-                            file_name = f"S{artwork["season"]:02}E{artwork["episode"]:02}"
-                            filter_type = FilterType.TITLE_CARD.value
-                        else:
-                            # Check if it's the season or the episode that's missing
-                            if not self._should_process_season(tv_show, artwork["season"], season):
-                                result = f"⚠️ {desc} | {season} not available in {library}"
+                        if self._should_process_season(tv_show, artwork["season"], season):
+                            # Season is processable, check episode
+                            if self._episode_exists_in_plex(tv_show, artwork["season"], artwork["episode"]) or self.staging:
+                                if not self.kometa:
+                                    upload_target = tv_show.season(artwork["season"]).episode(artwork["episode"])
+                                artwork_id = "E"
+                                artwork_type = "Title card"
+                                file_name = f"S{artwork["season"]:02}E{artwork["episode"]:02}"
+                                filter_type = FilterType.TITLE_CARD.value
                             else:
                                 result = f"⚠️ {desc} | {season}, Episode {artwork["episode"]:02} not available in {library}"
+                                results.append(result)
+                                continue
+                        else:
+                            # Season is not processable
+                            result = f"⚠️ {desc} | {season} not available in {library}"
                             results.append(result)
                             continue
 
