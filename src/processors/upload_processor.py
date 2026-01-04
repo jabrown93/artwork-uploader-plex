@@ -71,21 +71,13 @@ class UploadProcessor:
         - Episode exists in Plex, OR
         - Staging is enabled (allows episodes not yet in Plex)
         """
-        is_specials = (season_name == SEASON_SPECIALS)
-
         # Check if season should be processed first
         if not self._should_process_season(tv_show, season_number, season_name):
             return False
 
         # If episode exists in Plex, always process
-        if self._episode_exists_in_plex(tv_show, season_number, episode_number):
-            return True
-
-        # If staging is enabled, process even if episode doesn't exist
-        if self.staging:
-            return True
-
-        return False
+        return (self._episode_exists_in_plex(tv_show, season_number, episode_number) or
+                self.staging)
 
     def check_master_filters(self, check_filter: str, source: str) -> bool:
         master_filters = self.config.tpdb_filters if source == ScraperSource.THEPOSTERDB.value else self.config.mediux_filters
