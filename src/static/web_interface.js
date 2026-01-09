@@ -1646,6 +1646,11 @@ function togglePlexOptions() {
 // Add event listener for save_to_kometa checkbox
 document.getElementById("save_to_kometa").addEventListener("change", toggleKometaSettings);
 
+// Add event listener for kometa_library_paths textarea to clear invalid state on input
+document.getElementById("kometa_library_paths").addEventListener("input", function() {
+    this.classList.remove("is-invalid");
+});
+
 // Add event listener for temp_dir input to toggle temp option visibility
 document.getElementById("temp_dir").addEventListener("input", toggleTempCheckbox);
 
