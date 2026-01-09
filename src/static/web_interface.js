@@ -380,6 +380,26 @@ function saveConfig() {
     save_config.kometa_base = document.getElementById("kometa_base").value.trim();
     save_config.temp_dir = document.getElementById("temp_dir").value.trim();
     toggleTempCheckbox();
+
+    // Parse kometa_library_paths from JSON
+    const kometaLibraryPathsInput = document.getElementById("kometa_library_paths").value.trim();
+    if (kometaLibraryPathsInput) {
+        try {
+            save_config.kometa_library_paths = JSON.parse(kometaLibraryPathsInput);
+            // Validate it's an object with string keys/values
+            if (typeof save_config.kometa_library_paths !== 'object' ||
+                Array.isArray(save_config.kometa_library_paths)) {
+                throw new Error("Must be an object");
+            }
+        } catch (e) {
+            document.getElementById("kometa_library_paths").classList.add("is-invalid");
+            updateStatus("Invalid JSON in Kometa Library Path Mappings", "danger");
+            return;
+        }
+    } else {
+        save_config.kometa_library_paths = {};
+    }
+
     save_config.bulk_txt = document.getElementById("bulk_import_file").value;
 
     // Convert comma-separated library inputs to arrays
@@ -486,6 +506,15 @@ function loadConfig() {
             document.getElementById("stage_collections").checked = data.config.stage_collections;
             document.getElementById("kometa_base").value = data.config.kometa_base;
             document.getElementById("temp_dir").value = data.config.temp_dir || "";
+
+            // Load kometa_library_paths
+            if (data.config.kometa_library_paths) {
+                document.getElementById("kometa_library_paths").value =
+                    JSON.stringify(data.config.kometa_library_paths, null, 2);
+            } else {
+                document.getElementById("kometa_library_paths").value = "";
+            }
+
             document.getElementById("auto_manage_bulk_files").checked = data.config.auto_manage_bulk_files;
             document.getElementById("reset_overlay").checked = data.config.reset_overlay;
             document.getElementById("option-add-to-bulk").checked = data.config.auto_manage_bulk_files;
