@@ -397,7 +397,10 @@ class UploadProcessor:
 
     def _get_kometa_dest_dir(self, library: str, asset_folder: str) -> str:
         """Constructs the destination directory path for Kometa assets."""
-        base_dir = ("/temp" if self.options.temp else "/assets") if self.docker else getattr(
-            globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
+        if self.docker:
+            base_dir = "/temp" if self.options.temp else "/assets"
+        else:
+            config_attr = "temp_dir" if self.options.temp else "kometa_base"
+            base_dir = getattr(globals.config, config_attr, None)
         library_dir = globals.config.resolve_library_directory(library)
         return os.path.join(base_dir, library_dir, asset_folder)
