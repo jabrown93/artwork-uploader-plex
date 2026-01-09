@@ -112,11 +112,8 @@ class UploadProcessor:
                             asset_folder = collection_item.title
                             saver = KometaSaver(artwork_type, library)
                             saver.set_artwork(artwork)
-                            base_dir = ("/temp" if self.options.temp else "/assets") if self.docker else getattr(
-                                globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
-                            library_dir = globals.config.resolve_library_directory(library)
-                            saver.dest_dir = os.path.join(
-                                base_dir, library_dir, asset_folder)
+                            dest_dir = self._get_kometa_dest_dir(library, asset_folder)
+                            saver.dest_dir = dest_dir
                             debug_me(f"Destination directory is {saver.dest_dir}",
                                      "UploadProcessor/process_collection_artwork")
                             saver.dest_file_name = artwork_type.lower()
@@ -153,7 +150,7 @@ class UploadProcessor:
                         asset_folder = artwork["title"]
                         saver = KometaSaver(artwork_type, library)
                         saver.set_artwork(artwork)
-                        dest_dir = _get_kometa_dest_dir(self, library, asset_folder)
+                        dest_dir = self._get_kometa_dest_dir(library, asset_folder)
                         saver.dest_dir = dest_dir
                         debug_me(f"Staging collection to {saver.dest_dir}",
                                  "UploadProcessor/process_collection_artwork")
@@ -217,7 +214,7 @@ class UploadProcessor:
                             asset_folder = path_parts[-2]
                             saver = KometaSaver(artwork_type, library)
                             saver.set_artwork(artwork)
-                            dest_dir = _get_kometa_dest_dir(self, library, asset_folder)
+                            dest_dir = self._get_kometa_dest_dir(library, asset_folder)
                             saver.dest_dir = dest_dir
                             debug_me(f"Destination directory is {saver.dest_dir}",
                                      "UploadProcessor/process_movie_artwork")
@@ -367,7 +364,7 @@ class UploadProcessor:
                             if self.kometa:
                                 saver = KometaSaver(artwork_type, library)
                                 saver.set_artwork(artwork)
-                                dest_dir = _get_kometa_dest_dir(self, library, asset_folder)
+                                dest_dir = self._get_kometa_dest_dir(library, asset_folder)
                                 saver.dest_dir = dest_dir
                                 debug_me(f"Destination directory is {saver.dest_dir}",
                                          "UploadProcessor/process_tv_artwork")
@@ -398,9 +395,9 @@ class UploadProcessor:
 
         return results
 
-def _get_kometa_dest_dir(self, library: str, asset_folder: str) -> str:
-    """Constructs the destination directory path for Kometa assets."""
-    base_dir = ("/temp" if self.options.temp else "/assets") if self.docker else getattr(
-        globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
-    library_dir = globals.config.resolve_library_directory(library)
-    return os.path.join(base_dir, library_dir, asset_folder)
+    def _get_kometa_dest_dir(self, library: str, asset_folder: str) -> str:
+        """Constructs the destination directory path for Kometa assets."""
+        base_dir = ("/temp" if self.options.temp else "/assets") if self.docker else getattr(
+            globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
+        library_dir = globals.config.resolve_library_directory(library)
+        return os.path.join(base_dir, library_dir, asset_folder)
