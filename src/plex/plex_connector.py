@@ -13,6 +13,7 @@ from plexapi.library import MovieSection, ShowSection
 from plexapi.server import PlexServer
 from plexapi.video import Movie, Show
 from utils.notifications import debug_me
+from utils.title_matching import normalize_title_for_comparison
 
 
 class PlexConnector:
@@ -162,8 +163,6 @@ class PlexConnector:
 
         if not self.plex:
             self.connect()
-
-        from utils.title_matching import normalize_title_for_comparison
 
         collections = []
         libraries = []

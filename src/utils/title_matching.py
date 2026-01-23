@@ -6,10 +6,10 @@ artwork provider titles differ from Plex titles due to punctuation (e.g., "Bobs 
 vs "Bob's Burgers").
 """
 
-import re
+from typing import Optional
 
 
-def normalize_title_for_matching(title: str) -> str:
+def normalize_title_for_matching(title: Optional[str]) -> str:
     """
     Normalize title for fuzzy matching by removing all punctuation.
 
@@ -43,9 +43,9 @@ def normalize_title_for_matching(title: str) -> str:
         return ""
 
     # Remove all punctuation except spaces and alphanumeric
-    # This handles apostrophes, hyphens, periods, colons, etc.
-    # Existing spaces are preserved
-    normalized = re.sub(r'[^\w\s]', '', title)
+    # This handles apostrophes, hyphens, periods, colons, underscores, etc.
+    # Existing spaces are preserved; Unicode letters/digits are kept
+    normalized = ''.join(ch for ch in title if ch.isalnum() or ch.isspace())
 
     # Collapse multiple spaces to single space and strip
     normalized = " ".join(normalized.split())
@@ -53,7 +53,7 @@ def normalize_title_for_matching(title: str) -> str:
     return normalized
 
 
-def normalize_title_for_comparison(title: str) -> str:
+def normalize_title_for_comparison(title: Optional[str]) -> str:
     """
     Normalize title for comparison (used in collection matching).
 
@@ -73,7 +73,7 @@ def normalize_title_for_comparison(title: str) -> str:
     return normalize_title_for_matching(title).lower()
 
 
-def fuzzy_title_match(title1: str, title2: str) -> bool:
+def fuzzy_title_match(title1: Optional[str], title2: Optional[str]) -> bool:
     """
     Compare two titles using fuzzy matching (ignoring punctuation and case).
 

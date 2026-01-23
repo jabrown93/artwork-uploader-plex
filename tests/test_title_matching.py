@@ -5,7 +5,6 @@ Tests the normalization and fuzzy matching functions used to handle
 punctuation differences between artwork provider titles and Plex titles.
 """
 
-import pytest
 import sys
 from pathlib import Path
 
