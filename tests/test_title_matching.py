@@ -218,7 +218,3 @@ class TestRealWorldExamples:
         assert fuzzy_title_match("Bob's Burgers Collection", "Bobs Burgers Collection") == True
         assert fuzzy_title_match("Spider-Man Collection", "SpiderMan Collection") == True
         assert fuzzy_title_match("The Lord of the Rings Collection", "The Lord of the Rings Collection") == True
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
