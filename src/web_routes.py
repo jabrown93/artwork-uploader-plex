@@ -13,6 +13,7 @@ import shutil
 
 from utils.notifications import update_log, update_status, notify_web, debug_me
 from utils import utils
+from utils.title_matching import normalize_title_for_matching
 from services import UtilityService, AuthenticationService
 from processors.media_metadata import parse_title
 from models.instance import Instance
@@ -876,8 +877,6 @@ def extract_and_list_zip(
             if media_type is None:
                 # Normalize title by removing all punctuation for better matching
                 # This handles apostrophes, hyphens, colons, periods, etc.
-                from utils.title_matching import normalize_title_for_matching
-
                 artwork["title"] = normalize_title_for_matching(artwork.get('title'))
                 media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                     artwork.get('title'), artwork.get('year'))
