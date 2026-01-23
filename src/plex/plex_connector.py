@@ -13,6 +13,7 @@ from plexapi.library import MovieSection, ShowSection
 from plexapi.server import PlexServer
 from plexapi.video import Movie, Show
 from utils.notifications import debug_me
+from utils.title_matching import normalize_title_for_comparison
 
 
 class PlexConnector:
@@ -166,13 +167,21 @@ class PlexConnector:
         collections = []
         libraries = []
 
+        # Pre-normalize search term for fuzzy matching (with lowercase)
+        normalized_search = normalize_title_for_comparison(collection_title)
+
         for movie_library in self.movie_libraries:
             try:
                 plex_collections = movie_library.collections()
                 for collection in plex_collections:
+                    match_log = None
                     if collection.title == collection_title:
-                        debug_me(f"Found '{collection_title}' in '{movie_library.title}'",
-                                 "PlexConnector/find_collection")
+                        match_log = f"Found '{collection_title}' in '{movie_library.title}'"
+                    elif normalize_title_for_comparison(collection.title) == normalized_search:
+                        match_log = f"Fuzzy matched '{collection_title}' to '{collection.title}' in '{movie_library.title}'"
+
+                    if match_log:
+                        debug_me(match_log, "PlexConnector/find_collection")
                         collections.append(collection)
                         libraries.append(movie_library.title)
             except Exception as e:
