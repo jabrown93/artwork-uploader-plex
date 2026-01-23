@@ -874,9 +874,11 @@ def extract_and_list_zip(
             media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                 artwork.get('title'), artwork.get('year'))
             if media_type is None:
-                # Mediux and TPDB replace colons with hyphens in titles, so revert that for lookup, and also remove ellipses
-                artwork["title"] = artwork.get('title').replace(
-                    "-", "").replace('...', '').strip()
+                # Normalize title by removing all punctuation for better matching
+                # This handles apostrophes, hyphens, colons, periods, etc.
+                from utils.title_matching import normalize_title_for_matching
+
+                artwork["title"] = normalize_title_for_matching(artwork.get('title'))
                 media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                     artwork.get('title'), artwork.get('year'))
             artwork["media"] = media_type if media_type else "unavailable"

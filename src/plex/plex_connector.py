@@ -163,15 +163,27 @@ class PlexConnector:
         if not self.plex:
             self.connect()
 
+        from utils.title_matching import normalize_title_for_comparison
+
         collections = []
         libraries = []
+
+        # Pre-normalize search term for fuzzy matching (with lowercase)
+        normalized_search = normalize_title_for_comparison(collection_title)
 
         for movie_library in self.movie_libraries:
             try:
                 plex_collections = movie_library.collections()
                 for collection in plex_collections:
+                    # Try exact match first (preserve current behavior)
                     if collection.title == collection_title:
                         debug_me(f"Found '{collection_title}' in '{movie_library.title}'",
+                                 "PlexConnector/find_collection")
+                        collections.append(collection)
+                        libraries.append(movie_library.title)
+                    # Fall back to fuzzy match (case-insensitive, punctuation-insensitive)
+                    elif normalize_title_for_comparison(collection.title) == normalized_search:
+                        debug_me(f"Fuzzy matched '{collection_title}' to '{collection.title}' in '{movie_library.title}'",
                                  "PlexConnector/find_collection")
                         collections.append(collection)
                         libraries.append(movie_library.title)
