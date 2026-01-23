@@ -47,11 +47,8 @@ def normalize_title_for_matching(title: str) -> str:
     # Existing spaces are preserved
     normalized = re.sub(r'[^\w\s]', '', title)
 
-    # Collapse multiple spaces to single space
-    normalized = re.sub(r'\s+', ' ', normalized)
-
-    # Strip whitespace
-    normalized = normalized.strip()
+    # Collapse multiple spaces to single space and strip
+    normalized = " ".join(normalized.split())
 
     return normalized
 
