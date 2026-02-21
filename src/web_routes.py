@@ -1043,13 +1043,27 @@ def extract_and_list_zip(
                 artwork["author"] = zip_author
                 # Determine media type via Plex lookup if not a collection
                 if artwork["media"] != "Collection":
+                    original_title = artwork.get('title')
                     media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                         artwork.get('title'), artwork.get('year'))
                     if media_type is None:
-                        # Mediux and TPDB replace colons with hyphens in titles, so revert that for lookup, and also remove ellipses
-                        artwork["title"] = re.sub(r'-', '', artwork.get('title')).replace('...', '').strip()
+                        # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
+                        artwork["title"] = re.sub(r'_(?=\s)', ':', original_title)
+                        artwork["title"] = re.sub(r'-', '', artwork["title"]).replace('...', '').strip()
                         media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                             artwork.get('title'), artwork.get('year'))
+                    if media_type is None and artwork.get('year') is not None:
+                        # Fallback: try progressively shorter titles to handle subtitle mismatches
+                        # (e.g. missing apostrophes: "Worlds End" vs "World's End")
+                        words = re.sub(r'[_\-]', ' ', original_title).split()
+                        min_words = max(2, len(words) - 3)
+                        for end in range(len(words) - 1, min_words - 1, -1):
+                            short_title = ' '.join(words[:end])
+                            media_type, tmdb_id, title, year = globals.plex.movie_or_show(
+                                short_title, artwork.get('year'))
+                            if media_type is not None:
+                                artwork["title"] = short_title
+                                break
                     artwork["media"] = media_type if media_type else "unavailable"
                     artwork["title"] = title if title and title != artwork.get('title') else artwork.get('title')
                     artwork["tmdb_id"] = tmdb_id
