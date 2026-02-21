@@ -9,7 +9,7 @@ from models.options import Options
 from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 from core.config import Config
 from core.exceptions import ScraperException
-from core.enums import MediaType, ScraperSource, FileType
+from core.enums import FilterType, MediaType, ScraperSource, FileType
 from core.constants import (
     ANSI_BOLD, ANSI_RESET, BOOTSTRAP_COLORS,
     MEDIUX_API_BASE_URL, MEDIUX_BASE_URL, MEDIUX_QUALITY_SUFFIX,
@@ -306,7 +306,7 @@ class MediuxScraper:
                                  "MediuxScraper/_process_set")
                         season = SEASON_BACKDROP
                         episode = None
-                        file_type = "background"
+                        file_type = FilterType.BACKGROUND.value
                     else:
                         debug_me(
                             f"Skipping backdrop - missing show_id_backdrop", "MediuxScraper/_process_set")
@@ -361,14 +361,14 @@ class MediuxScraper:
                             # No seasons array, get directly from season_id
                             season = season_id_data.get("season_number", 0)
                         episode = EPISODE_COVER
-                        file_type = "season_cover"
+                        file_type = FilterType.SEASON_COVER.value
                     elif file_show_id is not None:
                         # This is a show cover
                         debug_me(f"Show cover detected",
                                  "MediuxScraper/_process_set")
                         season = SEASON_COVER
                         episode = None
-                        file_type = "show_cover"
+                        file_type = FilterType.SHOW_COVER.value
                     else:
                         debug_me(
                             f"Skipping poster - missing show_id and season_id", "MediuxScraper/_process_set")
@@ -388,7 +388,7 @@ class MediuxScraper:
                         # This is a movie poster
                         title = set_data["movie"]["title"]
                         year = int(set_data["movie"]["release_date"][:4])
-                        file_type = "movie_poster"
+                        file_type = FilterType.MOVIE_POSTER.value
                     elif set_data.get("collection"):
                         # This is a movie poster inside a collection set
                         movies = set_data["collection"]["movies"]
@@ -396,17 +396,17 @@ class MediuxScraper:
                             movie for movie in movies if movie["id"] == movie_id][0]
                         title = movie_data["title"]
                         year = int(movie_data["release_date"][:4])
-                        file_type = "movie_poster"
+                        file_type = FilterType.MOVIE_POSTER.value
                 elif data["collection_id"]:
                     # This is a collection poster
                     title = set_data["collection"]["collection_name"]
-                    file_type = "collection_poster"
+                    file_type = FilterType.COLLECTION_POSTER.value
                 else:
-                    if data["fileType"] == "movie_poster":
+                    if data["fileType"] == FilterType.MOVIE_POSTER.value:
                         # This is a collection poster
-                        file_type = "collection_poster"
+                        file_type = FilterType.COLLECTION_POSTER.value
                         title = set_data["collection"]["collection_name"]
-                    elif data["fileType"] == "backdrop":
+                    elif data["fileType"] == FileType.BACKDROP.value:
                         # This is a movie background
                         if data["movie_id_backdrop"]:
                             movie_id = data["movie_id_backdrop"]["id"]
@@ -418,11 +418,11 @@ class MediuxScraper:
                                 movie_data = set_data["movie"]
                             title = movie_data["title"]
                             year = int(movie_data["release_date"][:4])
-                            file_type = "background"
+                            file_type = FilterType.BACKGROUND.value
                         else:
                             # The only remaining artwork can be the collection background
                             title = set_data["collection"]["collection_name"]
-                            file_type = "background"
+                            file_type = FilterType.BACKGROUND.value
 
             image_stub = data["id"]
             poster_url = f"{base_url}{image_stub}{quality_suffix}{cache_buster}"
