@@ -27,6 +27,7 @@ import os
 import pprint
 import re
 import socket
+import unicodedata
 import subprocess
 import sys
 import tempfile
@@ -1052,6 +1053,17 @@ def extract_and_list_zip(
                         artwork["title"] = re.sub(r'-', '', artwork["title"]).replace('...', '').strip()
                         media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                             artwork.get('title'), artwork.get('year'))
+                    if media_type is None:
+                        # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
+                        # ASCII-fold the title so Plex can match against the accented original
+                        folded = ''.join(
+                            c for c in unicodedata.normalize('NFKD', original_title)
+                            if not unicodedata.combining(c)
+                        )
+                        if folded != artwork.get('title'):
+                            artwork["title"] = folded
+                            media_type, tmdb_id, title, year = globals.plex.movie_or_show(
+                                artwork.get('title'), artwork.get('year'))
                     if media_type is None and artwork.get('year') is not None:
                         # Fallback: try progressively shorter titles to handle subtitle mismatches
                         # (e.g. missing apostrophes: "Worlds End" vs "World's End")
