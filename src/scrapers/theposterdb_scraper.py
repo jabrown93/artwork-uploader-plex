@@ -53,14 +53,14 @@ class ThePosterDBScraper:
         self.options = options
 
     # Scrape The Poster DB
-    def scrape(self) -> int:
+    def scrape(self) -> None:
         """
         If we were passed a poster link, it should have a link to its corresponding poster set.
         Even if it's just one poster, it still belongs to a poster set. So, let's find that link and retrieve its contents.
         Then, we will grab the main set of posters from the poster set URL, as well as any additional sets or posters required.
 
         Returns:
-            bool: True if the posters were successfully grabbed, False otherwise.
+            None
         """
         try:
             if "/poster/" in self.url:

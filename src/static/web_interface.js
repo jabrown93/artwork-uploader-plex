@@ -107,13 +107,13 @@ socket.on("docker_detected", (data) => {
 
 // Test connection to Plex server
 function testPlexConnect() {
-    baseUrl = document.getElementById("plex_base_url").value
-    token = document.getElementById("plex_token").value
-    tvLibraries = document.getElementById("tv_library").value
+    const baseUrl = document.getElementById("plex_base_url").value
+    const token = document.getElementById("plex_token").value
+    const tvLibraries = document.getElementById("tv_library").value
         .split(",")
         .map(item => item.trim())
         .filter(item => item !== ""); // Remove empty values
-    movieLibraries = document.getElementById("movie_library").value
+    const movieLibraries = document.getElementById("movie_library").value
         .split(",")
         .map(item => item.trim())
         .filter(item => item !== ""); // Remove empty values
@@ -122,7 +122,7 @@ function testPlexConnect() {
 
 // Send test notification
 function testNotifications() {
-    urls = document.getElementById("apprise_urls").value
+    const urls = document.getElementById("apprise_urls").value
         .split(",")
         .map(item => item.trim())
         .filter(item => item !== ""); // Remove empty values
@@ -130,7 +130,8 @@ function testNotifications() {
         updateStatus("Set at least one notification URL", "warning", false, false, "exclamation-triangle")
     } else {
         socket.emit("test_notifications", { instance_id: instanceId, urls: urls });
-    }}
+    }
+}
 
 // Check incoming socket message is for this instance
 function validResponse(data, broadcast = false) {
@@ -776,7 +777,7 @@ function toggleThePosterDBElements() {
 
     const url = urlInput.value;
     const elements = document.querySelectorAll(".theposterdb");
-    const filts = document.querySelectorAll('[id^="tpdb-');
+    const filts = document.querySelectorAll('[id^="tpdb-"]');
 
     // Define the regex pattern from the input
     const pattern = /^https:\/\/theposterdb\.com\/set\/\d+$/;
