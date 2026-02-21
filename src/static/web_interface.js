@@ -777,7 +777,7 @@ function toggleThePosterDBElements() {
 
     const url = urlInput.value;
     const elements = document.querySelectorAll(".theposterdb");
-    const filts = document.querySelectorAll('[id^="tpdb-"]');
+    const filts = document.querySelectorAll('[id^="tpdb-');
 
     // Define the regex pattern from the input
     const pattern = /^https:\/\/theposterdb\.com\/set\/\d+$/;
