@@ -40,7 +40,7 @@ endif
 		print('.'.join(map(str, parts)))"))
 	@echo "New version:     $(NEW_VERSION)"
 	@echo ""
-	@read -p "Create and push tag v$(NEW_VERSION)? [y/N] " confirm && [ "$$confirm" = "y" ]
+	@printf "Create and push tag v$(NEW_VERSION)? [y/N] " ; read confirm && [ "$$confirm" = "y" ]
 	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
 	git push origin "v$(NEW_VERSION)"
 	@echo ""
