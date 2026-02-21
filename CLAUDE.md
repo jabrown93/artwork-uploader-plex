@@ -350,3 +350,6 @@ Version is defined in `core/__version__.py` and used throughout:
 - Update checking via GitHub API (`UpdateService`)
 
 Use `bump_version.py` script for version bumps.
+
+## SDLC 
+DO NOT MAKE PRS TO UPSTREAM REPO. This is a forked repository for personal use and experimentation. Any changes or improvements should be made here without affecting the original project.
