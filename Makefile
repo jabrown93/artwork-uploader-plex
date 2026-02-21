@@ -41,8 +41,20 @@ endif
 	@echo "New version:     $(NEW_VERSION)"
 	@echo ""
 	@printf "Create and push tag v$(NEW_VERSION)? [y/N] " ; read confirm && [ "$$confirm" = "y" ]
+	@python3 -c "\
+		import re; \
+		f = 'src/core/__version__.py'; \
+		c = open(f).read(); \
+		v = '$(NEW_VERSION)'; \
+		parts = v.split('.'); \
+		c = re.sub(r'__version__ = [\"\\x27][^\"\\x27]+[\"\\x27]', '__version__ = \"' + v + '\"', c); \
+		c = re.sub(r'__version_info__ = \([^)]+\)', '__version_info__ = (' + parts[0] + ', ' + parts[1] + ', ' + parts[2] + ', \"patch\")', c); \
+		open(f, 'w').write(c); \
+		print('Updated __version__.py to ' + v)"
+	git add src/core/__version__.py
+	git commit -m "Bump version to $(NEW_VERSION)"
 	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
-	git push origin "v$(NEW_VERSION)"
+	git push origin HEAD "v$(NEW_VERSION)"
 	@echo ""
 	@echo "Pushed v$(NEW_VERSION) — GitHub Actions will handle the release."
 

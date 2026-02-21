@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 jobs:
   create-release:
@@ -15,6 +16,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      packages: write
 
     steps:
       - name: Checkout code
@@ -24,29 +26,12 @@ jobs:
           persist-credentials: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.14'
-
       - name: Extract version from tag
         id: get_version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Verify version matches __version__.py
-        run: |
-          PYTHON_VERSION=$(python3 -c "from core.__version__ import __version__; print(__version__)")
-          TAG_VERSION="${{ steps.get_version.outputs.VERSION }}"
-          if [ "$PYTHON_VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: Version mismatch!"
-            echo "Python version: $PYTHON_VERSION"
-            echo "Tag version: $TAG_VERSION"
-            exit 1
-          fi
-          echo "Version verified: $PYTHON_VERSION"
 
       - name: Generate changelog
         id: changelog
@@ -101,6 +86,26 @@ jobs:
           else
             echo "No PyInstaller spec file found, skipping binary build"
           fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/jabrown93/artwork-uploader:${{ steps.get_version.outputs.VERSION }}
+            ghcr.io/jabrown93/artwork-uploader:latest
 
       - name: Create GitHub Release
         env:
