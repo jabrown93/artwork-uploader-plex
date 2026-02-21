@@ -259,13 +259,6 @@
                                         <input type="text" id="temp_dir" name="temp_dir" class="form-control" placeholder="X:\path\to\temp\dir">
                                     </div>
                                 </div>
-                                <div id="docker_warning" class="alert alert-info mt-3 mb-0 alert-dismissible fade show" role="alert" style="display: none;">
-                                    <i class="bi bi-info-circle"></i>&ensp; When running in Docker the Kometa asset and temp directories are hardcoded 
-                                    inside the container to <code>/assets</code> and <code>/temp</code> respectively. The host paths displayed here are the ones 
-                                    mapped to these container paths via bind mounts in the <span class="text-nowrap"><code>docker-compose.yml</code></span> file.
-                                    To change them you must edit your compose file and restart the container.
-                                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                                </div>
                             </div>
                             <!-- Authentication settings -->
                             <div class="p-3 border mt-3 rounded-3 shadow-sm">

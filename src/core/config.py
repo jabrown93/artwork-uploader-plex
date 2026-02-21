@@ -6,7 +6,7 @@ import json
 import os
 from typing import List, Dict, Any
 
-from core.constants import DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY, DEFAULT_IP_BINDING
+from core.constants import DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY, DEFAULT_IP_BINDING, RUNNING_IN_DOCKER
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from logging_config import get_logger
 
@@ -56,8 +56,8 @@ class Config:
                                           "collection_poster"]
         self.tpdb_filters: List[str] = ["season_cover", "show_cover", "movie_poster",
                                         "collection_poster"]
-        self.kometa_base: str = ""
-        self.temp_dir: str = ""
+        self.kometa_base: str = "/assets" if RUNNING_IN_DOCKER else ""
+        self.temp_dir: str = "/temp" if RUNNING_IN_DOCKER else ""
         self.save_to_kometa: bool = False
         self.stage_assets: bool = True
         self.stage_specials: bool = False
@@ -99,8 +99,16 @@ class Config:
             self.movie_library = config.get("movie_library", [])
             self.mediux_filters = config.get("mediux_filters", [])
             self.tpdb_filters = config.get("tpdb_filters", [])
-            self.kometa_base = config.get("kometa_base", "")
-            self.temp_dir = config.get("temp_dir", "")
+            loaded_kometa_base = config.get("kometa_base", None)
+            if not loaded_kometa_base or loaded_kometa_base.strip() == "":
+                self.kometa_base = "/assets" if RUNNING_IN_DOCKER else ""
+            else:
+                self.kometa_base = loaded_kometa_base
+            loaded_temp_dir = config.get("temp_dir", None)
+            if not loaded_temp_dir or loaded_temp_dir.strip() == "":
+                self.temp_dir = "/temp" if RUNNING_IN_DOCKER else ""
+            else:
+                self.temp_dir = loaded_temp_dir
             self.save_to_kometa = config.get("save_to_kometa", False)
             self.stage_assets = config.get("stage_assets", True)
             self.stage_specials = config.get("stage_specials", False)
