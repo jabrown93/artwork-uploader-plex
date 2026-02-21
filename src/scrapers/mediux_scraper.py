@@ -406,7 +406,7 @@ class MediuxScraper:
                         # This is a collection poster
                         file_type = FilterType.COLLECTION_POSTER.value
                         title = set_data["collection"]["collection_name"]
-                    elif data["fileType"] == "backdrop":
+                    elif data["fileType"] == FileType.BACKDROP.value:
                         # This is a movie background
                         if data["movie_id_backdrop"]:
                             movie_id = data["movie_id_backdrop"]["id"]
