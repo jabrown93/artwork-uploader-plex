@@ -228,6 +228,40 @@ class PlexConnector:
                 pass
         if items:
             return items, libs
+
+        # Fallback to title/year search when TMDb GUID lookup fails
+        title = artwork.get('title')
+        year = artwork.get('year')
+        if title:
+            debug_me(
+                f"TMDb GUID lookup failed, falling back to title/year search for '{title} ({year})'",
+                "PlexConnector/find_in_library")
+            for i, library in enumerate(libraries):
+                try:
+                    search_kwargs = {'title': title}
+                    if year is not None:
+                        search_kwargs['year'] = int(year)
+                    search_results = library.search(**search_kwargs)
+                    # Retry with +/-1 year if no results
+                    if not search_results and year is not None:
+                        for adjusted_year in (int(year) - 1, int(year) + 1):
+                            search_kwargs['year'] = adjusted_year
+                            search_results = library.search(**search_kwargs)
+                            if search_results:
+                                break
+                    if search_results:
+                        library_item = search_results[0]
+                        items.append(library_item)
+                        libs.append(library.title)
+                        debug_me(
+                            f"Found '{title} ({year})' as '{library_item.title} ({library_item.year})' in '{library.title}' via title search",
+                            "PlexConnector/find_in_library")
+                except Exception as e:
+                    debug_me(
+                        f"Title search failed in '{libraries[i].title}': {e}",
+                        "PlexConnector/find_in_library")
+        if items:
+            return items, libs
         return None, None
 
     def movie_or_show(self, title: str, year: Optional[int] = None) -> Tuple[
