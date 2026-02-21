@@ -174,7 +174,7 @@
                                 </div>
                                 <div class="mb-3">
                                     <label for="plex_token" class="form-label"><i class="bi bi-key"></i>&ensp;Authentication Token</label>
-                                    &nbsp;<i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-delay='{"hide": 500}' data-bs-html="true" data-bs-title="Check the <a href='https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/' target='_blank'>Plex support docs</a> for instructions on how to obtain your token"></i>
+                                    &nbsp;<i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-delay='{"hide": 500}' data-bs-html="true" data-bs-title="Check the <a href='https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/' target='_blank' rel='noopener noreferrer'>Plex support docs</a> for instructions on how to obtain your token"></i>
                                     <input type="text" id="plex_token" name="plex_token" class="form-control" required pattern="[A-Za-z0-9_\-]{20,40}"
                                         title="Plex token should be a 20+ character string with letters, digits, dashes or underscores.">
                                     <div class="invalid-feedback">
@@ -259,7 +259,7 @@
                                         <input type="text" id="temp_dir" name="temp_dir" class="form-control" placeholder="X:\path\to\temp\dir">
                                     </div>
                                 </div>
-                                <div id="docker_warning" class="alert alert-info mt-3 mb-0 alert-dismissible fade show" role="alert" style="display: block;">
+                                <div id="docker_warning" class="alert alert-info mt-3 mb-0 alert-dismissible fade show" role="alert" style="display: none;">
                                     <i class="bi bi-info-circle"></i>&ensp; When running in Docker the Kometa asset and temp directories are hardcoded 
                                     inside the container to <code>/assets</code> and <code>/temp</code> respectively. The host paths displayed here are the ones 
                                     mapped to these container paths via bind mounts in the <span class="text-nowrap"><code>docker-compose.yml</code></span> file.
@@ -528,7 +528,7 @@
                         </div>
                         <div class="mb-3 col-md-4 col-lg-3">
                             <div class="p-3 border rounded-3 shadow-sm">
-                                <label for="scrape_url" class="form-label"><i class="bi bi-calendar3"></i>&ensp;Plex year</label>
+                                <label for="year" class="form-label"><i class="bi bi-calendar3"></i>&ensp;Plex year</label>
                                 &nbsp;<i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-title="Use this if the year in Plex is different to that on MediUX or TPDb"></i>
                                 <input type="text" id="year" name="year" class="form-control"
                                     value=""
@@ -741,25 +741,25 @@
                                     <div class="col-6 col-md-4 col-lg-3">
                                         <div class="form-check form-switch mb-2">
                                             <input class="form-check-input" type="checkbox" checked value="show_cover" name="filter" id="upload-filter-show_cover"/>
-                                            <label for="filter-show_cover" class="form-check-label">Show cover</label>
+                                            <label for="upload-filter-show_cover" class="form-check-label">Show cover</label>
                                         </div>
                                     </div>
                                     <div class="col-6 col-md-4 col-lg-3">
                                         <div class="form-check form-switch mb-2">
                                             <input class="form-check-input" type="checkbox" checked value="season_cover" name="filter" id="upload-filter-season_cover"/>
-                                            <label for="filter-season_cover" class="form-check-label">Season covers</label>
+                                            <label for="upload-filter-season_cover" class="form-check-label">Season covers</label>
                                         </div>
                                     </div>
                                     <div class="col-6 col-md-4 col-lg-3">
                                         <div class="form-check form-switch mb-2">
                                             <input class="form-check-input" type="checkbox" checked value="background" name="filter" id="upload-filter-background"/>
-                                            <label for="filter-background" class="form-check-label">Background</label>
+                                            <label for="upload-filter-background" class="form-check-label">Background</label>
                                         </div>
                                     </div>
                                     <div class="col-6 col-md-4 col-lg-3">
                                         <div class="form-check form-switch mb-2">
                                             <input class="form-check-input" type="checkbox" checked value="title_card" name="filter" id="upload-filter-title_card"/>
-                                            <label for="filter-title_card" class="form-check-label">Title cards</label>
+                                            <label for="upload-filter-title_card" class="form-check-label">Title cards</label>
                                         </div>
                                     </div>
                                 </div>
@@ -768,13 +768,13 @@
                                     <div class="col-6 col-md-4 col-lg-3">
                                         <div class="form-check form-switch mb-2">
                                             <input class="form-check-input" type="checkbox" checked value="movie_poster" id="upload-filter-movie_poster"/>
-                                            <label for="filter-movie_poster" class="form-check-label">Movie poster</label>
+                                            <label for="upload-filter-movie_poster" class="form-check-label">Movie poster</label>
                                         </div>
                                     </div>
                                     <div class="col-6 col-md-8 col-lg-3">
                                         <div class="form-check form-switch mb-2">
                                             <input class="form-check-input" type="checkbox" checked value="collection_poster" id="upload-filter-collection_poster"/>
-                                            <label for="filter-collection_poster" class="form-check-label">Collection poster</label>
+                                            <label for="upload-filter-collection_poster" class="form-check-label">Collection poster</label>
                                         </div>
                                     </div>
                                 </div>
