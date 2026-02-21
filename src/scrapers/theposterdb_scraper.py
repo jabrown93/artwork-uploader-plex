@@ -33,8 +33,7 @@ class ThePosterDBScraper:
         self.url: str = url
         self.title: Optional[str] = None
         self.options: Options = Options()
-        self.config: Config = Config()
-        self.config.load()
+        self.config: Config = globals.config
         self.author: Optional[str] = None
         self.tmdb_id: Optional[int] = None
         self.skipped: int = 0
