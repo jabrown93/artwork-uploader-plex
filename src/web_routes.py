@@ -466,7 +466,7 @@ def setup_socket_handlers(
         url = data.get("url", "")
         debug_me(f"Obtained Plex URL: {url}", "test_plex_connect")
         token = data.get("token", "")
-        debug_me(f"Obtained Plex token: {token}", "test_plex_connect")
+        debug_me(f"Obtained Plex token: {'*' * min(len(token), 8) if token else '(not set)'}", "test_plex_connect")
         tv_libs = data.get("tv_libs", "")
         debug_me(f"Obtained {len(tv_libs)} TV libraries: {tv_libs}", "test_plex_connect")
         movie_libs = data.get("movie_libs", "")
@@ -532,20 +532,20 @@ def setup_socket_handlers(
         test_notification = NotifyService()
         success = True
         failed = 0
-        for url in urls:
+        for idx, url in enumerate(urls):
             test_notification.add_url(url)
-            debug_me(f"Sending test notification to '{url}'", "test_notifications")
+            debug_me(f"Sending test notification to URL #{idx + 1}", "test_notifications")
             url_success = test_notification.send_notification(notification_title, notification_message)
             success = success and url_success
             if url_success:
-                debug_me(f"Test notification sent successfully to '{url}'", "test_notifications")
-                update_log(instance, f"Test notification sent successfully to '{url}'")
+                debug_me(f"Test notification sent successfully to URL #{idx + 1}", "test_notifications")
+                update_log(instance, f"Test notification sent successfully to URL #{idx + 1}")
                 if len(urls) == 1:
                     update_status(instance, "Test notification sent successfully", "success", False, False, "check2-circle")
             else:
                 failed += 1
-                debug_me(f"Test notification failed to send to '{url}'.", "test_notifications")
-                update_log(instance, f"Test notification failed to send to '{url}'")
+                debug_me(f"Test notification failed to send to URL #{idx + 1}.", "test_notifications")
+                update_log(instance, f"Test notification failed to send to URL #{idx + 1}")
                 if len(urls) == 1:
                     update_status(instance, "Test notification failed to send", "danger", False, False, "x-circle")
             test_notification.clear_urls()

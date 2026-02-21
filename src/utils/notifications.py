@@ -83,15 +83,15 @@ def send_notification(instance: Instance, message: str) -> None:
         if len(globals.config.apprise_urls) > 0:
             notifier = NotifyService()
             notify_success = True
-            for url in globals.config.apprise_urls:
+            for idx, url in enumerate(globals.config.apprise_urls):
                 notifier.add_url(url)
                 url_success = notifier.send_notification("Artwork Uploader", message)
                 if url_success:
-                    debug_me(f"📢 Notification sent successfully for URL: {url}", "send_notification")
-                    update_log(instance, f"📢 Notification sent successfully for URL: {url}")
+                    debug_me(f"📢 Notification sent successfully for URL #{idx + 1}", "send_notification")
+                    update_log(instance, f"📢 Notification sent successfully for URL #{idx + 1}")
                 else:
-                    debug_me(f"⚠️ Notification failed to send for URL: {url}", "send_notification")
-                    update_log(instance, f"⚠️ Notification failed to send for URL: {url}")
+                    debug_me(f"⚠️ Notification failed to send for URL #{idx + 1}", "send_notification")
+                    update_log(instance, f"⚠️ Notification failed to send for URL #{idx + 1}")
                 notify_success = notify_success and url_success
                 notifier.clear_urls()
             if len(globals.config.apprise_urls) > 1:

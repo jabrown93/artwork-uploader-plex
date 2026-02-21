@@ -275,7 +275,8 @@ class ArtworkProcessor:
                 process_func = processor.process_tv_artwork
             elif media_type == "unavailable":
                 if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⚠️ {artwork['title']} {f"({artwork['year']})" if artwork.get('year') else ''} : {artwork['author']} | Not available on Plex.")
+                    year_suffix = f" ({artwork['year']})" if artwork.get('year') else ''
+                    callbacks.on_log_update(f"⚠️ {artwork['title']}{year_suffix} : {artwork['author']} | Not available on Plex.")
                     os.remove(artwork['path'])  # Remove the temporary file after processing
                     try:
                         os.rmdir(os.path.dirname(artwork['path']))  # Remove the temporary directory if empty

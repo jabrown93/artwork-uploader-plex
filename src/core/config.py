@@ -4,13 +4,11 @@ Application configuration management.
 
 import json
 import os
-from core import globals
 from typing import List, Dict, Any
 
 from core.constants import DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY, DEFAULT_IP_BINDING
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from logging_config import get_logger
-from utils.utils import get_host_path
 
 logger = get_logger(__name__)
 
@@ -101,12 +99,8 @@ class Config:
             self.movie_library = config.get("movie_library", [])
             self.mediux_filters = config.get("mediux_filters", [])
             self.tpdb_filters = config.get("tpdb_filters", [])
-            if globals.docker:
-                self.kometa_base = get_host_path("/assets")
-                self.temp_dir = get_host_path("/temp")
-            else:
-                self.kometa_base = config.get("kometa_base", "")
-                self.temp_dir = config.get("temp_dir", "")
+            self.kometa_base = config.get("kometa_base", "")
+            self.temp_dir = config.get("temp_dir", "")
             self.save_to_kometa = config.get("save_to_kometa", False)
             self.stage_assets = config.get("stage_assets", True)
             self.stage_specials = config.get("stage_specials", False)
@@ -162,12 +156,6 @@ class Config:
             "kometa_library_paths": {},
             "apprise_urls": []
         }
-
-        if globals.docker:
-            host_kometa_base = get_host_path("/assets")
-            config_json["kometa_base"] = host_kometa_base if host_kometa_base != "(not defined)" else ""
-            host_temp_dir = get_host_path("/temp")
-            config_json["temp_dir"] = host_temp_dir if host_temp_dir != "(not defined)" else ""
 
         # Create the config.json file if it doesn't exist
         if not os.path.isfile(self.path):

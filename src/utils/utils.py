@@ -169,7 +169,7 @@ def parse_url_and_options(line):
 
     # The first part should be a valid URL, raise exception otherwise
     url = parts[0].strip()
-    if not validators.url(url):
+    if not validators.url(url) and not url.endswith('.html'):
         raise InvalidUrl(url)
 
     # Initiate list of invalid flags for logging purposes
