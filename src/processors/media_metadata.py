@@ -2,8 +2,8 @@ import re
 from core.constants import (
     SEASON_COVER, SEASON_BACKDROP, SEASON_SPECIALS,
     MEDIA_TYPE_TV_SHOW, MEDIA_TYPE_COLLECTION,
-    FILTER_TITLE_CARD, FILTER_SEASON_COVER, FILTER_BACKGROUND
 )
+from core.enums import FilterType
 from utils.notifications import debug_me
 
 
@@ -62,21 +62,21 @@ def parse_title(title: str):
     if episode_match:
         season = int(episode_match.group('season'))
         episode = int(episode_match.group('episode'))
-        type = FILTER_TITLE_CARD
+        type = FilterType.TITLE_CARD.value
         base = re.split(r"\s-\sS\d+\s*E\d+.*", title, 1)[0].strip()
 
     season_match = re.match(season_pattern, title, re.IGNORECASE)
     if season_match:
         season = int(season_match.group('season'))
         episode = None
-        type = FILTER_SEASON_COVER
+        type = FilterType.SEASON_COVER.value
         base = re.split(r"\s-\sSeason\s\d+.*", title, 1)[0].strip()
 
     specials_match = re.match(specials_pattern, title, re.IGNORECASE)
     if specials_match:
         season = 0
         episode = None
-        type = FILTER_SEASON_COVER
+        type = FilterType.SEASON_COVER.value
         base = re.split(rf"\s-\s{SEASON_SPECIALS}.*", title, 1)[0].strip()
 
     if episode_match or season_match or specials_match:
@@ -116,7 +116,7 @@ def parse_title(title: str):
             "year": background_match.group('year'),
             "season": SEASON_BACKDROP,
             "episode": None,
-            "type": FILTER_BACKGROUND,
+            "type": FilterType.BACKGROUND.value,
             "author": None
         }
         debug_me(f"Matched '{title}' as either movie, TV show or collection background for '{artwork['title']} ({artwork['year']})'",
@@ -147,7 +147,7 @@ def parse_title(title: str):
             "title": title.removesuffix(" - Backdrop").strip(),
             "season": None,
             "episode": None,
-            "type": "collection_poster",
+            "type": FilterType.COLLECTION_POSTER.value,
             "author": None
         }
         debug_me(

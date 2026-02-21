@@ -95,8 +95,8 @@ class UploadProcessor:
         artwork_source = artwork["source"]
         description = f"{artwork["title"]} : {artwork["author"]}"
         filter_type = FilterType.COLLECTION_POSTER.value if artwork[
-            "type"] == "collection poster" else FilterType.BACKGROUND.value
-        artwork_type = "Poster" if artwork["type"] == "collection poster" else "Background"
+            "type"] == FilterType.COLLECTION_POSTER.value else FilterType.BACKGROUND.value
+        artwork_type = "Poster" if artwork["type"] == FilterType.COLLECTION_POSTER.value else "Background"
         artwork_id = artwork_type[0]
 
         if collection_items:
@@ -191,9 +191,9 @@ class UploadProcessor:
         artwork_source = artwork["source"]
         description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']}"
         filter_type = FilterType.MOVIE_POSTER.value if artwork.get(
-            "type") == "poster" else FilterType.BACKGROUND.value
+            "type") == FilterType.MOVIE_POSTER.value else FilterType.BACKGROUND.value
         artwork_type = "Poster" if artwork.get(
-            "type") == "poster" else "Background"
+            "type") == FilterType.MOVIE_POSTER.value else "Background"
         artwork_id = artwork_type[0]
 
         if movie_items:

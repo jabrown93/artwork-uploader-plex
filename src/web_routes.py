@@ -19,6 +19,7 @@ from processors.media_metadata import parse_title
 from models.instance import Instance
 from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB
 from core.config import Config
+from core.enums import FilterType
 from core.exceptions import InvalidUrl, InvalidFlag
 from core import globals
 import base64
@@ -1057,26 +1058,26 @@ def extract_and_list_zip(
                 if artwork['media'] == "TV Show":
                     if artwork['season'] is None:
                         artwork['season'] = "Cover"
-                        artwork['type'] = "show_cover"
+                        artwork['type'] = FilterType.SHOW_COVER.value
                     if artwork['season'] == "Cover" and check_image_orientation_func(artwork["path"]) == "landscape":
                         artwork['season'] = "Backdrop"
-                        artwork['type'] = "background"
+                        artwork['type'] = FilterType.BACKGROUND.value
                 if artwork['media'] == "Movie":
                     if check_image_orientation_func(artwork["path"]) == "landscape":
-                        artwork['type'] = "background"
+                        artwork['type'] = FilterType.BACKGROUND.value
                     else:
-                        artwork['type'] = "movie_poster"
+                        artwork['type'] = FilterType.MOVIE_POSTER.value
                 if artwork['media'] == "Collection":
                     if check_image_orientation_func(artwork["path"]) == "landscape":
-                        artwork['type'] = "background"
+                        artwork['type'] = FilterType.BACKGROUND.value
                 if artwork['media'] == "unavailable":
                     if check_image_orientation_func(artwork["path"]) == "landscape":
-                        artwork['type'] = "background"
-                    if artwork['type'] == "season_cover":
+                        artwork['type'] = FilterType.BACKGROUND.value
+                    if artwork['type'] == FilterType.SEASON_COVER.value:
                         artwork['media'] = "TV Show"
                     else:
-                        # If we get to this point, there is no way to determine if it's a TV show or Movie, so default to poster
-                        # However this won't pass any filters (because it's either "movie_poster" or "show_cover"), so this artwork won't be processed further
+                        # Intentional fallback: "poster" doesn't match any FilterType, so this
+                        # unclassifiable artwork won't pass filters and won't be processed further
                         artwork['type'] = "poster"
 
                 # Check for filters and exclusions

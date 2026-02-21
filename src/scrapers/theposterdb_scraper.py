@@ -10,7 +10,7 @@ from utils.notifications import debug_me
 from models.options import Options
 from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 from core.exceptions import ScraperException
-from core.enums import MediaType, ScraperSource
+from core.enums import FilterType, MediaType, ScraperSource
 from core.config import Config
 from core.constants import TPDB_API_ASSETS_URL, TPDB_USER_UPLOADS_PER_PAGE, BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD, \
     TPBD_SET_BASE_PATH, TPBD_USER_BASE_PATH
@@ -192,9 +192,9 @@ class ThePosterDBScraper:
                 title, season, year = media_metadata.parse_show(title_p)
 
                 if season == "Cover":
-                    file_type = "show_cover"
+                    file_type = FilterType.SHOW_COVER.value
                 else:
-                    file_type = "season_cover"
+                    file_type = FilterType.SEASON_COVER.value
 
                 if (self.options.has_no_filters() and file_type in self.config.tpdb_filters) or self.options.has_filter(file_type):
                     if not self.options.is_excluded(poster_id, season if isinstance(season, int) else None, None):
@@ -231,7 +231,7 @@ class ThePosterDBScraper:
                     )
             elif media_type == MediaType.MOVIE.value:
                 title, year = media_metadata.parse_movie(title_p)
-                if (self.options.has_no_filters() and "movie_poster" in self.config.tpdb_filters) or self.options.has_filter("movie_poster"):
+                if (self.options.has_no_filters() and FilterType.MOVIE_POSTER.value in self.config.tpdb_filters) or self.options.has_filter(FilterType.MOVIE_POSTER.value):
                     if not self.options.is_excluded(poster_id):
                         debug_me(f"{i+1}. ✅ Including movie poster for '{title} ({year})'.", "ThePosterDBScraper/get_posters")
                         movie_artwork = {
@@ -242,7 +242,7 @@ class ThePosterDBScraper:
                             "year": year,
                             "source": ScraperSource.THEPOSTERDB.value,
                             "id": poster_id,
-                            "type": "movie_poster"
+                            "type": FilterType.MOVIE_POSTER.value
                         }
                         self.movie_artwork.append(movie_artwork)
                     else:
@@ -252,7 +252,7 @@ class ThePosterDBScraper:
                     self.filtered += 1
                     debug_me(f"{i+1}. ⏩ Skipping movie poster for '{title} ({year})' based on filters.", "ThePosterDBScraper/get_posters")
             elif media_type == MediaType.COLLECTION.value:
-                if (self.options.has_no_filters() and "collection_poster" in self.config.tpdb_filters) or self.options.has_filter("collection_poster"):
+                if (self.options.has_no_filters() and FilterType.COLLECTION_POSTER.value in self.config.tpdb_filters) or self.options.has_filter(FilterType.COLLECTION_POSTER.value):
                     if not self.options.is_excluded(poster_id):
                         debug_me(f"{i+1}. ✅ Including collection poster for '{title_p}'.", "ThePosterDBScraper/get_posters")
                         collection_artwork = {
@@ -261,7 +261,7 @@ class ThePosterDBScraper:
                             "url": poster_url,
                             "source": ScraperSource.THEPOSTERDB.value,
                             "id": poster_id,
-                            "type": "collection_poster"
+                            "type": FilterType.COLLECTION_POSTER.value
                         }
                         self.collection_artwork.append(collection_artwork)
                     else:
