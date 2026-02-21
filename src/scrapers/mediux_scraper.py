@@ -29,8 +29,7 @@ class MediuxScraper:
         self.title: Optional[str] = None
         self.author: Optional[str] = None
         self.options: Options = Options()
-        self.config: Config = Config()
-        self.config.load()
+        self.config: Config = globals.config
         self.exclusions: int = 0
         self.filtered: int = 0
         self.skipped: int = 0
