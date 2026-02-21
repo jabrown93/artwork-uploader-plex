@@ -2,7 +2,7 @@ APP=media-artwork-uploader
 REGISTRY=jabrown
 TAG?=$(shell git describe --tags --always --dirty)
 PLATFORMS=linux/amd64,linux/arm64
-CURRENT_VERSION=$(shell python3 -c "import re; print(re.search(r'__version__ = [\"\\x27]([^\"\\x27]+)', open('src/core/__version__.py').read()).group(1))")
+CURRENT_VERSION=$(shell python3 -c "import re, sys; path = 'src/core/__version__.py'; try: data = open(path).read(); except FileNotFoundError: sys.stderr.write(f'Error: {path} not found\n'); sys.exit(1); m = re.search(r'__version__ = [\"\\x27]([^\"\\x27]+)', data); if not m: sys.stderr.write(f'Error: __version__ not found in {path}\n'); sys.exit(1); print(m.group(1))")
 
 .PHONY: docker-build docker-release release release-patch release-minor release-major help
 
