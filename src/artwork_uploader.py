@@ -22,7 +22,8 @@ from core.constants import (
     UPDATE_CHECK_INTERVAL,
     MIN_PYTHON_MAJOR,
     MIN_PYTHON_MINOR,
-    TPBD_USER_BASE_PATH
+    TPBD_USER_BASE_PATH,
+    RUNNING_IN_DOCKER
 )
 from core.enums import InstanceMode
 from core.exceptions import ConfigLoadError, PlexConnectorException, ScraperException, InvalidUrl, InvalidFlag
@@ -84,8 +85,6 @@ except ImportError as e:
     {'=' * 70}
 """)
     sys.exit(1)
-
-globals.docker = os.getenv("RUNNING_IN_DOCKER") == "1"
 
 # ! Interactive CLI mode flag
 # Set to False when building the executable with PyInstaller for it launches the web UI by default
@@ -852,7 +851,7 @@ if __name__ == "__main__":
         if not interactive_cli:
 
             update_log(cli_instance, f"🚀 Starting Artwork Uploader {CURRENT_VERSION} in web mode")
-            if globals.docker:
+            if RUNNING_IN_DOCKER:
                 update_log(cli_instance, "🐳 Running in Docker environment", force_print=True)
 
             # Setup scheduler only in the main process to avoid duplication

@@ -54,7 +54,6 @@ document.addEventListener("DOMContentLoaded", function () {
 // ==================================================
 
 function detectEnvironment() {
-    socket.emit("detect_docker", { instance_id: instanceId });
     socket.emit("debug_mode", { instance_id: instanceId, action: "get" });
 }
 
@@ -65,32 +64,6 @@ socket.on("debug_mode", function(data) {
     }
 });
 
-function toggleDockerWarning() {
-    socket.emit("detect_docker", { instance_id: instanceId });
-}
-socket.on("docker_detected", (data) => {
-    const dockerWarning = document.getElementById("docker_warning");
-    const kometaBase = document.getElementById("kometa_base");
-    const tempDir = document.getElementById("temp_dir");
-    const saveToKometaCheckbox = document.getElementById("save_to_kometa");
-    const optionTemp = document.getElementById("option-temp");
-    const uploadOptionTemp = document.getElementById("upload-option-temp");
-
-    if (validResponse(data)) {
-        if (data.docker == "true") {
-            dockerWarning.style.display = "block";
-            // Populate fields from config values (editable, not locked)
-            if (data.kometa_base) {
-                kometaBase.value = data.kometa_base;
-            }
-            if (data.temp_dir) {
-                tempDir.value = data.temp_dir;
-            }
-        } else {
-            dockerWarning.style.display = "none";
-        }
-    }
-})
 
 // Test connection to Plex server
 function testPlexConnect() {

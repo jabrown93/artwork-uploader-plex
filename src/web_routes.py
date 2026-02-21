@@ -564,17 +564,6 @@ def setup_socket_handlers(
                 update_status(instance, "All test notifications failed to send", "danger", False, False, "x-circle")
         notify_web(instance, "element_disable", {"element": ["test_notif_btn"], "mode": False})
 
-    @globals.web_socket.on("detect_docker")
-    def docker_detection(data):
-        """Detects whether app is running in docker and informs frontend."""
-        instance = Instance(data.get("instance_id"), "web")
-        if globals.docker:
-            logger.info("Docker environment detected")
-            debug_me(f"Docker detected, Kometa asset path: '{config.kometa_base}', temp dir: '{config.temp_dir}'", "docker_detection")
-            notify_web(instance, "docker_detected", {"docker": "true", "kometa_base": config.kometa_base, "temp_dir": config.temp_dir})
-        else:
-            notify_web(instance, "docker_detected", {"docker": "false"})
-
     @globals.web_socket.on("set_password")
     def set_password_web(data):
         """Set a new password for authentication."""
