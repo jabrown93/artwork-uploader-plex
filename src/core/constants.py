@@ -34,6 +34,9 @@ DEFAULT_LOGS_DIR = "/logs" if RUNNING_IN_DOCKER else "logs"
 DEFAULT_TV_LIBRARY = ["TV Shows"]
 DEFAULT_MOVIE_LIBRARY = ["Movies"]
 
+# ZIP title matching - max words to strip from end when doing progressive title shortening
+DEFAULT_ZIP_TITLE_STRIP_WORDS = 3
+
 # Filter types - valid artwork types that can be filtered
 FILTER_TITLE_CARD = "title_card"
 FILTER_BACKGROUND = "background"

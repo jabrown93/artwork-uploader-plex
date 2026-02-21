@@ -1068,7 +1068,8 @@ def extract_and_list_zip(
                         # Fallback: try progressively shorter titles to handle subtitle mismatches
                         # (e.g. missing apostrophes: "Worlds End" vs "World's End")
                         words = re.sub(r'[_\-]', ' ', original_title).split()
-                        min_words = max(2, len(words) - 3)
+                        max_strip = globals.config.zip_title_strip_words if globals.config else 3
+                        min_words = max(2, len(words) - max_strip)
                         for end in range(len(words) - 1, min_words - 1, -1):
                             short_title = ' '.join(words[:end])
                             media_type, tmdb_id, title, year = globals.plex.movie_or_show(
