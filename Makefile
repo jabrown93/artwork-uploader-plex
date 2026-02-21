@@ -30,14 +30,16 @@ ifndef BUMP
 endif
 	@echo "Current version: $(CURRENT_VERSION)"
 	$(eval NEW_VERSION := $(shell python3 -c "\
-		v = '$(CURRENT_VERSION)'.split('.'); \
+		import re, sys; \
+		m = re.match(r'^(\\d+)\\.(\\d+)\\.(\\d+)', '$(CURRENT_VERSION)'); \
+		sys.exit('Error: Cannot parse version: $(CURRENT_VERSION)') if not m else None; \
+		parts = [int(m.group(1)), int(m.group(2)), int(m.group(3))]; \
 		bump = '$(BUMP)'; \
-		parts = list(map(int, v[:3])); \
 		idx = {'major': 0, 'minor': 1, 'patch': 2}.get(bump); \
-		assert idx is not None, f'Invalid bump type: {bump}'; \
+		sys.exit(f'Error: Invalid bump type: {bump}') if idx is None else None; \
 		parts[idx] += 1; \
 		parts[idx+1:] = [0] * (2 - idx); \
-		print('.'.join(map(str, parts)))"))
+		print('.'.join(map(str, parts)))))
 	@echo "New version:     $(NEW_VERSION)"
 	@echo ""
 	@printf "Create and push tag v$(NEW_VERSION)? [y/N] " ; read confirm && [ "$$confirm" = "y" ]
