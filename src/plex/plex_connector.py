@@ -260,6 +260,7 @@ class PlexConnector:
                     debug_me(
                         f"Title search failed in '{libraries[i].title}': {e}",
                         "PlexConnector/find_in_library")
+                    pass
         if items:
             return items, libs
         return None, None
