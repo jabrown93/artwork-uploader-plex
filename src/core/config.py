@@ -100,9 +100,15 @@ class Config:
             self.mediux_filters = config.get("mediux_filters", [])
             self.tpdb_filters = config.get("tpdb_filters", [])
             loaded_kometa_base = config.get("kometa_base", None)
-            self.kometa_base = loaded_kometa_base if loaded_kometa_base is not None else ("/assets" if RUNNING_IN_DOCKER else "")
+            if not loaded_kometa_base or loaded_kometa_base.strip() == "":
+                self.kometa_base = "/assets" if RUNNING_IN_DOCKER else ""
+            else:
+                self.kometa_base = loaded_kometa_base
             loaded_temp_dir = config.get("temp_dir", None)
-            self.temp_dir = loaded_temp_dir if loaded_temp_dir is not None else ("/temp" if RUNNING_IN_DOCKER else "")
+            if not loaded_temp_dir or loaded_temp_dir.strip() == "":
+                self.temp_dir = "/temp" if RUNNING_IN_DOCKER else ""
+            else:
+                self.temp_dir = loaded_temp_dir
             self.save_to_kometa = config.get("save_to_kometa", False)
             self.stage_assets = config.get("stage_assets", True)
             self.stage_specials = config.get("stage_specials", False)

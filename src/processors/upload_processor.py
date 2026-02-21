@@ -398,5 +398,11 @@ class UploadProcessor:
         """Constructs the destination directory path for Kometa assets."""
         config_attr = "temp_dir" if self.options.temp else "kometa_base"
         base_dir = getattr(globals.config, config_attr, "")
+        if not base_dir:
+            mode = "temporary" if self.options.temp else "Kometa base"
+            raise ValueError(
+                f"{mode} directory is not configured. "
+                f"Please set '{config_attr}' in the application configuration before saving assets to Kometa."
+            )
         library_dir = globals.config.resolve_library_directory(library)
         return os.path.join(base_dir, library_dir, asset_folder)
