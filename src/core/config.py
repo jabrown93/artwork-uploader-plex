@@ -6,7 +6,10 @@ import json
 import os
 from typing import List, Dict, Any
 
-from core.constants import DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY, DEFAULT_IP_BINDING, RUNNING_IN_DOCKER
+from core.constants import (
+    DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY,
+    DEFAULT_IP_BINDING, RUNNING_IN_DOCKER, DEFAULT_ZIP_TITLE_STRIP_WORDS
+)
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from logging_config import get_logger
 
@@ -43,6 +46,7 @@ class Config:
         debug: Enable debug logging
         kometa_library_paths: Dictionary mapping Plex library names to Kometa directory names
         apprise_urls: List of Apprise notification URLs
+        zip_title_strip_words: Max words to strip from end of ZIP filename titles for progressive title matching
     """
 
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH) -> None:
@@ -73,6 +77,7 @@ class Config:
         self.debug: bool = False
         self.kometa_library_paths: Dict[str, str] = {}
         self.apprise_urls: List[str] = []
+        self.zip_title_strip_words: int = DEFAULT_ZIP_TITLE_STRIP_WORDS
 
     def load(self) -> None:
         """Load the configuration from the JSON file."""
@@ -126,6 +131,16 @@ class Config:
             self.debug = config.get("debug", False)
             self.kometa_library_paths = config.get("kometa_library_paths", {})
             self.apprise_urls = config.get("apprise_urls", [])
+            raw_zip_title_strip_words = config.get(
+                "zip_title_strip_words", DEFAULT_ZIP_TITLE_STRIP_WORDS
+            )
+            try:
+                zip_title_strip_words = int(raw_zip_title_strip_words)
+            except (TypeError, ValueError):
+                zip_title_strip_words = DEFAULT_ZIP_TITLE_STRIP_WORDS
+            if zip_title_strip_words < 0:
+                zip_title_strip_words = 0
+            self.zip_title_strip_words = zip_title_strip_words
 
         except Exception as e:
             raise ConfigLoadError(
@@ -219,7 +234,8 @@ class Config:
             "ip_binding": self.ip_binding,
             "debug": self.debug,
             "kometa_library_paths": self.kometa_library_paths,
-            "apprise_urls": self.apprise_urls
+            "apprise_urls": self.apprise_urls,
+            "zip_title_strip_words": self.zip_title_strip_words
         }
 
         try:
