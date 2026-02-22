@@ -6,7 +6,10 @@ import json
 import os
 from typing import List, Dict, Any
 
-from core.constants import DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY, DEFAULT_IP_BINDING, RUNNING_IN_DOCKER, DEFAULT_ZIP_TITLE_STRIP_WORDS
+from core.constants import (
+    DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY,
+    DEFAULT_IP_BINDING, RUNNING_IN_DOCKER, DEFAULT_ZIP_TITLE_STRIP_WORDS
+)
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from logging_config import get_logger
 
