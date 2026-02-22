@@ -1052,7 +1052,6 @@ def extract_and_list_zip(
                         lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
                         media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                             original_title, lookup_year)
-                        has_colon_sub = bool(re.search(r'_(?=\s)|\s-\s', original_title))
                         if media_type is None:
                             # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
                             artwork["title"] = re.sub(r'_(?=\s)', ':', original_title)
@@ -1071,9 +1070,9 @@ def extract_and_list_zip(
                                 artwork["title"] = folded
                                 media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                                     artwork.get('title'), lookup_year)
-                        if media_type is None and lookup_year is not None and has_colon_sub:
-                            # Fallback: try progressively shorter titles to handle subtitle mismatches
-                            # (e.g. missing apostrophes: "Worlds End" vs "World's End")
+                        if media_type is None and lookup_year is not None:
+                            # Fallback: try progressively shorter titles for any remaining mismatch
+                            # (e.g. stripped subtitles or missing apostrophes: "Worlds End" vs "World's End")
                             words = re.sub(r'_(?=\s)|\s-\s', ' ', original_title).split()
                             max_strip = globals.config.zip_title_strip_words if globals.config else 3
                             min_words = max(2, len(words) - max_strip)
