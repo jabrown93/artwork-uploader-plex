@@ -131,7 +131,16 @@ class Config:
             self.debug = config.get("debug", False)
             self.kometa_library_paths = config.get("kometa_library_paths", {})
             self.apprise_urls = config.get("apprise_urls", [])
-            self.zip_title_strip_words = config.get("zip_title_strip_words", DEFAULT_ZIP_TITLE_STRIP_WORDS)
+            raw_zip_title_strip_words = config.get(
+                "zip_title_strip_words", DEFAULT_ZIP_TITLE_STRIP_WORDS
+            )
+            try:
+                zip_title_strip_words = int(raw_zip_title_strip_words)
+            except (TypeError, ValueError):
+                zip_title_strip_words = DEFAULT_ZIP_TITLE_STRIP_WORDS
+            if zip_title_strip_words < 0:
+                zip_title_strip_words = 0
+            self.zip_title_strip_words = zip_title_strip_words
 
         except Exception as e:
             raise ConfigLoadError(

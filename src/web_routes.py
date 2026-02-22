@@ -1062,11 +1062,12 @@ def extract_and_list_zip(
                         if media_type is None:
                             # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
                             # ASCII-fold the title so Plex can match against the accented original
+                            candidate_title = artwork.get('title') or original_title
                             folded = ''.join(
-                                c for c in unicodedata.normalize('NFKD', original_title)
+                                c for c in unicodedata.normalize('NFKD', candidate_title)
                                 if not unicodedata.combining(c)
                             )
-                            if folded != artwork.get('title'):
+                            if folded != candidate_title:
                                 artwork["title"] = folded
                                 media_type, tmdb_id, title, year = globals.plex.movie_or_show(
                                     artwork.get('title'), lookup_year)
