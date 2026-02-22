@@ -1045,43 +1045,49 @@ def extract_and_list_zip(
                 # Determine media type via Plex lookup if not a collection
                 if artwork["media"] != "Collection":
                     original_title = artwork.get('title')
-                    media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                        artwork.get('title'), artwork.get('year'))
-                    if media_type is None:
-                        # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
-                        artwork["title"] = re.sub(r'_(?=\s)', ':', original_title)
-                        artwork["title"] = re.sub(r'-', '', artwork["title"]).replace('...', '').strip()
+                    if not original_title:
+                        artwork["media"] = "unavailable"
+                        artwork["tmdb_id"] = None
+                    else:
+                        lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
                         media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                            artwork.get('title'), artwork.get('year'))
-                    if media_type is None:
-                        # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
-                        # ASCII-fold the title so Plex can match against the accented original
-                        folded = ''.join(
-                            c for c in unicodedata.normalize('NFKD', original_title)
-                            if not unicodedata.combining(c)
-                        )
-                        if folded != artwork.get('title'):
-                            artwork["title"] = folded
+                            original_title, lookup_year)
+                        has_colon_sub = bool(re.search(r'_(?=\s)|\s-\s', original_title))
+                        if media_type is None:
+                            # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
+                            artwork["title"] = re.sub(r'_(?=\s)', ':', original_title)
+                            artwork["title"] = re.sub(r'\s-\s', ': ', artwork["title"]).replace('...', '').strip()
                             media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                                artwork.get('title'), artwork.get('year'))
-                    if media_type is None and artwork.get('year') is not None:
-                        # Fallback: try progressively shorter titles to handle subtitle mismatches
-                        # (e.g. missing apostrophes: "Worlds End" vs "World's End")
-                        words = re.sub(r'[_\-]', ' ', original_title).split()
-                        max_strip = globals.config.zip_title_strip_words if globals.config else 3
-                        min_words = max(2, len(words) - max_strip)
-                        for end in range(len(words) - 1, min_words - 1, -1):
-                            short_title = ' '.join(words[:end])
-                            media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                                short_title, artwork.get('year'))
-                            if media_type is not None:
-                                artwork["title"] = short_title
-                                break
-                    artwork["media"] = media_type if media_type else "unavailable"
-                    artwork["title"] = title if title and title != artwork.get('title') else artwork.get('title')
-                    artwork["tmdb_id"] = tmdb_id
-                    if artwork.get('year') is None and year is not None:
-                        artwork['year'] = year
+                                artwork.get('title'), lookup_year)
+                        if media_type is None:
+                            # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
+                            # ASCII-fold the title so Plex can match against the accented original
+                            folded = ''.join(
+                                c for c in unicodedata.normalize('NFKD', original_title)
+                                if not unicodedata.combining(c)
+                            )
+                            if folded != artwork.get('title'):
+                                artwork["title"] = folded
+                                media_type, tmdb_id, title, year = globals.plex.movie_or_show(
+                                    artwork.get('title'), lookup_year)
+                        if media_type is None and lookup_year is not None and has_colon_sub:
+                            # Fallback: try progressively shorter titles to handle subtitle mismatches
+                            # (e.g. missing apostrophes: "Worlds End" vs "World's End")
+                            words = re.sub(r'_(?=\s)|\s-\s', ' ', original_title).split()
+                            max_strip = globals.config.zip_title_strip_words if globals.config else 3
+                            min_words = max(2, len(words) - max_strip)
+                            for end in range(len(words) - 1, min_words - 1, -1):
+                                short_title = ' '.join(words[:end])
+                                media_type, tmdb_id, title, year = globals.plex.movie_or_show(
+                                    short_title, lookup_year)
+                                if media_type is not None:
+                                    artwork["title"] = short_title
+                                    break
+                        artwork["media"] = media_type if media_type else "unavailable"
+                        artwork["title"] = title if title and title != artwork.get('title') else artwork.get('title')
+                        artwork["tmdb_id"] = tmdb_id
+                        if artwork.get('year') is None and year is not None:
+                            artwork['year'] = year
                 if artwork['media'] == "TV Show":
                     if artwork['season'] is None:
                         artwork['season'] = "Cover"
