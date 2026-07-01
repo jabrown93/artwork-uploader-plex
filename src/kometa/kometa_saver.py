@@ -61,8 +61,11 @@ class KometaSaver:
         }
 
         replaced_file: bool = False
+        existing_file: Optional[str] = None
 
-        # Check if an asset already exists for this item, skip if so (unless force is specified, in which case delete existing asset first)
+        # Check if an asset already exists for this item, skip if so (unless force is specified). The existing
+        # asset is only removed AFTER the replacement has been downloaded successfully (see os.replace below) so a
+        # failed download can never destroy the user's current artwork.
         try:
             for check_ext in IMAGE_EXTENSIONS:
                 existing_file = os.path.join(
@@ -70,8 +73,8 @@ class KometaSaver:
                 if os.path.exists(existing_file) and not self.options.force:
                     return f"⏩ {self.description} | {self.artwork_type} skipped (already exists) for {self.library}"
                 elif os.path.exists(existing_file) and self.options.force:
-                    os.remove(existing_file)
                     replaced_file = True
+                    break
         except OSError as e:
             return f"❌ {self.description} | failed to save {self.artwork_type} asset: {e}"
 
@@ -104,16 +107,31 @@ class KometaSaver:
             content_type = r.headers.get('Content-Type', '')
             ext = mimetypes.guess_extension(content_type.split(';')[0])
             self.dest_file_ext = ext if ext is not None else self.dest_file_ext
+        except requests.exceptions.Timeout as e:
+            debug_me(f"Downloading asset from {url} timed out (5 seconds): {e}",
+                     "KometaSaver/save_to_kometa")
+            return f"❌ {self.description} | Error saving {self.artwork_type}: asset download timed out (5 seconds)"
+        except requests.exceptions.ConnectionError as e:
+            debug_me(f"Connection error: {e}", "KometaSaver/save_to_kometa")
+            return f"❌ {self.description} | Error saving {self.artwork_type}: could not connect to server"
+        except requests.exceptions.HTTPError:
+            if r.status_code == 429:
+                return f"❌ {self.description} | Error saving {self.artwork_type}: too many requests (rate-limited)"
+            return f"❌ {self.description} | Error saving {self.artwork_type}: HTTP error {r.status_code}"
         except Exception as e:
             return f"❌ {self.description} | Error saving {self.artwork_type}: Error fetching URL: {e}"
 
         dest_file = os.path.join(
             self.dest_dir, f"{self.dest_file_name}{self.dest_file_ext}")
+        temp_file = f"{dest_file}.tmp"
         try:
             os.makedirs(self.dest_dir, exist_ok=True)
-            with open(dest_file, 'wb') as f:
+            with open(temp_file, 'wb') as f:
                 for chunk in r.iter_content(1024):
                     f.write(chunk)
+            if replaced_file and existing_file != dest_file:
+                os.remove(existing_file)
+            os.replace(temp_file, dest_file)
             if replaced_file:
                 return f"♻️ {self.description} | {self.artwork_type} replaced at '{dest_file}' in {self.library}"
             else:
