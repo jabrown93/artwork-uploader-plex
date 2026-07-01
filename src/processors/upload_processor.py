@@ -182,8 +182,16 @@ class UploadProcessor:
             debug_me(
                 f"Fetching TMDb ID from '{poster_page_url}'", "UploadProcessor/process_movie_artwork")
             poster_page_soup = soup_utils.cook_soup(poster_page_url)
-            artwork["tmdb_id"] = int(poster_page_soup.find(
-                'div', {"data-media-id": True})['data-media-id'])
+            try:
+                artwork["tmdb_id"] = int(poster_page_soup.find(
+                    'div', {"data-media-id": True})['data-media-id'])
+            except (KeyError, TypeError, ValueError) as e:
+                debug_me(f"Failed to extract TMDb ID from poster page, falling back to Plex search. Error was: {e}",
+                         "UploadProcessor/process_movie_artwork")
+                _, artwork["tmdb_id"], _, _ = self.plex.movie_or_show(
+                    artwork.get("title"), artwork.get("year"))
+                debug_me(f"Found TMDb ID '{artwork.get('tmdb_id')}' for '{artwork.get('title')}' using Plex search.",
+                         "UploadProcessor/process_movie_artwork")
 
         movie_items, libraries = self.plex.find_in_library("movie", artwork)
 
@@ -276,8 +284,16 @@ class UploadProcessor:
             debug_me(
                 f"Fetching TMDb ID from {poster_page_url}", "UploadProcessor/process_movie_artwork")
             poster_page_soup = soup_utils.cook_soup(poster_page_url)
-            artwork["tmdb_id"] = int(poster_page_soup.find(
-                'div', {"data-media-id": True})['data-media-id'])
+            try:
+                artwork["tmdb_id"] = int(poster_page_soup.find(
+                    'div', {"data-media-id": True})['data-media-id'])
+            except (KeyError, TypeError, ValueError) as e:
+                debug_me(f"Failed to extract TMDb ID from poster page, falling back to Plex search. Error was: {e}",
+                         "UploadProcessor/process_tv_artwork")
+                _, artwork["tmdb_id"], _, _ = self.plex.movie_or_show(
+                    artwork.get("title"), artwork.get("year"))
+                debug_me(f"Found TMDb ID '{artwork.get('tmdb_id')}' for '{artwork.get('title')}' using Plex search.",
+                         "UploadProcessor/process_tv_artwork")
 
         tv_show_items, libraries = self.plex.find_in_library("tv", artwork)
 
