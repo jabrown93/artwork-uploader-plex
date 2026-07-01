@@ -198,11 +198,17 @@ class UploadProcessor:
         results = []
         artwork_source = artwork["source"]
         description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']}"
-        filter_type = FilterType.MOVIE_POSTER.value if artwork.get(
-            "type") == FilterType.MOVIE_POSTER.value else FilterType.BACKGROUND.value
-        artwork_type = "Poster" if artwork.get(
-            "type") == FilterType.MOVIE_POSTER.value else "Background"
-        artwork_id = artwork_type[0]
+        if artwork.get("type") == FilterType.MOVIE_POSTER.value:
+            filter_type = FilterType.MOVIE_POSTER.value
+            artwork_type = "Poster"
+        elif artwork.get("type") == FilterType.SQUARE_ART.value:
+            filter_type = FilterType.SQUARE_ART.value
+            artwork_type = "Square art"
+        else:
+            filter_type = FilterType.BACKGROUND.value
+            artwork_type = "Background"
+        artwork_id = "SA" if artwork.get(
+            "type") == FilterType.SQUARE_ART.value else artwork_type[0]
 
         if movie_items:
             debug_me(f"Found TMDb ID '{artwork.get('tmdb_id')}' in {len(libraries)} libraries.",
@@ -225,7 +231,8 @@ class UploadProcessor:
                             saver.dest_dir = dest_dir
                             debug_me(f"Destination directory is {saver.dest_dir}",
                                      "UploadProcessor/process_movie_artwork")
-                            saver.dest_file_name = artwork_type.lower()
+                            saver.dest_file_name = "square" if artwork.get(
+                                "type") == FilterType.SQUARE_ART.value else artwork_type.lower()
                             saver.dest_file_ext = ".jpg"
                             saver.set_description(desc)
                             saver.set_options(self.options)
@@ -271,7 +278,7 @@ class UploadProcessor:
             description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']} : {season}, Episode {artwork['episode']:02}"
         elif (artwork['episode'] is None or artwork['episode'] == EPISODE_COVER) and is_numeric(artwork['season']):
             description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']} : {season}"
-        elif artwork['season'] is None or artwork["season"] == SEASON_COVER or artwork["season"] == SEASON_BACKDROP:
+        elif artwork['season'] is None or artwork["season"] == SEASON_COVER or artwork["season"] == SEASON_BACKDROP or artwork["season"] == "SquareArt":
             description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']}"
 
         artwork["year"] = self.options.year if self.options.year else artwork["year"]
@@ -324,6 +331,12 @@ class UploadProcessor:
                     artwork_type = "Background"
                     file_name = "background"
                     filter_type = FilterType.BACKGROUND.value
+                elif artwork["season"] == "SquareArt":
+                    upload_target = tv_show
+                    artwork_id = "SA"
+                    artwork_type = "Square art"
+                    file_name = "square"
+                    filter_type = FilterType.SQUARE_ART.value
                 elif artwork["season"] >= 0:
                     if artwork["episode"] == EPISODE_COVER or artwork["episode"] is None:
                         # Season cover artwork

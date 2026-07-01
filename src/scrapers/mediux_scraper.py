@@ -374,6 +374,14 @@ class MediuxScraper:
                             f"Skipping poster - missing show_id and season_id", "MediuxScraper/_process_set")
                         continue
 
+                elif data["fileType"] == FileType.SQUARE_ART.value:
+                    # Square art (e.g. soundtrack / OST) applied to the show itself
+                    debug_me(f"Square art detected for set id: {data.get('set_id', {}).get('id', 'unknown')}",
+                             "MediuxScraper/_process_set")
+                    season = "SquareArt"
+                    episode = None
+                    file_type = FilterType.SQUARE_ART.value
+
                 else:
                     # Unknown file type or structure, skip
                     debug_me(f"Skipping unknown TV show file type: {data.get('fileType')}",
@@ -406,6 +414,19 @@ class MediuxScraper:
                         # This is a collection poster
                         file_type = FilterType.COLLECTION_POSTER.value
                         title = set_data["collection"]["collection_name"]
+                    elif data["fileType"] == FileType.SQUARE_ART.value:
+                        # Square art (e.g. movie soundtrack / OST)
+                        if data["movie_id_ost"]:
+                            movie_id = data["movie_id_ost"]["id"]
+                            if set_data.get("collection") is not None:
+                                movies = set_data["collection"]["movies"]
+                                movie_data = [
+                                    movie for movie in movies if movie["id"] == movie_id][0]
+                            else:
+                                movie_data = set_data["movie"]
+                            title = movie_data["title"]
+                            year = int(movie_data["release_date"][:4])
+                            file_type = FilterType.SQUARE_ART.value
                     elif data["fileType"] == FileType.BACKDROP.value:
                         # This is a movie background
                         if data["movie_id_backdrop"]:
