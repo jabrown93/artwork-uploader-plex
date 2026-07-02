@@ -1,10 +1,10 @@
 import os
-from typing import Any
+from typing import Any, Union
 
 from core import globals
 from core.config import Config
 from core.constants import (
-    SEASON_COVER, SEASON_BACKDROP, SEASON_SPECIALS,
+    SEASON_COVER, SEASON_BACKDROP, SEASON_SPECIALS, SEASON_SQUARE_ART,
     EPISODE_COVER, TPDB_BASE_URL
 )
 from core.enums import FilterType, ScraperSource
@@ -170,28 +170,29 @@ class UploadProcessor:
                 f'{description} | Collection not available on Plex')
         return results
 
+    def _fetch_tpdb_tmdb_id(self, artwork: Union[MovieArtwork, TVArtwork], context: str) -> None:
+        # Since the TPDb scraper doesn't fetch the TMDb ID up front for each poster, we need to get it here
+        if artwork.get("tmdb_id") or artwork.get("source") != ScraperSource.THEPOSTERDB.value or artwork.get(
+                "id") == "Upload":
+            return
+        poster_id = artwork.get("id", None)
+        poster_page_url = f"{TPDB_BASE_URL}/poster/{poster_id}"
+        debug_me(f"Fetching TMDb ID from '{poster_page_url}'", context)
+        poster_page_soup = soup_utils.cook_soup(poster_page_url)
+        try:
+            artwork["tmdb_id"] = int(poster_page_soup.find(
+                'div', {"data-media-id": True})['data-media-id'])
+        except (KeyError, TypeError, ValueError) as e:
+            # find_in_library falls back to a title/year search when tmdb_id is unset
+            debug_me(f"Failed to extract TMDb ID from poster page, relying on title/year lookup. Error was: {e}",
+                     context)
+            artwork["tmdb_id"] = None
+
     def process_movie_artwork(self, artwork: MovieArtwork) -> list[Any]:
 
         artwork["year"] = self.options.year if self.options.year else artwork["year"]
 
-        # Since the TBDb scraper doesn't fetch the TMDb ID up front for each poster, we need to get it here
-        if not artwork.get("tmdb_id") and artwork.get("source") == ScraperSource.THEPOSTERDB.value and artwork.get(
-                "id") != "Upload":
-            poster_id = artwork.get("id", None)
-            poster_page_url = f"{TPDB_BASE_URL}/poster/{poster_id}"
-            debug_me(
-                f"Fetching TMDb ID from '{poster_page_url}'", "UploadProcessor/process_movie_artwork")
-            poster_page_soup = soup_utils.cook_soup(poster_page_url)
-            try:
-                artwork["tmdb_id"] = int(poster_page_soup.find(
-                    'div', {"data-media-id": True})['data-media-id'])
-            except (KeyError, TypeError, ValueError) as e:
-                debug_me(f"Failed to extract TMDb ID from poster page, falling back to Plex search. Error was: {e}",
-                         "UploadProcessor/process_movie_artwork")
-                _, artwork["tmdb_id"], _, _ = self.plex.movie_or_show(
-                    artwork.get("title"), artwork.get("year"))
-                debug_me(f"Found TMDb ID '{artwork.get('tmdb_id')}' for '{artwork.get('title')}' using Plex search.",
-                         "UploadProcessor/process_movie_artwork")
+        self._fetch_tpdb_tmdb_id(artwork, "UploadProcessor/process_movie_artwork")
 
         movie_items, libraries = self.plex.find_in_library("movie", artwork)
 
@@ -278,36 +279,19 @@ class UploadProcessor:
             description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']} : {season}, Episode {artwork['episode']:02}"
         elif (artwork['episode'] is None or artwork['episode'] == EPISODE_COVER) and is_numeric(artwork['season']):
             description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']} : {season}"
-        elif artwork['season'] is None or artwork["season"] == SEASON_COVER or artwork["season"] == SEASON_BACKDROP or artwork["season"] == "SquareArt":
+        elif artwork['season'] is None or artwork["season"] == SEASON_COVER or artwork["season"] == SEASON_BACKDROP or artwork["season"] == SEASON_SQUARE_ART:
             description = f"{artwork['title']} ({artwork['year']}) : {artwork['author']}"
 
         artwork["year"] = self.options.year if self.options.year else artwork["year"]
 
-        # Since the TBDb scraper doesn't fetch the TMDb ID up front for each poster, we need to get it here
-        if not artwork.get("tmdb_id") and artwork.get("source") == ScraperSource.THEPOSTERDB.value and artwork.get(
-                "id") != "Upload":
-            poster_id = artwork.get("id", None)
-            poster_page_url = f"{TPDB_BASE_URL}/poster/{poster_id}"
-            debug_me(
-                f"Fetching TMDb ID from {poster_page_url}", "UploadProcessor/process_movie_artwork")
-            poster_page_soup = soup_utils.cook_soup(poster_page_url)
-            try:
-                artwork["tmdb_id"] = int(poster_page_soup.find(
-                    'div', {"data-media-id": True})['data-media-id'])
-            except (KeyError, TypeError, ValueError) as e:
-                debug_me(f"Failed to extract TMDb ID from poster page, falling back to Plex search. Error was: {e}",
-                         "UploadProcessor/process_tv_artwork")
-                _, artwork["tmdb_id"], _, _ = self.plex.movie_or_show(
-                    artwork.get("title"), artwork.get("year"))
-                debug_me(f"Found TMDb ID '{artwork.get('tmdb_id')}' for '{artwork.get('title')}' using Plex search.",
-                         "UploadProcessor/process_tv_artwork")
+        self._fetch_tpdb_tmdb_id(artwork, "UploadProcessor/process_tv_artwork")
 
         tv_show_items, libraries = self.plex.find_in_library("tv", artwork)
 
         if not tv_show_items:
             raise ShowNotFound(f"{description} | Show not available on Plex")
         debug_me(f"Found TMDb ID '{artwork.get('tmdb_id')}' in {len(libraries)} libraries.",
-                 "UploadProcessor/process_movie_artwork")
+                 "UploadProcessor/process_tv_artwork")
         for tv_show, library in zip(tv_show_items, libraries):
             # Use the actual TV show title from Plex in case it differs from the artwork title (if it's a foreign title, etc.)
             desc = description.replace(artwork["title"], tv_show.title.split(' (')[0]) if tv_show.title.split(' (')[
@@ -331,7 +315,7 @@ class UploadProcessor:
                     artwork_type = "Background"
                     file_name = "background"
                     filter_type = FilterType.BACKGROUND.value
-                elif artwork["season"] == "SquareArt":
+                elif artwork["season"] == SEASON_SQUARE_ART:
                     upload_target = tv_show
                     artwork_id = "SA"
                     artwork_type = "Square art"

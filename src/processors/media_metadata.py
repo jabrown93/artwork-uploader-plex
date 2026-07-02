@@ -1,6 +1,6 @@
 import re
 from core.constants import (
-    SEASON_COVER, SEASON_BACKDROP, SEASON_SPECIALS,
+    SEASON_COVER, SEASON_BACKDROP, SEASON_SPECIALS, SEASON_SQUARE_ART,
     MEDIA_TYPE_TV_SHOW, MEDIA_TYPE_COLLECTION,
 )
 from core.enums import FilterType
@@ -54,12 +54,12 @@ def parse_title(title: str):
     title_pattern_without_year = r"^(?P<title>.+)$"
 
     movie_or_show_pattern = r"^(?P<title>.+)\s\((?P<year>\d{4})\)"
-    background_pattern = rf"^(?P<title>.+)\s\((?P<year>\d{4})\)\s-\s{SEASON_BACKDROP}"
+    background_pattern = rf"^(?P<title>.+)\s\((?P<year>\d{{4}})\)\s-\s{SEASON_BACKDROP}"
     # Some collection poster files don't have the word "Collection" in them
     collection_pattern = r"^(?!.*\(\d{4}\))(?P<title>.+)$"
     # Mediux square art (soundtrack / OST) filenames carry a unique suffix we can match on
-    tv_sq_art_pattern = r"^(?P<title>.+)\s\((?P<year>\d{4})\)\s-\sS\d+\sOST"
-    movie_sq_art_pattern = r"^(?P<title>.+)\s\((?P<year>\d{4})\)\s-\sOST"
+    tv_sq_art_pattern = r"^(?P<title>.+)\s\((?P<year>\d{4})\)\s-\sS\d+\sOST$"
+    movie_sq_art_pattern = r"^(?P<title>.+)\s\((?P<year>\d{4})\)\s-\sOST$"
 
     episode_match = re.match(episode_pattern, title, re.IGNORECASE)
     if episode_match:
@@ -133,7 +133,7 @@ def parse_title(title: str):
             "media": MEDIA_TYPE_TV_SHOW,
             "title": tv_sq_art_match.group('title').strip(),
             "year": tv_sq_art_match.group('year'),
-            "season": "SquareArt",
+            "season": SEASON_SQUARE_ART,
             "episode": None,
             "type": FilterType.SQUARE_ART.value,
             "author": None

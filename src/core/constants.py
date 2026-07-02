@@ -88,6 +88,7 @@ MEDIUX_QUALITY_SUFFIX = "&w=3840&q=80"
 # Season/Episode special values
 SEASON_COVER = "Cover"
 SEASON_BACKDROP = "Backdrop"
+SEASON_SQUARE_ART = "SquareArt"
 SEASON_SPECIALS = "Specials"
 SEASON_SPECIALS_NUMBER = 0
 EPISODE_COVER = "Cover"
