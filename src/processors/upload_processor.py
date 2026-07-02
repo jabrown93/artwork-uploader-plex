@@ -31,20 +31,25 @@ class UploadProcessor:
         self.options: Options = Options()
         self.config: Config = Config()
         self.config.load()
-        self.kometa: bool = self.options.kometa or globals.config.save_to_kometa
-        self.staging: bool = self.kometa and (
-            globals.config.stage_assets or self.options.stage)
         self.stage_specials: bool = globals.config.stage_specials
         self.stage_collections: bool = globals.config.stage_collections
         self.arr: Optional["ArrService"] = arr if arr is not None else globals.arr
+        self._sonarr_series_cache: dict = {}
+        self._recompute_options_dependent_state()
+
+    def _recompute_options_dependent_state(self) -> None:
+        """Recompute flags derived from self.options; must run whenever options change."""
+        self.kometa: bool = self.options.kometa or globals.config.save_to_kometa
+        self.staging: bool = self.kometa and (
+            globals.config.stage_assets or self.options.stage)
         self._arr_movie_fallback: bool = bool(
             self.kometa and self.arr and self.arr.movie_fallback_enabled)
         self._arr_tv_fallback: bool = bool(
             self.kometa and self.arr and self.arr.tv_fallback_enabled)
-        self._sonarr_series_cache: dict = {}
 
     def set_options(self, options: Options) -> None:
         self.options = options
+        self._recompute_options_dependent_state()
 
     def _season_exists_in_plex(self, tv_show, season_number: int) -> bool:
         """Check if a season exists in the Plex library."""
@@ -157,14 +162,14 @@ class UploadProcessor:
 
         results = []
         artwork_source = artwork["source"]
-        description = f"{artwork["title"]} : {artwork["author"]}"
+        description = f"{artwork['title']} : {artwork['author']}"
         filter_type = FilterType.COLLECTION_POSTER.value if artwork[
             "type"] == FilterType.COLLECTION_POSTER.value else FilterType.BACKGROUND.value
         artwork_type = "Poster" if artwork["type"] == FilterType.COLLECTION_POSTER.value else "Background"
         artwork_id = artwork_type[0]
 
         if collection_items:
-            debug_me(f"Found collection '{artwork["title"]}' in {len(libraries)} libraries.",
+            debug_me(f"Found collection '{artwork['title']}' in {len(libraries)} libraries.",
                      "UploadProcessor/process_movie_artwork")
             for collection_item, library in zip(collection_items, libraries):
                 if (self.options.has_no_filters() and self.check_master_filters(filter_type,
@@ -398,7 +403,7 @@ class UploadProcessor:
                                 if via_sonarr:
                                     desc = f"{desc} • pre-seeded via Sonarr"
                             else:
-                                result = f"⚠️ {desc} | {season}, Episode {artwork["episode"]:02} not available in {library}"
+                                result = f"⚠️ {desc} | {season}, Episode {artwork['episode']:02} not available in {library}"
                                 results.append(result)
                                 continue
                         else:

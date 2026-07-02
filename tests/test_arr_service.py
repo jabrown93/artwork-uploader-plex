@@ -53,7 +53,8 @@ class TestRadarrFindMovie:
     def test_tmdb_id_match_with_path(self, radarr, mocker):
         get = mocker.patch("services.arr_service.requests.get")
         get.return_value = _response([
-            {"title": "The Matrix", "year": 1999, "path": "/data/media/movies/The Matrix (1999)",
+            {"tmdbId": 603, "title": "The Matrix", "year": 1999,
+             "path": "/data/media/movies/The Matrix (1999)",
              "rootFolderPath": "/data/media/movies"}
         ])
         result = radarr.find_movie(603, "The Matrix", 1999)
@@ -69,6 +70,31 @@ class TestRadarrFindMovie:
         result = radarr.find_movie(603, "The Matrix", 1999)
         assert result is None
         get.assert_called_once()
+
+    def test_tmdb_id_response_mismatch_is_rejected(self, radarr, mocker):
+        # Some Radarr deployments ignore the tmdbId query param and return the
+        # full catalog; the first hit must not be trusted without checking tmdbId.
+        get = mocker.patch("services.arr_service.requests.get")
+        get.return_value = _response([
+            {"tmdbId": 999, "title": "Some Other Movie", "year": 2001,
+             "path": "/data/media/movies/Some Other Movie (2001)",
+             "rootFolderPath": "/data/media/movies"}
+        ])
+        result = radarr.find_movie(603, "The Matrix", 1999)
+        assert result is None
+
+    def test_tmdb_id_multiple_matches_returns_none(self, radarr, mocker):
+        get = mocker.patch("services.arr_service.requests.get")
+        get.return_value = _response([
+            {"tmdbId": 603, "title": "The Matrix", "year": 1999,
+             "path": "/data/media/movies/The Matrix (1999)",
+             "rootFolderPath": "/data/media/movies"},
+            {"tmdbId": 603, "title": "The Matrix Duplicate", "year": 1999,
+             "path": "/data/media/movies/The Matrix Duplicate (1999)",
+             "rootFolderPath": "/data/media/movies"},
+        ])
+        result = radarr.find_movie(603, "The Matrix", 1999)
+        assert result is None
 
     def test_tmdb_id_match_without_path_is_skipped(self, radarr, mocker):
         get = mocker.patch("services.arr_service.requests.get")

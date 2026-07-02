@@ -470,7 +470,8 @@ function saveConfig() {
         try {
             save_config.arr_root_folder_library_map = JSON.parse(arrRootFolderLibraryMapInput);
             // Validate it's an object with string keys/values
-            if (typeof save_config.arr_root_folder_library_map !== 'object' ||
+            if (save_config.arr_root_folder_library_map === null ||
+                typeof save_config.arr_root_folder_library_map !== 'object' ||
                 Array.isArray(save_config.arr_root_folder_library_map)) {
                 throw new Error("Must be an object");
             }

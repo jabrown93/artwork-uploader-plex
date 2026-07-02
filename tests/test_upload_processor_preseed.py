@@ -221,6 +221,25 @@ class TestMoviePreseed:
         with pytest.raises(NotProcessedByFilter):
             proc.process_movie_artwork(_movie_artwork())
 
+    def test_per_run_kometa_option_enables_arr_fallback_after_set_options(
+            self, configured, capture_kometa_saves):
+        # Global save_to_kometa is off; only the per-run --kometa option (applied via
+        # set_options *after* construction) turns Kometa mode on for this run. The arr
+        # fallback flags must be recomputed then, not frozen at construction time.
+        configured.save_to_kometa = False
+        configured.save()
+        arr_movie = _arr_movie()
+        arr = FakeArr(radarr=FakeRadarr(movie=arr_movie))
+        proc = UploadProcessor(FakePlex(items=None, libraries=None), arr=arr)
+        assert proc.kometa is False
+        proc.set_options(Options(kometa=True))
+        assert proc.kometa is True
+
+        results = proc.process_movie_artwork(_movie_artwork())
+
+        assert results[0].startswith("✅")
+        assert len(capture_kometa_saves) == 1
+
     def test_uses_root_folder_library_map(self, configured, capture_kometa_saves):
         configured.arr_root_folder_library_map = {"/data/media/movies": "4K Movies"}
         configured.save()

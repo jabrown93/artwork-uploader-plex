@@ -101,8 +101,16 @@ class RadarrClient(ArrClient):
             result = self._get("movie", params={"tmdbId": tmdb_id})
             if not result:
                 return None
-            movie = result[0] if isinstance(result, list) else result
-            return self._to_arr_movie(movie)
+            movies = result if isinstance(result, list) else [result]
+            matches = [m for m in movies if m.get("tmdbId") == tmdb_id]
+            if len(matches) == 1:
+                return self._to_arr_movie(matches[0])
+            if len(matches) > 1:
+                debug_me(
+                    f"Ambiguous Radarr tmdbId match for '{tmdb_id}': {len(matches)} candidates",
+                    "RadarrClient/find_movie",
+                )
+            return None
 
         if not title:
             return None
