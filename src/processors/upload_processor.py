@@ -40,6 +40,7 @@ class UploadProcessor:
     def _recompute_options_dependent_state(self) -> None:
         """Recompute flags derived from self.options; must run whenever options change."""
         self.kometa: bool = self.options.kometa or globals.config.save_to_kometa
+        self.skip_locked: bool = self.options.skip_locked or globals.config.skip_locked_artwork
         self.staging: bool = self.kometa and (
             globals.config.stage_assets or self.options.stage)
         self._arr_movie_fallback: bool = bool(
@@ -187,6 +188,7 @@ class UploadProcessor:
                             uploader.set_artwork(artwork)
                             uploader.track_artwork_ids = self.config.track_artwork_ids
                             uploader.reset_overlay = self.config.reset_overlay
+                            uploader.skip_locked = self.skip_locked
                             uploader.set_description(description)
                             uploader.set_options(self.options)
                             result = uploader.upload_to_plex()
@@ -288,6 +290,7 @@ class UploadProcessor:
                             uploader.set_artwork(artwork)
                             uploader.track_artwork_ids = self.config.track_artwork_ids
                             uploader.reset_overlay = self.config.reset_overlay
+                            uploader.skip_locked = self.skip_locked
                             uploader.set_description(desc)
                             uploader.set_options(self.options)
                             result = uploader.upload_to_plex()
@@ -437,6 +440,7 @@ class UploadProcessor:
                                 uploader.set_artwork(artwork)
                                 uploader.track_artwork_ids = self.config.track_artwork_ids
                                 uploader.reset_overlay = self.config.reset_overlay
+                                uploader.skip_locked = self.skip_locked
                                 uploader.set_description(desc)
                                 uploader.set_options(self.options)
                                 result = uploader.upload_to_plex()
