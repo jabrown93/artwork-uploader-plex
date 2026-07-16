@@ -21,7 +21,15 @@ def main():
         sys.exit(1)
 
     new_version, release_type = sys.argv[1], sys.argv[2]
-    major, minor, patch = new_version.split(".")
+
+    # A prerelease version (e.g. "0.10.0-beta.1") has more than 3 dot-separated
+    # parts, so a plain split(".") unpack fails on beta releases. Pull just the
+    # leading major.minor.patch triple for the numeric tuple.
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", new_version)
+    if not match:
+        print(f"Error: could not parse version {new_version!r}", file=sys.stderr)
+        sys.exit(1)
+    major, minor, patch = match.groups()
 
     content = VERSION_FILE.read_text()
     content = re.sub(
