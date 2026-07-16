@@ -1,168 +1,24 @@
-name: Create Release
+name: Release
 
 on:
   push:
-    tags:
-      - 'v*.*.*'  # Triggers on tags like v0.5.2, v1.0.0, etc.
-  # Manual escape hatch: GitHub suppresses tag push events when more than three
-  # tags are pushed at once, which silently skips the release. Dispatch this
-  # workflow against an existing tag to (re)build a release for it.
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Existing tag to release (e.g. v0.8.6)'
-        required: true
-        type: string
+    branches:
+      - main
+      - beta
 
-permissions:
-  contents: write
-  id-token: write
-  packages: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
+  release:
+    uses: jabrown93/.github/.github/workflows/docker-release.yml@71c3af9fc09ce87b086cc058773380acaf2b1299 # v1.2.0
     permissions:
       contents: write
-      id-token: write
       packages: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          # On a tag push this is refs/tags/vX.Y.Z; on manual dispatch use the
-          # tag supplied as input so the build/changelog target the right commit.
-          ref: ${{ github.event.inputs.tag || github.ref }}
-          fetch-depth: 0  # Fetch all history for changelog generation
-          persist-credentials: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract version from tag
-        id: get_version
-        run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
-          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          if [ -z "$PREV_TAG" ]; then
-            # First release - get all commits
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          else
-            # Get commits since last tag
-            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
-          fi
-
-          # Save to file for the release
-          echo "## What's Changed" > CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "$CHANGELOG" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.get_version.outputs.TAG }}" >> CHANGELOG.md
-
-          cat CHANGELOG.md
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt || echo "No requirements.txt found"
-
-      - name: Create source distribution
-        run: |
-          # Create a clean source archive
-          mkdir -p dist
-          git archive --format=zip --prefix=artwork-uploader-plex-${{ steps.get_version.outputs.VERSION }}/ HEAD -o dist/artwork-uploader-plex-${{ steps.get_version.outputs.VERSION }}-source.zip
-          git archive --format=tar.gz --prefix=artwork-uploader-plex-${{ steps.get_version.outputs.VERSION }}/ HEAD -o dist/artwork-uploader-plex-${{ steps.get_version.outputs.VERSION }}-source.tar.gz
-
-      - name: Build with PyInstaller (if spec file exists)
-        id: build
-        continue-on-error: true
-        run: |
-          if [ -f "artwork_uploader.spec" ]; then
-            pip install pyinstaller
-            pyinstaller artwork_uploader.spec
-
-            # Create archives of the built executables
-            if [ -d "dist/artwork_uploader" ]; then
-              cd dist
-              zip -r artwork-uploader-plex-${{ steps.get_version.outputs.VERSION }}-linux.zip artwork_uploader/
-              tar czf artwork-uploader-plex-${{ steps.get_version.outputs.VERSION }}-linux.tar.gz artwork_uploader/
-              cd ..
-            fi
-          else
-            echo "No PyInstaller spec file found, skipping binary build"
-          fi
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        id: image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/jabrown93/artwork-uploader:${{ steps.get_version.outputs.VERSION }}
-            ghcr.io/jabrown93/artwork-uploader:latest
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # Pin the cosign binary (not just the installer) so signature/bundle
-          # format stays stable and Kyverno verification is reproducible.
-          cosign-release: 'v3.1.1'
-
-      # Keyless (Fulcio/rekor) signature over the pushed digest so the homelab
-      # Kyverno verify-ghcr-images policy can verify this image.
-      - name: Sign image (keyless)
-        env:
-          DIGEST: ${{ steps.image.outputs.digest }}
-        run: |
-          if [ -z "${DIGEST}" ]; then
-            echo "::error::build-push-action produced no digest; cannot sign image" >&2
-            exit 1
-          fi
-          cosign sign --yes "ghcr.io/jabrown93/artwork-uploader@${DIGEST}"
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          # Determine if this is a prerelease
-          if [[ "${{ steps.get_version.outputs.VERSION }}" =~ (alpha|beta|rc) ]]; then
-            PRERELEASE="--prerelease"
-          else
-            PRERELEASE="--latest"
-          fi
-
-          # Create or update release
-          if gh release view "${{ steps.get_version.outputs.TAG }}" >/dev/null 2>&1; then
-            echo "Release exists, deleting and recreating..."
-            gh release delete "${{ steps.get_version.outputs.TAG }}" --yes
-          fi
-
-          # Create release with artifacts
-          gh release create "${{ steps.get_version.outputs.TAG }}" \
-            --title "Release ${{ steps.get_version.outputs.TAG }}" \
-            --notes-file CHANGELOG.md \
-            ${PRERELEASE} \
-            dist/*.zip dist/*.tar.gz
+      id-token: write
+    with:
+      image: ghcr.io/jabrown93/artwork-uploader
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
