@@ -27,6 +27,7 @@ import os
 import pprint
 import re
 import socket
+import threading
 import unicodedata
 import subprocess
 import sys
@@ -252,6 +253,10 @@ def setup_socket_handlers(
     # Temporary storage for chunked uploads
     # Changed from in-memory list to file handles for better memory efficiency with large uploads
     upload_chunks = {}
+    # Guards upload_chunks: with real threads (not eventlet greenlets), two
+    # clients uploading concurrently could interleave reads/writes on this
+    # shared dict.
+    upload_chunks_lock = threading.Lock()
 
     @globals.web_socket.on("debug_mode")
     def debug_mode(data):
@@ -334,7 +339,10 @@ def setup_socket_handlers(
                 {"element": ["scrape_url", "scrape_button",
                              "bulk_button"], "mode": True}
             )
-            process_scrape_url_from_web(instance, url)
+            # Run off the request-handling thread so the UI (and other
+            # connected clients) stay responsive while this scrape/upload runs.
+            globals.web_socket.start_background_task(
+                process_scrape_url_from_web, instance, url)
 
     @globals.web_socket.on("start_bulk_import")
     def handle_bulk_import_from_web(data):
@@ -343,7 +351,9 @@ def setup_socket_handlers(
         bulk_list = data.get("bulk_list").lower()
         filename = data.get("filename", "bulk_import.txt")
         scheduled = data.get("scheduled", False)
-        run_bulk_import_scrape_in_thread(instance, bulk_list, filename, scheduled=scheduled)
+        # Run off the request-handling thread; see comment on start_scrape above.
+        globals.web_socket.start_background_task(
+            run_bulk_import_scrape_in_thread, instance, bulk_list, filename, scheduled=scheduled)
 
     @globals.web_socket.on("save_bulk_import")
     def handle_bulk_import(data):
@@ -736,53 +746,54 @@ def setup_socket_handlers(
         chunk_index = data["chunkIndex"]
         total_chunks = data["totalChunks"]
 
-        if file_name not in upload_chunks:
-            # Create a temporary file to stream chunks to disk instead of memory
-            temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.upload')
-            upload_chunks[file_name] = {
-                "temp_file": temp_file,
-                "temp_path": temp_file.name,
-                "chunks_received": 0,
-                "total_chunks": total_chunks,
-                "instance": instance
-            }
+        with upload_chunks_lock:
+            if file_name not in upload_chunks:
+                # Create a temporary file to stream chunks to disk instead of memory
+                temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.upload')
+                upload_chunks[file_name] = {
+                    "temp_file": temp_file,
+                    "temp_path": temp_file.name,
+                    "chunks_received": 0,
+                    "total_chunks": total_chunks,
+                    "instance": instance
+                }
 
-        # Decode and write chunk directly to disk
-        try:
-            decoded_chunk = base64.b64decode(chunk_data)
-            upload_chunks[file_name]["temp_file"].write(decoded_chunk)
-            upload_chunks[file_name]["chunks_received"] += 1
-        except Exception as e:
-            logger.error(
-                f"Error decoding/writing chunk {chunk_index}: {e}", exc_info=True)
-            # Cleanup temp file and state to avoid resource leaks and partial uploads
+            # Decode and write chunk directly to disk
             try:
-                if file_name in upload_chunks:
-                    temp_file_obj = upload_chunks[file_name].get("temp_file")
-                    temp_path = upload_chunks[file_name].get("temp_path")
-                    if temp_file_obj is not None:
-                        try:
-                            temp_file_obj.close()
-                        except Exception as close_err:
-                            logger.warning(
-                                f"Error closing temp file for {file_name}: {close_err}",
-                                exc_info=True,
-                            )
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except OSError as remove_err:
-                            logger.warning(
-                                f"Error removing temp file {temp_path} for {file_name}: {remove_err}",
-                                exc_info=True,
-                            )
-                    # Remove the upload entry so it does not appear partially complete
-                    del upload_chunks[file_name]
-            except Exception as cleanup_err:
+                decoded_chunk = base64.b64decode(chunk_data)
+                upload_chunks[file_name]["temp_file"].write(decoded_chunk)
+                upload_chunks[file_name]["chunks_received"] += 1
+            except Exception as e:
                 logger.error(
-                    f"Error during cleanup after failed chunk {chunk_index} for {file_name}: {cleanup_err}",
-                    exc_info=True,
-                )
+                    f"Error decoding/writing chunk {chunk_index}: {e}", exc_info=True)
+                # Cleanup temp file and state to avoid resource leaks and partial uploads
+                try:
+                    if file_name in upload_chunks:
+                        temp_file_obj = upload_chunks[file_name].get("temp_file")
+                        temp_path = upload_chunks[file_name].get("temp_path")
+                        if temp_file_obj is not None:
+                            try:
+                                temp_file_obj.close()
+                            except Exception as close_err:
+                                logger.warning(
+                                    f"Error closing temp file for {file_name}: {close_err}",
+                                    exc_info=True,
+                                )
+                        if temp_path and os.path.exists(temp_path):
+                            try:
+                                os.remove(temp_path)
+                            except OSError as remove_err:
+                                logger.warning(
+                                    f"Error removing temp file {temp_path} for {file_name}: {remove_err}",
+                                    exc_info=True,
+                                )
+                        # Remove the upload entry so it does not appear partially complete
+                        del upload_chunks[file_name]
+                except Exception as cleanup_err:
+                    logger.error(
+                        f"Error during cleanup after failed chunk {chunk_index} for {file_name}: {cleanup_err}",
+                        exc_info=True,
+                    )
 
     @globals.web_socket.on("upload_complete")
     def handle_upload_complete(data):
@@ -797,63 +808,79 @@ def setup_socket_handlers(
 
         instance = Instance(data.get("instance_id"), "web")
 
-        if file_name in upload_chunks and upload_chunks[file_name]["chunks_received"] == int(
+        with upload_chunks_lock:
+            upload_ready = file_name in upload_chunks and upload_chunks[file_name]["chunks_received"] == int(
                 upload_chunks[file_name]["total_chunks"]
-        ):
-            debug_me(
-                f"Upload complete for {file_name}, processing file...", "handle_upload_complete")
-
-            # Close the temp file before processing
-            upload_chunks[file_name]["temp_file"].close()
-
-            save_uploaded_file(
-                instance,
-                file_name,
-                options,
-                filters,
-                plex_title,
-                plex_year,
-                upload_chunks,
-                filename_pattern,
-                check_image_orientation,
-                sort_key
             )
+            if upload_ready:
+                debug_me(
+                    f"Upload complete for {file_name}, processing file...", "handle_upload_complete")
+                # Close the temp file before processing
+                upload_chunks[file_name]["temp_file"].close()
+            else:
+                chunks_received = upload_chunks[file_name]["chunks_received"] if file_name in upload_chunks else 0
+                expected_chunks = upload_chunks[file_name]["total_chunks"] if file_name in upload_chunks else 0
 
-            # Cleanup after saving the file
-            try:
-                temp_path = upload_chunks[file_name]["temp_path"]
-                # Delete temp file if it still exists
-                if os.path.exists(temp_path):
+        if upload_ready:
+            def _process_and_cleanup_upload():
+                # Processing (ZIP extraction, matching, uploading) can take a
+                # while for large files, so this runs off the request thread.
+                # The dict cleanup below re-takes the lock; it must stay
+                # bundled with save_uploaded_file() rather than running in
+                # the handler, or a concurrent chunk-upload for the same
+                # filename could see the entry deleted mid-processing.
+                save_uploaded_file(
+                    instance,
+                    file_name,
+                    options,
+                    filters,
+                    plex_title,
+                    plex_year,
+                    upload_chunks,
+                    filename_pattern,
+                    check_image_orientation,
+                    sort_key
+                )
+
+                # Cleanup after saving the file
+                with upload_chunks_lock:
                     try:
-                        os.remove(temp_path)
-                    except OSError as remove_err:
-                        logger.error(
-                            f"Error removing temp file {temp_path}: {remove_err}")
-                del upload_chunks[file_name]
-            except (KeyError, OSError) as e:
-                debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
+                        temp_path = upload_chunks[file_name]["temp_path"]
+                        # Delete temp file if it still exists
+                        if os.path.exists(temp_path):
+                            try:
+                                os.remove(temp_path)
+                            except OSError as remove_err:
+                                logger.error(
+                                    f"Error removing temp file {temp_path}: {remove_err}")
+                        del upload_chunks[file_name]
+                    except (KeyError, OSError) as e:
+                        debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
+
+            # Run off the request-handling thread so large ZIP uploads don't
+            # block the Socket.IO server for other connected clients.
+            globals.web_socket.start_background_task(_process_and_cleanup_upload)
         else:
-            chunks_received = upload_chunks[file_name]["chunks_received"] if file_name in upload_chunks else 0
-            expected_chunks = upload_chunks[file_name]["total_chunks"] if file_name in upload_chunks else 0
             debug_me(
                 f'Upload complete event received for {file_name}, but with '
                 f'{chunks_received} of {expected_chunks}, some chunks are missing.',
                 "handle_upload_complete"
             )
-            try:
-                # Clean up temp file
-                if file_name in upload_chunks:
-                    upload_chunks[file_name]["temp_file"].close()
-                    temp_path = upload_chunks[file_name]["temp_path"]
-                    if os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except OSError as remove_err:
-                            logger.error(
-                                f"Error removing temp file {temp_path}: {remove_err}")
-                del upload_chunks[file_name]
-            except (KeyError, OSError) as e:
-                debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
+            with upload_chunks_lock:
+                try:
+                    # Clean up temp file
+                    if file_name in upload_chunks:
+                        upload_chunks[file_name]["temp_file"].close()
+                        temp_path = upload_chunks[file_name]["temp_path"]
+                        if os.path.exists(temp_path):
+                            try:
+                                os.remove(temp_path)
+                            except OSError as remove_err:
+                                logger.error(
+                                    f"Error removing temp file {temp_path}: {remove_err}")
+                    del upload_chunks[file_name]
+                except (KeyError, OSError) as e:
+                    debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
 
 
 def save_uploaded_file(
@@ -1214,5 +1241,9 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
             f"Starting web server on IPv4 only at port {web_port}\n"
             f"  - IPv4: http://127.0.0.1:{web_port}")
 
+    # allow_unsafe_werkzeug: threading async_mode runs on Werkzeug's dev
+    # server, which Flask-SocketIO otherwise refuses to start outside debug
+    # mode. This app is a self-hosted single-user tool, not a public-facing
+    # production service, so the built-in dev server is an acceptable fit.
     globals.web_socket.run(web_app, host=binding_host,
-                           port=web_port, debug=debug)
+                           port=web_port, debug=debug, allow_unsafe_werkzeug=True)

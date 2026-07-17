@@ -1,3 +1,5 @@
+import threading
+
 from core import globals
 from core.constants import BOOTSTRAP_COLORS, ANSI_RESET, ANSI_BOLD
 from models.instance import Instance
@@ -7,6 +9,11 @@ logger = get_logger(__name__)
 
 # For backwards compatibility
 bootstrap_colors = BOOTSTRAP_COLORS
+
+# Now that Socket.IO runs in threading mode (real OS threads, not eventlet
+# greenlets), concurrent emits from multiple threads (e.g. the scheduler
+# thread and a web request thread) need to be serialized.
+_emit_lock = threading.Lock()
 
 
 def update_status(instance: Instance, message, color="primary", sticky=False, spinner=False, icon=None, cli=False):
@@ -63,7 +70,8 @@ def notify_web(instance: Instance, event, data_to_include=None):
         merged_arguments = data_to_include | instance_data
         debug_me(f"{ANSI_BOLD}{BOOTSTRAP_COLORS.get('info').get('ansi')}[{event}]{ANSI_RESET} {merged_arguments}",
                  "notify_web")
-        globals.web_socket.emit(event, merged_arguments)
+        with _emit_lock:
+            globals.web_socket.emit(event, merged_arguments)
 
 
 def send_notification(instance: Instance, message: str) -> None:

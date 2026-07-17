@@ -5,8 +5,6 @@ import threading
 import traceback
 import uuid
 
-import eventlet
-eventlet.monkey_patch()
 from flask_cors import CORS
 
 from core import globals
@@ -918,7 +916,7 @@ if __name__ == "__main__":
             globals.web_socket = SocketIO(
                 web_app,
                 cors_allowed_origins="*",
-                async_mode="eventlet",
+                async_mode="threading",
                 ping_timeout=300,  # 5 minutes - allows time for large file processing
                 ping_interval=25,  # Keep default 25s to maintain connection health
                 http_compression=True,  # Enable compression for better performance
