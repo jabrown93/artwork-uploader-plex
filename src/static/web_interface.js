@@ -1775,8 +1775,7 @@ function togglePlexOptions() {
     } else {
         trackArtworkIDs.style.display = "none";
         resetOverlay.style.display = "none";
-        skipLocked.style.display = "none";
-        document.getElementById("skip_locked_artwork").checked = false; // Uncheck the skip locked option if Kometa is enabled
+        skipLocked.style.display = "none"; // Hide only; preserve the checked state so it isn't lost when Kometa is toggled off again
         document.getElementById("track_artwork_ids").checked = true;
         //    document.getElementById("reset_overlay").checked = false;
     }
