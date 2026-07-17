@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   release:
-    uses: jabrown93/.github/.github/workflows/docker-release.yml@71c3af9fc09ce87b086cc058773380acaf2b1299 # v1.2.0
+    uses: jabrown93/.github/.github/workflows/docker-release.yml@318fa3ed5ddce0cc6bd43e230b5ccd1972fa093c # v1.3.0
     permissions:
       contents: write
       packages: write
