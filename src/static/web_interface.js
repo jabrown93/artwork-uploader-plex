@@ -314,7 +314,7 @@ function sub_progress_bar(percent, message = "") {
         }
         bar_container.classList.add("show")
         bar.style.width = percent + "%"
-        bar_container.ariaValueNow = message
+        bar_container.ariaValueNow = percent
         bar.innerHTML = message || ""
     }
 
