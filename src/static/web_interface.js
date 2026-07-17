@@ -55,12 +55,21 @@ document.addEventListener("DOMContentLoaded", function () {
 
 function detectEnvironment() {
     socket.emit("debug_mode", { instance_id: instanceId, action: "get" });
+    socket.emit("detect_docker", { instance_id: instanceId });
 }
 
 socket.on("debug_mode", function(data) {
     if (validResponse(data)) {
         // Set the correct state of the debug mode toggle based on the backend value
         document.getElementById("debug-mode").checked = data.debug;
+    }
+});
+
+socket.on("docker_detected", function(data) {
+    if (validResponse(data)) {
+        // Show an informational banner when running inside a Docker container, since
+        // the Kometa asset/temp directory paths are fixed and not editable in that case
+        document.getElementById("docker_path_notice").classList.toggle("d-none", !data.docker);
     }
 });
 

@@ -17,7 +17,7 @@ from services import UtilityService, AuthenticationService
 from services import NotifyService
 from processors.media_metadata import parse_title
 from models.instance import Instance
-from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART
+from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART, RUNNING_IN_DOCKER
 from core.config import Config
 from core.enums import FilterType
 from core.exceptions import InvalidUrl, InvalidFlag
@@ -269,6 +269,12 @@ def setup_socket_handlers(
                 globals.debug = False
             else:
                 globals.debug = True
+
+    @globals.web_socket.on("detect_docker")
+    def docker_detection(data):
+        """Detects whether app is running in docker and informs frontend"""
+        instance = Instance(data.get("instance_id"), "web")
+        notify_web(instance, "docker_detected", {"docker": RUNNING_IN_DOCKER})
 
     @globals.web_socket.on("update_app")
     def update_app(data):
