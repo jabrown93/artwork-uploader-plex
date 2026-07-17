@@ -21,6 +21,7 @@ from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART
 from core.config import Config
 from core.enums import FilterType
 from core.exceptions import InvalidUrl, InvalidFlag
+from core.__version__ import get_version_string
 from core import globals
 import base64
 import os
@@ -201,7 +202,7 @@ def setup_routes(web_app, config: Config):
     @login_required
     def home():
         """Render the main web interface."""
-        return render_template("web_interface.html", config=config)
+        return render_template("web_interface.html", config=config, version=get_version_string())
 
     @web_app.route('/downloads/<path:filename>')
     @login_required

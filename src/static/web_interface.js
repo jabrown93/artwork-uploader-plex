@@ -808,6 +808,7 @@ if (scrapeUrlInput) {
 }
 
 function configureTabs(afterSave = false) {
+    document.getElementById('about-tab').classList.add("show");
     if (config.base_url && config.token) {
         document.getElementById('bulk-import-tab').classList.add("show");
         document.getElementById('scraper-tab').classList.add("show");
