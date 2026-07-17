@@ -446,7 +446,8 @@ def process_uploaded_artwork(instance: Instance, file_list, skipped, zip_title, 
         year=int(plex_year) if plex_year else None,
         temp=True if "temp" in options else False,
         stage=True if "stage" in options else False,
-        force=True if "force" in options else False
+        force=True if "force" in options else False,
+        skip_locked=True if "skip-locked" in options else False
     )
     processor = ArtworkProcessor(globals.plex)
     processor.process_uploaded_files(file_list, skipped, zip_title, zip_author, zip_source, opts, callbacks, override_title=plex_title)
@@ -708,6 +709,7 @@ if __name__ == "__main__":
     cli_options = Options(add_posters=args.add_posters,
                           add_sets=args.add_sets,
                           force=args.force,
+                          skip_locked=args.skip_locked,
                           filters=args.filters,
                           exclude=args.exclude,
                           year=args.year,
