@@ -1,4 +1,4 @@
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 from pprint import pformat
 
 from logging_config import get_logger
@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 class MediuxScraper:
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
         self.soup: Optional[Any] = None
         self.url: str = url
         self.title: Optional[str] = None
@@ -34,6 +34,7 @@ class MediuxScraper:
         self.filtered: int = 0
         self.skipped: int = 0
         self.total: int = 0
+        self.progress_callback: Optional[Callable[[int, int], None]] = progress_callback
 
         self.movie_artwork: MovieArtworkList = []
         self.tv_artwork: TVArtworkList = []
@@ -82,6 +83,8 @@ class MediuxScraper:
                             collections = len(self.collection_artwork)
                             shows = len(self.tv_artwork)
                             debug_me(f"Processed {n} out of {len(set_ids)} sets. Collected {movies} movie, {collections} collection and {shows} TV show assets so far, skipped {self.skipped}", "MedixScraper/scrape")
+                            if self.progress_callback:
+                                self.progress_callback(n, len(set_ids))
 
                         return
 

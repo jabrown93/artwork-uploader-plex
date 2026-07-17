@@ -369,6 +369,12 @@ def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, ass
         for page in range(pages):
             page_url = f"{url}?section=uploads&page={page + 1}"
             scrape_and_upload(instance, page_url, options, success_counter, assets_processed)
+
+            # Only show progress across pages when there's more than one page to scrape
+            if pages > 1:
+                percent = ((page + 1) / pages) * 100
+                notify_web(instance, "sub_progress_bar",
+                           {"message": f"Page {page + 1} / {pages}", "percent": percent})
     except Exception:
         raise ScraperException(f"Failed to process and upload from URL: {url}")
 
@@ -389,6 +395,13 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None, as
     def log_callback(message: str):
         update_log(instance, message)
 
+    # Reports "n of N sets processed" while scraping a MediUX boxset (a no-op for any
+    # other URL, since only the boxset branch of MediuxScraper ever calls it)
+    def sub_progress_callback(current: int, total: int):
+        percent = (current / total * 100) if total > 0 else 0
+        notify_web(instance, "sub_progress_bar",
+                   {"message": f"Set {current} / {total}", "percent": percent})
+
     callbacks = ProcessingCallbacks(
         on_status_update=status_callback,
         on_log_update=log_callback,
@@ -399,7 +412,7 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None, as
     # Use the service to do the actual work
     try:
         processor = ArtworkProcessor(globals.plex)
-        return processor.scrape_and_process(url, options, callbacks)
+        return processor.scrape_and_process(url, options, callbacks, progress_callback=sub_progress_callback)
     except PlexConnectorException as not_connected:
         debug_me(f"PlexConnectorException: {str(not_connected)}", "scrape_and_upload")
         update_status(instance, str(not_connected), "danger")
