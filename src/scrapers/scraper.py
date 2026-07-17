@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from core.constants import TPDB_BASE_URL, MEDIUX_BASE_URL, SOURCE_THEPOSTERDB, SOURCE_MEDIUX
@@ -25,9 +25,10 @@ class Scraper:
         scrape_html():          Scrapes a local HTML file using the Poster DB scraper
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
         self.url: str = url
         self.options: Options = Options()
+        self.progress_callback: Optional[Callable[[int, int], None]] = progress_callback
         self.movie_artwork: MovieArtworkList = []
         self.tv_artwork: TVArtworkList = []
         self.collection_artwork: CollectionArtworkList = []
@@ -107,7 +108,7 @@ class Scraper:
 
         try:
 
-            mediux_scraper = MediuxScraper(self.url)
+            mediux_scraper = MediuxScraper(self.url, progress_callback=self.progress_callback)
             mediux_scraper.set_options(self.options)
             mediux_scraper.scrape()
 

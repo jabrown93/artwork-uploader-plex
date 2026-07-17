@@ -50,7 +50,8 @@ class ArtworkProcessor:
         self,
         url: str,
         options: Options,
-        callbacks: Optional[ProcessingCallbacks] = None
+        callbacks: Optional[ProcessingCallbacks] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> Optional[str]:
         """
         Scrape artwork from a URL and process it for upload to Plex.
@@ -59,6 +60,9 @@ class ArtworkProcessor:
             url: URL to scrape
             options: Processing options
             callbacks: Optional callbacks for UI updates
+            progress_callback: Optional callback for sub-item scrape progress (current, total),
+                e.g. "n of N sets" while scraping a MediUX boxset. Passed through to the
+                scraper layer; a no-op for scrapers/URLs that don't have sub-items to report on.
 
         Returns:
             Title of the scraped content, or None if no title found
@@ -76,7 +80,7 @@ class ArtworkProcessor:
             raise PlexConnectorException(f"Plex connection error: {str(e)}") from e
 
         # Scrape the artwork
-        scraper = Scraper(url)
+        scraper = Scraper(url, progress_callback=progress_callback)
         scraper.set_options(options)
 
         try:

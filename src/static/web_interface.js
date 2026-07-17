@@ -8,6 +8,7 @@ let schedules = [];             // Scheduled imports
 let currentBulkImport = '';     // Current bulk import file
 let bulkTextAsLoaded = '';      // File contents when loaded, to determine changes
 let barTimer = null;            // Timer for progress bar
+let subBarTimer = null;         // Timer for sub-progress bar
 
 const socket = io();
 const instanceId = getInstanceId();
@@ -295,6 +296,38 @@ function progress_bar(percent, message = "") {
 socket.on("progress_bar", (data) => {
     if (validResponse(data)) {
         progress_bar(data.percent, data.message)
+    }
+})
+
+
+// Update the sub-progress bar (progress within the current item, e.g. page/set n of N), showing and hiding as required
+function sub_progress_bar(percent, message = "") {
+
+    const bar_container = document.getElementById("sub_progress_bar_container")
+    const bar = document.getElementById("sub_progress_bar")
+
+    percent = percent > 100 ? 100 : percent;
+
+    if (percent <= 100) {
+        if (subBarTimer) {
+            clearTimeout(subBarTimer); // Cancel the previous timeout
+        }
+        bar_container.classList.add("show")
+        bar.style.width = percent + "%"
+        bar_container.ariaValueNow = message
+        bar.innerHTML = message || ""
+    }
+
+    if (percent === 100) {
+        subBarTimer = setTimeout(() => {
+            bar_container.classList.remove('show'); // Fade out the sub-progress bar after a second
+        }, 2000);
+    }
+}
+
+socket.on("sub_progress_bar", (data) => {
+    if (validResponse(data)) {
+        sub_progress_bar(data.percent, data.message)
     }
 })
 
