@@ -11,10 +11,6 @@ ENV PYTHONPATH="/app/src:${PYTHONPATH}"
 
 COPY requirements.txt .
 
-COPY src/ /app/src/
-
-COPY entrypoint.sh /entrypoint.sh
-
 # Install gosu for dropping privileges and create necessary directories
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gosu && \
@@ -22,9 +18,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     python -m venv /app/venv && \
     pip install --no-cache-dir -r requirements.txt && \
-    chmod +x /entrypoint.sh && \
     groupadd -g 1027 artwork && \
     useradd -u 1027 -g artwork -m artwork
+
+# Copy source last so editing it doesn't bust the dependency-install layer above
+COPY src/ /app/src/
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Expose web UI port
 EXPOSE 4567
