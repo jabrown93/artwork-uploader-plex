@@ -5,6 +5,15 @@ on:
     branches:
       - main
       - beta
+  # Weekly roll-up of the fix(deps) commits that .releaserc.js suppresses on
+  # push, promoted into a single patch release. GitHub only fires schedule
+  # from the default branch, so this sweeps main only; use the manual trigger
+  # below to sweep beta.
+  schedule:
+    - cron: '0 9 * * 1' # Mondays 09:00 UTC — weekly dependency roll-up
+  # Also sets RELEASE_DEPS, so a manual run is an on-demand dependency sweep
+  # (and the only way to promote beta's suppressed fix(deps) commits).
+  workflow_dispatch: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -12,7 +21,7 @@ concurrency:
 
 jobs:
   release:
-    uses: jabrown93/.github/.github/workflows/docker-release.yml@318fa3ed5ddce0cc6bd43e230b5ccd1972fa093c # v1.3.0
+    uses: jabrown93/.github/.github/workflows/docker-release.yml@644b89511f2e5143fb600246050eaf3aa5f532eb # v1.5.0
     permissions:
       contents: write
       packages: write
