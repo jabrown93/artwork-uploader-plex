@@ -185,15 +185,18 @@ def setup_routes(web_app, config: Config):
             if AuthenticationService.authenticate(username, password, config.auth_username, config.auth_password_hash):
                 session['authenticated'] = True
                 session.permanent = remember  # Set to 7 days if remember is checked
+                logger.info(f"Successful login for user '{username}'")
                 return redirect(url_for('home'))
             else:
                 error = "Invalid username or password"
+                logger.warning(f"Failed login attempt for user '{username}'")
 
         return render_template("login.html", error=error)
 
     @web_app.route("/logout")
     def logout():
         """Handle user logout."""
+        logger.info("User logged out")
         session.clear()
         return redirect(url_for('login'))
 
@@ -398,7 +401,11 @@ def setup_socket_handlers(
     def delete_bulk_file(data):
         """Delete a bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
-        delete_bulk_import_file(instance, data.get("filename"))
+        filename = data.get("filename")
+        time = globals.scheduler_service.run_times_by_file.get(filename)
+        delete_bulk_import_file(instance, filename)
+        if time:
+            delete_task_from_scheduler({"instance_id": instance.id, "file": filename})
 
     @globals.web_socket.on("create_bulk_file")
     def create_bulk_file(data):
@@ -605,6 +612,9 @@ def setup_socket_handlers(
         instance = Instance(data.get("instance_id"), "web")
 
         try:
+            # Capture prior auth state so we can detect a disable transition below
+            auth_was_enabled = config.auth_enabled
+
             # Unpack the config dictionary into the local config
             for key, value in data.get("config").items():
                 # Skip password_hash - it should only be set via set_password
@@ -612,6 +622,9 @@ def setup_socket_handlers(
                     continue
                 setattr(config, key, value)
             config.save()
+
+            if auth_was_enabled and not config.auth_enabled:
+                update_log(instance, "Authentication disabled")
 
             # Also update globals
             globals.config = config
@@ -660,6 +673,7 @@ def setup_socket_handlers(
                         {"file": schedule_file,
                             "job_reference": job_id, "deleted": True}
                     )
+                    update_log(instance, f"Removed schedule for '{schedule_file}'")
                 else:
                     notify_web(instance, "delete_schedule", {
                                "deleted": False, "job_id": job_id})
@@ -701,6 +715,7 @@ def setup_socket_handlers(
                             "jobReference": job_id
                         }
                     )
+                    update_log(instance, f"Added schedule for '{schedule_file}' at {schedule_time}")
                 except Exception as e:
                     debug_me(
                         f"Error adding schedule: {e}", "add_tasks_to_scheduler")
