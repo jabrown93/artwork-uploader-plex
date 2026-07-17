@@ -247,8 +247,18 @@ function updateLog(message, color = null, artwork_title = null) {
         message = message.replace(/^\[(\d{2}:\d{2}:\d{2})\.\d{3}\]/, '[$1]');
     }
 
-    // Prepend the new message with timestamp
-    statusElement.innerHTML = '<div class="log_message">' + message + '</div>' + statusElement.innerHTML;
+    // Prepend the new message (newest first) as a node, so we do not re-parse the entire log
+    // on every line. That, plus the line cap below, stops a long scrape from growing the page
+    // until the browser runs out of memory.
+    const entry = document.createElement("div");
+    entry.className = "log_message";
+    entry.innerHTML = message;
+    statusElement.prepend(entry);
+
+    const MAX_LOG_LINES = 500;
+    while (statusElement.childElementCount > MAX_LOG_LINES) {
+        statusElement.removeChild(statusElement.lastElementChild);
+    }
 }
 
 socket.on("log_update", (data) => {
@@ -565,6 +575,10 @@ function saveConfig() {
     // Checkbox for reset overlay for Kometa
     save_config.reset_overlay = document.getElementById("reset_overlay").checked;
 
+    // Checkbox for skipping artwork with locked fields in Plex
+    save_config.skip_locked_artwork = document.getElementById("skip_locked_artwork").checked;
+    toggleSkipLockedCheckbox();
+
     // Get selected mediux filters
     save_config.mediux_filters = Array.from(document.querySelectorAll('[id^="m_filter-"]:checked'))
         .map(checkbox => checkbox.value);
@@ -660,6 +674,7 @@ function loadConfig() {
 
             document.getElementById("auto_manage_bulk_files").checked = data.config.auto_manage_bulk_files;
             document.getElementById("reset_overlay").checked = data.config.reset_overlay;
+            document.getElementById("skip_locked_artwork").checked = data.config.skip_locked_artwork;
             document.getElementById("option-add-to-bulk").checked = data.config.auto_manage_bulk_files;
             document.getElementById("apprise_urls").value = (data.config.apprise_urls || []).join(", ");
 
@@ -684,6 +699,9 @@ function loadConfig() {
 
             // Make sure scraper stage option visibility is set correctly on load
             toggleScraperStageCheckbox();
+
+            // Make sure skip locked artwork option visibility is set correctly on load
+            toggleSkipLockedCheckbox();
 
             // Show/hide logout button based on auth enabled
             if (data.config.auth_enabled) {
@@ -1739,6 +1757,7 @@ function toggleKometaSettings() {
     toggleTempCheckbox();
     togglePlexOptions();
     toggleScraperStageCheckbox();
+    toggleSkipLockedCheckbox();
 }
 
 function toggleScraperStageCheckbox() {
@@ -1789,18 +1808,51 @@ function togglePlexOptions() {
     const saveToKometa = document.getElementById("save_to_kometa").checked;
     const trackArtworkIDs = document.getElementById("track_artwork_ids").parentElement;
     const resetOverlay = document.getElementById("reset_overlay").parentElement;
+    const skipLocked = document.getElementById("skip_locked_artwork").parentElement;
 
     // Ony show the Track Artwork IDs and Reset Overlay options if Kometa is disabled
     if (!saveToKometa) {
         trackArtworkIDs.style.display = "block";
         resetOverlay.style.display = "block";
+        skipLocked.style.display = "block";
     } else {
         trackArtworkIDs.style.display = "none";
         resetOverlay.style.display = "none";
+        skipLocked.style.display = "none"; // Hide only; preserve the checked state so it isn't lost when Kometa is toggled off again
         document.getElementById("track_artwork_ids").checked = true;
         //    document.getElementById("reset_overlay").checked = false;
     }
 }
+
+function toggleSkipLockedCheckbox() {
+    const saveToKometa = document.getElementById("save_to_kometa").checked;
+    const globalSetting = document.getElementById("skip_locked_artwork").checked;
+    const skipLockedCheckbox = document.getElementById("option-skip-locked");
+    const skipLockedCheckboxUpload = document.getElementById("upload-option-skip-locked");
+
+    // Hide and uncheck the skip locked option if Kometa is enabled
+    if (saveToKometa) {
+        skipLockedCheckbox.parentElement.style.display = "none";
+        skipLockedCheckbox.checked = false;
+        skipLockedCheckboxUpload.parentElement.style.display = "none";
+        skipLockedCheckboxUpload.checked = false;
+    } else {
+        if (globalSetting) {
+            skipLockedCheckbox.parentElement.style.display = "none";
+            skipLockedCheckbox.checked = true;
+            skipLockedCheckboxUpload.parentElement.style.display = "none";
+            skipLockedCheckboxUpload.checked = true;
+        } else {
+            skipLockedCheckbox.parentElement.style.display = "block";
+            skipLockedCheckbox.checked = false;
+            skipLockedCheckboxUpload.parentElement.style.display = "block";
+            skipLockedCheckboxUpload.checked = false;
+        }
+    }
+}
+
+// Add event listener for global skip locked artwork checkbox
+document.getElementById("skip_locked_artwork").addEventListener("change", toggleSkipLockedCheckbox);
 
 // Add event listener for save_to_kometa checkbox
 document.getElementById("save_to_kometa").addEventListener("change", toggleKometaSettings);

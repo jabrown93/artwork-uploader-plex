@@ -57,6 +57,9 @@
     "reset_overlay": true,
     "_reset_overlay_help": "Remove Kometa's 'Overlay' label when uploading new artwork",
 
+    "skip_locked_artwork": false,
+    "_skip_locked_artwork_help": "Skip artwork whose target field is locked in Plex (already set), unless --force is used",
+
     "schedules": [],
     "_schedules_help": "Scheduled bulk import jobs. Configure through the web UI",
 

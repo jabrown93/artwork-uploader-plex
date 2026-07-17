@@ -240,6 +240,10 @@ This is optional - if you don't do this, a new config.json will be created when 
 - Setting this to ```true``` will remove the Overlay label that Kometa uses when we upload new artwork, so Kometa can reapply any overlays in future
 - Setting to ```false``` will leave the Overlay label as it is, Kometa will not re-apply your overlays.
 
+```"skip_locked_artwork"```
+- Setting this to ```true``` will skip any artwork whose target field (poster, background or square art) is locked in Plex, unless ```--force``` is used.  Plex locks a field whenever artwork is deliberately set - manually or by an upload - so this makes scheduled bulk imports and user scrapes fill items still on default artwork while leaving anything you've already set alone.
+- Setting to ```false``` (the default) keeps the existing behaviour where artwork is applied regardless of locks.
+
 ```"save_to_kometa"```
 - Setting this to ```true``` will save scraped artwork to the Kometa asset directory
 - Setting to ```false``` will keep the original behavior where the artwork will be immediately applied to Plex directly
@@ -370,6 +374,8 @@ The script supports various command-line arguments for flexible use.
 ```--add-posters``` will also parse the additional posters section of the set, when using the Poster DB
    
 ```--force``` will force the artwork to be updated even if it's the same as the one on plex already - or maybe you changed the artwork manually and want to override it...
+
+```--skip-locked``` will skip any artwork whose target field is locked in Plex (i.e. it's been deliberately set, manually or by a previous upload), unless ```--force``` is also used.  This is the same as setting ```skip_locked_artwork``` to ```true``` in ```config.json```, but per URL.
     
 ```--exclude <id1> [<id2> <id3> ...]``` will exclude the poster or artwork with the specified ID from being uploaded.  Grab the ID from the session log...
 - ThePosterDB is a number

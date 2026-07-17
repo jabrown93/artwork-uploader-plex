@@ -106,6 +106,7 @@ All application code lives under `src/`:
 | `kometa_base` | string | Kometa asset directory path |
 | `kometa_library_paths` | dict | Map library names to custom directory names |
 | `reset_overlay` | bool | Remove Kometa overlay label on upload |
+| `skip_locked_artwork` | bool | Skip artwork whose target field is locked in Plex, unless `--force` |
 
 Docker: `RUNNING_IN_DOCKER=1` hardcodes Kometa base to `/assets` and temp dir to `/temp`.
 
