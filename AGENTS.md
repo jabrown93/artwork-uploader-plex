@@ -145,7 +145,7 @@ Managed in `src/core/globals.py`. Singletons: `web_socket`, `scheduler_service`,
 
 ## Constraints
 
-- **Python 3.10+** required. Use 3.11 or 3.12 (eventlet issues with 3.13).
+- **Python 3.12+** required.
 - **Port 4567** default (configurable via `DEFAULT_WEB_PORT`).
 - **Plex timeout**: 3s connection timeout; web UI starts even if Plex unreachable.
 - **Version**: Defined in `src/core/__version__.py`. Use `bump_version.py` for bumps.
