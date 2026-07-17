@@ -376,6 +376,9 @@ def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, ass
                 notify_web(instance, "sub_progress_bar",
                            {"message": f"Page {page + 1} / {pages}", "percent": percent})
     except Exception:
+        # Clear the sub-progress bar if it was showing so a failed page doesn't leave it stuck
+        if pages > 1:
+            notify_web(instance, "sub_progress_bar", {"percent": 100})
         raise ScraperException(f"Failed to process and upload from URL: {url}")
 
 

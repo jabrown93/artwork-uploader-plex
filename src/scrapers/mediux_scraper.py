@@ -77,14 +77,20 @@ class MediuxScraper:
                         debug_me(f"Obtained {len(set_ids)} set IDs from Boxset '{self.title}' by '{self.author}'", "MedixScraper/scrape")
 
                         # Spawn and scrape a child MediuxScraper for each set in the boxset
-                        for n, set_id in enumerate(set_ids,1):
-                            self._scrape_set_in_boxset(set_id)
-                            movies =len(self.movie_artwork)
-                            collections = len(self.collection_artwork)
-                            shows = len(self.tv_artwork)
-                            debug_me(f"Processed {n} out of {len(set_ids)} sets. Collected {movies} movie, {collections} collection and {shows} TV show assets so far, skipped {self.skipped}", "MedixScraper/scrape")
-                            if self.progress_callback:
-                                self.progress_callback(n, len(set_ids))
+                        try:
+                            for n, set_id in enumerate(set_ids,1):
+                                self._scrape_set_in_boxset(set_id)
+                                movies =len(self.movie_artwork)
+                                collections = len(self.collection_artwork)
+                                shows = len(self.tv_artwork)
+                                debug_me(f"Processed {n} out of {len(set_ids)} sets. Collected {movies} movie, {collections} collection and {shows} TV show assets so far, skipped {self.skipped}", "MedixScraper/scrape")
+                                if self.progress_callback:
+                                    self.progress_callback(n, len(set_ids))
+                        except Exception:
+                            # Clear the sub-progress bar if a later set fails so it doesn't stay stuck below 100%
+                            if self.progress_callback and set_ids:
+                                self.progress_callback(len(set_ids), len(set_ids))
+                            raise
 
                         return
 
