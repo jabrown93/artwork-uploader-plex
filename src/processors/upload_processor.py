@@ -374,87 +374,106 @@ class UploadProcessor:
             asset_folder = path_parts[-3] if path_parts[-2].lower().startswith("season") or path_parts[
                 -2].lower().startswith("specials") else path_parts[-2]
             try:
-                if artwork["season"] in (SEASON_COVER, SEASON_BACKDROP, SEASON_SQUARE_ART):
-                    upload_target = tv_show
-                    artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
-                elif artwork["season"] >= 0:
-                    if artwork["episode"] == EPISODE_COVER or artwork["episode"] is None:
-                        # Season cover artwork
-                        sonarr_seasons = self._get_sonarr_seasons_if_needed(tv_show, artwork, artwork["season"])
-                        if self._should_process_season(tv_show, artwork["season"], season, sonarr_seasons):
-                            debug_me(f"Staging is {'enabled' if self.staging else 'disabled'}.",
-                                     "UploadProcessor/process_tv_artwork")
-                            if not self.kometa:
-                                upload_target = tv_show.season(artwork["season"])
-                            artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
-                            if sonarr_seasons is not None and artwork["season"] in sonarr_seasons:
-                                desc = f"{desc} • pre-seeded via Sonarr"
-                        else:
-                            result = f"⚠️ {desc} | {season} not available in {library}"
-                            results.append(result)
-                            continue
-                    elif artwork["episode"] >= 0:
-                        # Episode title card artwork
-                        sonarr_seasons = self._get_sonarr_seasons_if_needed(tv_show, artwork, artwork["season"])
-                        if self._should_process_season(tv_show, artwork["season"], season, sonarr_seasons):
-                            # Season is processable, check episode
-                            via_sonarr = sonarr_seasons is not None and artwork["season"] in sonarr_seasons
-                            if self._episode_exists_in_plex(tv_show, artwork["season"], artwork["episode"]) or self.staging or via_sonarr:
-                                if not self.kometa:
-                                    upload_target = tv_show.season(artwork["season"]).episode(artwork["episode"])
-                                artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
-                                if via_sonarr:
-                                    desc = f"{desc} • pre-seeded via Sonarr"
-                            else:
-                                result = f"⚠️ {desc} | {season}, Episode {artwork['episode']:02} not available in {library}"
-                                results.append(result)
-                                continue
-                        else:
-                            # Season is not processable
-                            result = f"⚠️ {desc} | {season} not available in {library}"
-                            results.append(result)
-                            continue
-
+                resolved, warning = self._resolve_tv_upload_target(tv_show, artwork, season, desc, library)
             except (AttributeError, KeyError, NotFound) as e:
                 raise ShowNotFound(
                     f"{desc} | Not available on Plex in {library}: {e}") from e
 
-            try:
-                if upload_target or (self.options.kometa or globals.config.save_to_kometa):
-                    if (self.options.has_no_filters() and self.check_master_filters(filter_type,
-                                                                                    artwork_source)) or self.options.has_filter(
-                            filter_type):
-                        # Pass season/episode info for TV show exclusion checks
-                        season_num = artwork['season'] if isinstance(
-                            artwork['season'], int) else None
-                        episode_num = artwork['episode'] if isinstance(
-                            artwork['episode'], int) else None
-                        if not self.options.is_excluded(artwork["id"], season_num, episode_num):
-                            if self.kometa:
-                                result = self._save_kometa_asset(
-                                    artwork, library, asset_folder, file_name, artwork_type, desc)
-                                results.append(result)
-                            else:
-                                uploader = PlexUploader(
-                                    upload_target, artwork_type, artwork_id)
-                                uploader.set_artwork(artwork)
-                                uploader.track_artwork_ids = self.config.track_artwork_ids
-                                uploader.reset_overlay = self.config.reset_overlay
-                                uploader.skip_locked = self.skip_locked
-                                uploader.set_description(desc)
-                                uploader.set_options(self.options)
-                                result = uploader.upload_to_plex()
-                                results.append(result)
+            if warning is not None:
+                results.append(warning)
+                continue
+            if resolved is not None:
+                upload_target, artwork_id, artwork_type, file_name, filter_type, desc = resolved
+
+            if upload_target or (self.options.kometa or globals.config.save_to_kometa):
+                if (self.options.has_no_filters() and self.check_master_filters(filter_type,
+                                                                                artwork_source)) or self.options.has_filter(
+                        filter_type):
+                    # Pass season/episode info for TV show exclusion checks
+                    season_num = artwork['season'] if isinstance(
+                        artwork['season'], int) else None
+                    episode_num = artwork['episode'] if isinstance(
+                        artwork['episode'], int) else None
+                    if not self.options.is_excluded(artwork["id"], season_num, episode_num):
+                        if self.kometa:
+                            result = self._save_kometa_asset(
+                                artwork, library, asset_folder, file_name, artwork_type, desc)
+                            results.append(result)
                         else:
-                            raise NotProcessedByExclusion(
-                                f"{desc} | {artwork_type} excluded")
+                            uploader = PlexUploader(
+                                upload_target, artwork_type, artwork_id)
+                            uploader.set_artwork(artwork)
+                            uploader.track_artwork_ids = self.config.track_artwork_ids
+                            uploader.reset_overlay = self.config.reset_overlay
+                            uploader.skip_locked = self.skip_locked
+                            uploader.set_description(desc)
+                            uploader.set_options(self.options)
+                            result = uploader.upload_to_plex()
+                            results.append(result)
                     else:
-                        raise NotProcessedByFilter(
-                            f"{desc} | {artwork_type} not processed due to {'requested' if not self.options.has_filter(filter_type) else artwork_source} filtering")
-            except Exception:
-                raise
+                        raise NotProcessedByExclusion(
+                            f"{desc} | {artwork_type} excluded")
+                else:
+                    raise NotProcessedByFilter(
+                        f"{desc} | {artwork_type} not processed due to {'requested' if not self.options.has_filter(filter_type) else artwork_source} filtering")
 
         return results
+
+    def _resolve_tv_upload_target(
+            self, tv_show, artwork: TVArtwork, season: str, desc: str, library: str
+    ) -> tuple[Optional[tuple], Optional[str]]:
+        """
+        Determine where a TV artwork item should be uploaded within a Plex show found
+        in `library`.
+
+        Returns (resolved, warning):
+        - resolved = (upload_target, artwork_id, artwork_type, file_name, filter_type,
+          desc) when the season/episode is available and should be uploaded.
+          upload_target is None in Kometa mode - the Kometa save path derives its
+          destination from asset_folder instead.
+        - warning = a "not available in {library}" message when the season/episode is
+          recognized but not available here; the caller should append it and skip.
+        - both None when artwork['season']/['episode'] don't match any recognized
+          shape. This mirrors the original code's behavior for that case (not
+          observed in practice given how artwork dicts are built upstream): the
+          caller leaves its previous upload_target/artwork_type/etc. untouched
+          rather than this method inventing a result for it.
+        """
+        if artwork["season"] in (SEASON_COVER, SEASON_BACKDROP, SEASON_SQUARE_ART):
+            upload_target = tv_show
+            artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
+            return (upload_target, artwork_id, artwork_type, file_name, filter_type, desc), None
+
+        if artwork["season"] >= 0:
+            if artwork["episode"] == EPISODE_COVER or artwork["episode"] is None:
+                # Season cover artwork
+                sonarr_seasons = self._get_sonarr_seasons_if_needed(tv_show, artwork, artwork["season"])
+                if not self._should_process_season(tv_show, artwork["season"], season, sonarr_seasons):
+                    return None, f"⚠️ {desc} | {season} not available in {library}"
+                debug_me(f"Staging is {'enabled' if self.staging else 'disabled'}.",
+                         "UploadProcessor/process_tv_artwork")
+                upload_target = None if self.kometa else tv_show.season(artwork["season"])
+                artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
+                if sonarr_seasons is not None and artwork["season"] in sonarr_seasons:
+                    desc = f"{desc} • pre-seeded via Sonarr"
+                return (upload_target, artwork_id, artwork_type, file_name, filter_type, desc), None
+
+            if artwork["episode"] >= 0:
+                # Episode title card artwork
+                sonarr_seasons = self._get_sonarr_seasons_if_needed(tv_show, artwork, artwork["season"])
+                if not self._should_process_season(tv_show, artwork["season"], season, sonarr_seasons):
+                    return None, f"⚠️ {desc} | {season} not available in {library}"
+                via_sonarr = sonarr_seasons is not None and artwork["season"] in sonarr_seasons
+                if not (self._episode_exists_in_plex(tv_show, artwork["season"], artwork["episode"])
+                        or self.staging or via_sonarr):
+                    return None, f"⚠️ {desc} | {season}, Episode {artwork['episode']:02} not available in {library}"
+                upload_target = None if self.kometa else tv_show.season(artwork["season"]).episode(artwork["episode"])
+                artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
+                if via_sonarr:
+                    desc = f"{desc} • pre-seeded via Sonarr"
+                return (upload_target, artwork_id, artwork_type, file_name, filter_type, desc), None
+
+        return None, None
 
     def _preseed_tv_artwork(self, artwork: TVArtwork, description: str, season: str, artwork_source: str) -> list[Any]:
         """
