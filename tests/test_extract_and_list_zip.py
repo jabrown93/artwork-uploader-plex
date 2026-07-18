@@ -1,9 +1,8 @@
 """
 Characterization tests for web_routes.extract_and_list_zip.
 
-These exercise the real ZIP-extraction pipeline end-to-end (real ZIP files on
-disk, injected orientation/sort callables, a stub Plex connector) to pin down
-current behavior before refactoring extract_and_list_zip.
+These exercise the real ZIP-extraction pipeline end-to-end: real ZIP files on
+disk, injected orientation/sort callables, and a stub Plex connector.
 """
 
 import os
