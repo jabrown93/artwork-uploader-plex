@@ -124,10 +124,8 @@ class TestSuccessPath:
         stub = _stub_upload_processor["instance"]
         assert len(stub.movie_calls) == 1
         assert "✅ movie uploaded" in recorder.log_calls
-        # temp file and its directory should be cleaned up
         assert not os.path.exists(artwork["path"])
         assert not os.path.exists(os.path.dirname(artwork["path"]))
-        # final summary log mentions 1 asset updated
         assert any("1 asset(s) updated" in msg for msg in recorder.log_calls)
 
     def test_collection_artwork_dispatches_to_collection_processor(self, tmp_path, _stub_upload_processor):
@@ -163,7 +161,6 @@ class TestSuccessPath:
         def make_results(_artwork):
             return ["✅ one", "♻️ two", "⚠️ three not a success"]
 
-        # Re-run with a custom factory that sets movie_result to our list
         import services.artwork_processor as mod
 
         def factory(plex):
@@ -221,16 +218,8 @@ class TestUnavailableMediaType:
         assert not os.path.exists(artwork["path"])
 
     def test_unavailable_without_on_log_update_still_reports_not_available(self, tmp_path, _stub_upload_processor):
-        # Bug found while refactoring: the "unavailable" branch's warning log,
-        # cleanup, and loop `continue` were all nested inside
-        # `if callbacks and callbacks.on_log_update:`. A ProcessingCallbacks with
-        # on_status_update/on_debug set but on_log_update left None (a legal
-        # combination - every field is individually Optional) skipped that whole
-        # branch, fell through to `process_func(artwork)` with process_func never
-        # assigned, hit UnboundLocalError, and got silently reported through the
-        # generic `except Exception` handler as on_status_update("Error: local
-        # variable 'process_func' ...") instead of the intended "Not available on
-        # Plex" warning. Fixed: the branch now always runs and always continues.
+        # Every ProcessingCallbacks field is independently Optional, so on_log_update=None
+        # must not skip the warning/cleanup/continue logic in the "unavailable" branch.
         artwork = _make_temp_artwork(tmp_path, media="unavailable", title="Ghost Movie", year=1999)
         recorder = RecordingCallbacks()
         callbacks = ProcessingCallbacks(
@@ -296,7 +285,6 @@ class TestExceptionHandling:
             )
         matching = [msg for msg in recorder.log_calls if msg.startswith(expected_prefix) and "boom" in msg]
         assert len(matching) == 1
-        # temp file cleanup still happens even when processing raised
         assert not os.path.exists(artwork["path"])
 
     def test_unexpected_exception_logs_error_and_updates_status(self, tmp_path, _stub_upload_processor):
@@ -322,7 +310,6 @@ class TestExceptionHandling:
             )
         assert any("Unexpected during process_uploaded_artwork" in msg and "kaboom" in msg for msg in recorder.log_calls)
         assert any(call[0].startswith("Error:") and call[1] == "danger" for call in recorder.status_calls)
-        # cleanup still ran
         assert not os.path.exists(artwork["path"])
 
 
