@@ -46,6 +46,43 @@ class ArtworkProcessor:
     def __init__(self, plex: PlexConnector) -> None:
         self.plex = plex
 
+    @staticmethod
+    def _emit_debug(callbacks: Optional[ProcessingCallbacks], message: str,
+                     context: str = "process_uploaded_artwork") -> None:
+        if callbacks and callbacks.on_debug:
+            callbacks.on_debug(message, context)
+
+    @staticmethod
+    def _emit_log(callbacks: Optional[ProcessingCallbacks], message: str) -> None:
+        if callbacks and callbacks.on_log_update:
+            callbacks.on_log_update(message)
+
+    @staticmethod
+    def _emit_progress(callbacks: Optional[ProcessingCallbacks], current: int, total: int) -> None:
+        if callbacks and callbacks.on_progress_update:
+            callbacks.on_progress_update(current, total)
+
+    @staticmethod
+    def _emit_status(callbacks: Optional[ProcessingCallbacks], message: str, color: str,
+                      spinner: bool, sticky: bool) -> None:
+        if callbacks and callbacks.on_status_update:
+            callbacks.on_status_update(message, color, spinner, sticky)
+
+    @classmethod
+    def _cleanup_temp_artwork_file(cls, artwork: dict, callbacks: Optional[ProcessingCallbacks]) -> None:
+        """Delete an uploaded artwork's temp file and its containing temp directory, if now empty."""
+        path = artwork['path']
+        try:
+            os.remove(path)
+            cls._emit_debug(callbacks, f"Deleted temporary file: {path}")
+        except OSError as e:
+            cls._emit_debug(callbacks, f"Failed to delete temporary file: {path} - {str(e)}")
+        try:
+            os.rmdir(os.path.dirname(path))
+            cls._emit_debug(callbacks, f"Deleted temporary directory: {os.path.dirname(path)}")
+        except OSError as e:
+            cls._emit_debug(callbacks, f"Error deleting temporary directory: {os.path.dirname(path)} - {str(e)}")
+
     def scrape_and_process(
         self,
         url: str,
@@ -240,35 +277,42 @@ class ArtworkProcessor:
             # We determine if it's a single movie/TV ZIP by checking if the title of the ZIP file is part of the title of the first file
             # Otherwise we assume it's a ZIP file containing artwork for multiple shows/movies/collections and leave year as None
             year = file_list[0].get('year', 'unknown') if title in file_list[0].get('title', 'unknown') else None
-            if callbacks and callbacks.on_debug:
-                callbacks.on_debug(f"Processing {total_files} files from {source} ZIP file for {title}{f' ({year})' if year else ''}", "process_uploaded_artwork")
+            self._emit_debug(callbacks, f"Processing {total_files} files from {source} ZIP file for {title}{f' ({year})' if year else ''}")
         else:
             year = None
-            if callbacks and callbacks.on_debug:
-                callbacks.on_debug("No files to process in uploaded ZIP file", "process_uploaded_artwork")
+            self._emit_debug(callbacks, "No files to process in uploaded ZIP file")
 
         success_counter = 0  # Mutable counter to track successful uploads
 
         # Initial progress update
-        if callbacks and callbacks.on_debug:
-            callbacks.on_debug("Processing uploaded file...", "process_uploaded_artwork")
-        if callbacks and callbacks.on_progress_update:
-            callbacks.on_progress_update(0, total_files)
+        self._emit_debug(callbacks, "Processing uploaded file...")
+        self._emit_progress(callbacks, 0, total_files)
 
-        if callbacks and callbacks.on_log_update:
-            callbacks.on_log_update(f"⚙️ {title}{f' ({year})' if year else ''} • {author} | Obtained {total_files + skipped} asset(s) from uploaded {'MediUX' if source=="mediux" else 'TPDb'} ZIP file.")
-            if skipped > 0:
-                callbacks.on_log_update(f"⏩ {title}{f' ({year})' if year else ''} • {author} | Skipping {skipped} asset(s) based on filters. Processing {total_files} asset(s).")
+        self._emit_log(
+            callbacks,
+            f"⚙️ {title}{f' ({year})' if year else ''} • {author} | Obtained {total_files + skipped} asset(s) "
+            f"from uploaded {'MediUX' if source == 'mediux' else 'TPDb'} ZIP file."
+        )
+        if skipped > 0:
+            self._emit_log(
+                callbacks,
+                f"⏩ {title}{f' ({year})' if year else ''} • {author} | Skipping {skipped} asset(s) based on "
+                f"filters. Processing {total_files} asset(s)."
+            )
 
         for index, artwork in enumerate(file_list, start=1):
-            # Update progress
-            if callbacks and callbacks.on_progress_update:
-                callbacks.on_progress_update(index, total_files)
+            self._emit_progress(callbacks, index, total_files)
             # Override title if provided
             if override_title:
                 artwork['title'] = override_title
 
             media_type = artwork.get('media')
+
+            if media_type == "unavailable":
+                year_suffix = f" ({artwork['year']})" if artwork.get('year') else ''
+                self._emit_log(callbacks, f"⚠️ {artwork['title']}{year_suffix} : {artwork['author']} | Not available on Plex.")
+                self._cleanup_temp_artwork_file(artwork, callbacks)
+                continue
 
             # Call the appropriate processor method based on media type
             if media_type == "Collection":
@@ -277,21 +321,8 @@ class ArtworkProcessor:
                 process_func = processor.process_movie_artwork
             elif media_type == "TV Show":
                 process_func = processor.process_tv_artwork
-            elif media_type == "unavailable":
-                if callbacks and callbacks.on_log_update:
-                    year_suffix = f" ({artwork['year']})" if artwork.get('year') else ''
-                    callbacks.on_log_update(f"⚠️ {artwork['title']}{year_suffix} : {artwork['author']} | Not available on Plex.")
-                    os.remove(artwork['path'])  # Remove the temporary file after processing
-                    try:
-                        os.rmdir(os.path.dirname(artwork['path']))  # Remove the temporary directory if empty
-                        callbacks.on_debug(f"Deleted temporary directory: {os.path.dirname(artwork['path'])}", "process_uploaded_artwork")
-                    except OSError as e:
-                        callbacks.on_debug(f"Error deleting temporary directory: {os.path.dirname(artwork['path'])} - {str(e)}", "process_uploaded_artwork")
-                        pass
-                    continue
             else:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"❌ Unknown media type: {media_type}")
+                self._emit_log(callbacks, f"❌ Unknown media type: {media_type}")
                 continue
 
             # Build status message
@@ -299,18 +330,8 @@ class ArtworkProcessor:
             episode_info = f", Episode {artwork['episode']}" if artwork.get('episode') else ""
             status_msg = f'Processing artwork for {media_type.lower()} "{artwork["title"]}"{season_info}{episode_info}'
 
-            # Debug logging
-            if callbacks and callbacks.on_debug:
-                callbacks.on_debug(status_msg, "process_uploaded_artwork")
-
-            # Update status
-            if callbacks and callbacks.on_status_update:
-                callbacks.on_status_update(
-                    status_msg,
-                    "info",
-                    True,   # spinner
-                    True    # sticky
-                )
+            self._emit_debug(callbacks, status_msg)
+            self._emit_status(callbacks, status_msg, "info", True, True)  # spinner, sticky
 
             # Process the artwork
             try:
@@ -320,57 +341,24 @@ class ArtworkProcessor:
                     # Track successful uploads (those starting with ✅ or ♻️)
                     if result.startswith('✅') or result.startswith('♻️'):
                         success_counter += 1
+                    self._emit_log(callbacks, result)
 
-                    # Log the result
-                    if callbacks and callbacks.on_log_update:
-                        callbacks.on_log_update(result)
+            except (CollectionNotFound, MovieNotFound, ShowNotFound) as e:
+                self._emit_log(callbacks, f"⚠️ {str(e)}")
 
-            except CollectionNotFound as e:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⚠️ {str(e)}")
-
-            except MovieNotFound as e:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⚠️ {str(e)}")
-
-            except ShowNotFound as e:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⚠️ {str(e)}")
-
-            except NotProcessedByExclusion as e:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⏩ {str(e)}")
-
-            except NotProcessedByFilter as e:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"⏩ {str(e)}")
+            except (NotProcessedByExclusion, NotProcessedByFilter) as e:
+                self._emit_log(callbacks, f"⏩ {str(e)}")
 
             except Exception as e:
-                if callbacks and callbacks.on_log_update:
-                    callbacks.on_log_update(f"❌ Unexpected during process_uploaded_artwork: {str(e)}")
-                if callbacks and callbacks.on_status_update:
-                    callbacks.on_status_update(
-                        f"Error: {str(e)}",
-                        "danger",
-                        False,  # no spinner
-                        False   # not sticky
-                    )
-            try:
-                os.remove(artwork['path'])  # Remove the temporary file after processing
-                if callbacks and callbacks.on_debug:
-                    callbacks.on_debug(f"Deleted temporary file: {artwork['path']}", "process_uploaded_artwork")
-            except OSError as e:
-                if callbacks and callbacks.on_debug:
-                    callbacks.on_debug(f"Failed to delete temporary file: {artwork['path']} - {str(e)}", "process_uploaded_artwork")
-                pass
-            try:
-                os.rmdir(os.path.dirname(artwork['path']))  # Remove the temporary directory if empty
-                if callbacks and callbacks.on_debug:
-                    callbacks.on_debug(f"Deleted temporary directory: {os.path.dirname(artwork['path'])}", "process_uploaded_artwork")
-            except OSError:
-                pass
+                self._emit_log(callbacks, f"❌ Unexpected during process_uploaded_artwork: {str(e)}")
+                self._emit_status(callbacks, f"Error: {str(e)}", "danger", False, False)  # no spinner, not sticky
+
+            self._cleanup_temp_artwork_file(artwork, callbacks)
+
         # Final progress update
-        if callbacks and callbacks.on_log_update:
-            callbacks.on_log_update(f"✔️ {title}{f' ({year})' if year else ''} • {author} | {total_files} file(s) processed • {success_counter} asset(s) updated.")
-        if callbacks and callbacks.on_progress_update:
-            callbacks.on_progress_update(total_files, total_files)
+        self._emit_log(
+            callbacks,
+            f"✔️ {title}{f' ({year})' if year else ''} • {author} | {total_files} file(s) processed • "
+            f"{success_counter} asset(s) updated."
+        )
+        self._emit_progress(callbacks, total_files, total_files)
