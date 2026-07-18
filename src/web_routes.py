@@ -10,6 +10,7 @@ The routes are organized into:
 - Helper functions for file uploads and processing
 """
 import shutil
+from typing import Optional
 
 from utils.notifications import update_log, update_status, notify_web, debug_me, send_notification
 from utils import utils
@@ -942,6 +943,138 @@ def save_uploaded_file(
                   color="success")
 
 
+def _detect_zip_source_from_filename(zip_path: str) -> tuple[str, Optional[str], Optional[str]]:
+    """
+    Detect a ZIP's source from its filename. ThePosterDB ZIPs encode
+    "<title> set by <author> - ..."; anything else is assumed to be MediUX
+    (confirmed or overridden later if a source.txt entry is found inside).
+    """
+    pattern = r"^(?P<title>.+?)\s+set by\s+(?P<author>.+?)\s*-"
+    match = re.search(pattern, os.path.basename(zip_path), re.IGNORECASE)
+    if not match:
+        return SOURCE_MEDIUX, None, None
+
+    title = match.group("title").strip()
+    author = match.group("author").strip()
+    debug_me(f"Detected ThePosterDB source", "extract_and_list_zip")
+    debug_me(f"Detected ZIP title: {title}", "extract_and_list_zip")
+    debug_me(f"Detected ZIP author: {author}", "extract_and_list_zip")
+    return SOURCE_THEPOSTERDB, title, author
+
+
+def _extract_mediux_source_metadata(
+        zip_ref: zipfile.ZipFile, zip_info: zipfile.ZipInfo, extract_dir: str
+) -> tuple[Optional[str], Optional[str]]:
+    """Extract and parse a MediUX ZIP's source.txt for the set title/author, then remove it."""
+    debug_me("Detected Mediux source", "extract_and_list_zip")
+    source_txt_path = os.path.join(extract_dir, SOURCE_TXT)
+    with zip_ref.open(zip_info) as source, open(source_txt_path, "wb") as target:
+        target.write(source.read())
+
+    zip_title = None
+    zip_author = None
+    with open(source_txt_path, "r", encoding="utf-8") as source_file:
+        for line in source_file:
+            if line.startswith("Title:"):
+                zip_title = line.split("Title:")[1].strip()
+                debug_me(f"Detected ZIP title: {zip_title}", "extract_and_list_zip")
+            if line.startswith("Author:"):
+                zip_author = line.split("Author:")[1].strip()
+                debug_me(f"Detected ZIP author: {zip_author}", "extract_and_list_zip")
+                break
+    os.remove(source_txt_path)
+    return zip_title, zip_author
+
+
+def _resolve_plex_title(
+        original_title: str, lookup_year: Optional[int]
+) -> tuple[Optional[str], Optional[int], Optional[str], Optional[int], str]:
+    """
+    Look up a ZIP-derived title in Plex, trying progressively looser matches:
+    the literal title, colon/hyphen restoration, accent-folding, and (if a
+    year is known) progressively shorter titles.
+
+    Returns (media_type, tmdb_id, found_title, found_year, resolved_title),
+    where resolved_title is the last candidate string actually tried
+    (i.e. the one that matched, once media_type is not None).
+    """
+    media_type, tmdb_id, title, year = globals.plex.movie_or_show(original_title, lookup_year)
+    candidate_title = original_title
+
+    if media_type is None:
+        # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
+        candidate_title = re.sub(r'_(?=\s)', ':', original_title)
+        candidate_title = re.sub(r'\s-\s', ': ', candidate_title).replace('...', '').strip()
+        media_type, tmdb_id, title, year = globals.plex.movie_or_show(candidate_title, lookup_year)
+
+    if media_type is None:
+        # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
+        # ASCII-fold the title so Plex can match against the accented original
+        folded = ''.join(
+            c for c in unicodedata.normalize('NFKD', candidate_title)
+            if not unicodedata.combining(c)
+        )
+        if folded != candidate_title:
+            candidate_title = folded
+            media_type, tmdb_id, title, year = globals.plex.movie_or_show(candidate_title, lookup_year)
+
+    if media_type is None and lookup_year is not None:
+        # Fallback: try progressively shorter titles for any remaining mismatch
+        # (e.g. stripped subtitles or missing apostrophes: "Worlds End" vs "World's End")
+        words = re.sub(r'_(?=\s)|\s-\s', ' ', original_title).split()
+        max_strip = globals.config.zip_title_strip_words if globals.config else 3
+        min_words = max(2, len(words) - max_strip)
+        for end in range(len(words) - 1, min_words - 1, -1):
+            short_title = ' '.join(words[:end])
+            media_type, tmdb_id, title, year = globals.plex.movie_or_show(short_title, lookup_year)
+            if media_type is not None:
+                candidate_title = short_title
+                break
+
+    return media_type, tmdb_id, title, year, candidate_title
+
+
+def _reclassify_artwork_type(artwork: dict, check_image_orientation_func) -> None:
+    """Refine artwork['type']/['season']/['media'] using image orientation, in place."""
+    if artwork['media'] == "TV Show":
+        if artwork['type'] == FilterType.SQUARE_ART.value:
+            # Square art is identified by its filename OST suffix; don't let the
+            # orientation checks below reclassify it as a cover or backdrop
+            artwork['season'] = SEASON_SQUARE_ART
+        else:
+            if artwork['season'] is None:
+                artwork['season'] = "Cover"
+                artwork['type'] = FilterType.SHOW_COVER.value
+            if artwork['season'] == "Cover" and check_image_orientation_func(artwork["path"]) == "landscape":
+                artwork['season'] = "Backdrop"
+                artwork['type'] = FilterType.BACKGROUND.value
+    if artwork['media'] == "Movie" and artwork['type'] != FilterType.SQUARE_ART.value:
+        if check_image_orientation_func(artwork["path"]) == "landscape":
+            artwork['type'] = FilterType.BACKGROUND.value
+        else:
+            artwork['type'] = FilterType.MOVIE_POSTER.value
+    if artwork['media'] == "Collection":
+        if check_image_orientation_func(artwork["path"]) == "landscape":
+            artwork['type'] = FilterType.BACKGROUND.value
+    if artwork['media'] == "unavailable":
+        if check_image_orientation_func(artwork["path"]) == "landscape":
+            artwork['type'] = FilterType.BACKGROUND.value
+        if artwork['type'] == FilterType.SEASON_COVER.value:
+            artwork['media'] = "TV Show"
+        else:
+            # Intentional fallback: "poster" doesn't match any FilterType, so this
+            # unclassifiable artwork won't pass filters and won't be processed further
+            artwork['type'] = "poster"
+
+
+def _artwork_log_label(artwork: dict) -> str:
+    """Build the "'{title} (YYYY)', Season N, Episode M" fragment shared by include/skip log lines."""
+    year_suffix = f" ({artwork['year']})" if artwork['year'] is not None else ""
+    season_suffix = f", Season {artwork['season']}" if isinstance(artwork['season'], int) else ""
+    episode_suffix = f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else ""
+    return f"'{artwork['title']}{year_suffix}'{season_suffix}{episode_suffix}"
+
+
 def extract_and_list_zip(
         instance: Instance,
         zip_path: str,
@@ -970,25 +1103,12 @@ def extract_and_list_zip(
     """
     extract_dir = tempfile.mkdtemp()
     file_list = []
-    zip_source = SOURCE_THEPOSTERDB
-    zip_title = None
-    zip_author = None
     filtered_files = 0
 
     debug_me(
         f"Extracting ZIP file: {zip_path} to {extract_dir}", "extract_and_list_zip")
 
-    # For ThePosterDB, extract title and author from filename
-    pattern = r"^(?P<title>.+?)\s+set by\s+(?P<author>.+?)\s*-"
-    match = re.search(pattern, os.path.basename(zip_path), re.IGNORECASE)
-    if match:
-        zip_title = match.group("title").strip()
-        zip_author = match.group("author").strip()
-        debug_me(f"Detected ThePosterDB source", "extract_and_list_zip")
-        debug_me(f"Detected ZIP title: {zip_title}", "extract_and_list_zip")
-        debug_me(f"Detected ZIP author: {zip_author}", "extract_and_list_zip")
-    else:
-        zip_source = SOURCE_MEDIUX
+    zip_source, zip_title, zip_author = _detect_zip_source_from_filename(zip_path)
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # Pre-process the file list to determine source and extract valid files
@@ -1010,20 +1130,8 @@ def extract_and_list_zip(
 
             # Mediux ZIP files contain a source.txt file with metadata
             if filename == SOURCE_TXT:
-                debug_me("Detected Mediux source", "extract_and_list_zip")
                 zip_source = SOURCE_MEDIUX
-                with zip_ref.open(zip_info) as source, open(os.path.join(extract_dir, SOURCE_TXT), "wb") as target:
-                    target.write(source.read())
-                with open(os.path.join(extract_dir, SOURCE_TXT), "r", encoding="utf-8") as source_file:
-                    for line in source_file:
-                        if line.startswith("Title:"):
-                            zip_title = line.split("Title:")[1].strip()
-                            debug_me(f"Detected ZIP title: {zip_title}", "extract_and_list_zip")
-                        if line.startswith("Author:"):
-                            zip_author = line.split("Author:")[1].strip()
-                            debug_me(f"Detected ZIP author: {zip_author}", "extract_and_list_zip")
-                            break
-                os.remove(os.path.join(extract_dir, SOURCE_TXT))
+                zip_title, zip_author = _extract_mediux_source_metadata(zip_ref, zip_info, extract_dir)
 
             elif filename_pattern.match(filename):
                 full_path = os.path.join(extract_dir, filename)
@@ -1053,94 +1161,28 @@ def extract_and_list_zip(
                         artwork["tmdb_id"] = None
                     else:
                         lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
-                        media_type, tmdb_id, title, year = globals.plex.movie_or_show(
+                        media_type, tmdb_id, title, year, candidate_title = _resolve_plex_title(
                             original_title, lookup_year)
-                        if media_type is None:
-                            # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
-                            artwork["title"] = re.sub(r'_(?=\s)', ':', original_title)
-                            artwork["title"] = re.sub(r'\s-\s', ': ', artwork["title"]).replace('...', '').strip()
-                            media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                                artwork.get('title'), lookup_year)
-                        if media_type is None:
-                            # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
-                            # ASCII-fold the title so Plex can match against the accented original
-                            candidate_title = artwork.get('title') or original_title
-                            folded = ''.join(
-                                c for c in unicodedata.normalize('NFKD', candidate_title)
-                                if not unicodedata.combining(c)
-                            )
-                            if folded != candidate_title:
-                                artwork["title"] = folded
-                                media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                                    artwork.get('title'), lookup_year)
-                        if media_type is None and lookup_year is not None:
-                            # Fallback: try progressively shorter titles for any remaining mismatch
-                            # (e.g. stripped subtitles or missing apostrophes: "Worlds End" vs "World's End")
-                            words = re.sub(r'_(?=\s)|\s-\s', ' ', original_title).split()
-                            max_strip = globals.config.zip_title_strip_words if globals.config else 3
-                            min_words = max(2, len(words) - max_strip)
-                            for end in range(len(words) - 1, min_words - 1, -1):
-                                short_title = ' '.join(words[:end])
-                                media_type, tmdb_id, title, year = globals.plex.movie_or_show(
-                                    short_title, lookup_year)
-                                if media_type is not None:
-                                    artwork["title"] = short_title
-                                    break
                         artwork["media"] = media_type if media_type else "unavailable"
-                        artwork["title"] = title if title and title != artwork.get('title') else artwork.get('title')
+                        artwork["title"] = title if title and title != candidate_title else candidate_title
                         artwork["tmdb_id"] = tmdb_id
                         if artwork.get('year') is None and year is not None:
                             artwork['year'] = year
-                if artwork['media'] == "TV Show":
-                    if artwork['type'] == FilterType.SQUARE_ART.value:
-                        # Square art is identified by its filename OST suffix; don't let the
-                        # orientation checks below reclassify it as a cover or backdrop
-                        artwork['season'] = SEASON_SQUARE_ART
-                    else:
-                        if artwork['season'] is None:
-                            artwork['season'] = "Cover"
-                            artwork['type'] = FilterType.SHOW_COVER.value
-                        if artwork['season'] == "Cover" and check_image_orientation_func(artwork["path"]) == "landscape":
-                            artwork['season'] = "Backdrop"
-                            artwork['type'] = FilterType.BACKGROUND.value
-                if artwork['media'] == "Movie" and artwork['type'] != FilterType.SQUARE_ART.value:
-                    if check_image_orientation_func(artwork["path"]) == "landscape":
-                        artwork['type'] = FilterType.BACKGROUND.value
-                    else:
-                        artwork['type'] = FilterType.MOVIE_POSTER.value
-                if artwork['media'] == "Collection":
-                    if check_image_orientation_func(artwork["path"]) == "landscape":
-                        artwork['type'] = FilterType.BACKGROUND.value
-                if artwork['media'] == "unavailable":
-                    if check_image_orientation_func(artwork["path"]) == "landscape":
-                        artwork['type'] = FilterType.BACKGROUND.value
-                    if artwork['type'] == FilterType.SEASON_COVER.value:
-                        artwork['media'] = "TV Show"
-                    else:
-                        # Intentional fallback: "poster" doesn't match any FilterType, so this
-                        # unclassifiable artwork won't pass filters and won't be processed further
-                        artwork['type'] = "poster"
+
+                _reclassify_artwork_type(artwork, check_image_orientation_func)
 
                 # Check for filters and exclusions
+                label = _artwork_log_label(artwork)
                 if not filters or artwork["type"] in filters:
                     debug_me(
-                        f"Including {artwork['type'].replace('_', ' ')} "
-                        f"for '{artwork['title']}"
-                        + (f" ({artwork['year']})'" if artwork['year'] is not None else "'")
-                        + (f", Season {artwork['season']}" if isinstance(artwork['season'], int) else "")
-                        + (f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else "")
-                        + f". Type is {artwork['type']}.", "extract_and_list_zip"
+                        f"Including {artwork['type'].replace('_', ' ')} for {label}. Type is {artwork['type']}.",
+                        "extract_and_list_zip"
                     )
-
                     file_list.append(artwork)
                 else:
                     debug_me(
-                        f"Skipping {artwork['type'].replace('_', ' ')} "
-                        f"for '{artwork['title']}"
-                        + (f" ({artwork['year']})'" if artwork['year'] is not None else "'")
-                        + (f", Season {artwork['season']}" if isinstance(artwork['season'], int) else "")
-                        + (f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else "")
-                        + f" based on filters. Type is {artwork['type']} and filters are {filters}.", "extract_and_list_zip"
+                        f"Skipping {artwork['type'].replace('_', ' ')} for {label} based on filters. "
+                        f"Type is {artwork['type']} and filters are {filters}.", "extract_and_list_zip"
                     )
                     filtered_files += 1
 
