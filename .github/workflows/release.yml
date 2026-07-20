@@ -28,6 +28,10 @@ jobs:
       id-token: write
     with:
       image: ghcr.io/jabrown93/artwork-uploader
+      # .releaserc.js's @semantic-release/exec plugin isn't in the action's
+      # bundled set (commit-analyzer/release-notes-generator/changelog/git/github).
+      extra-plugins: |
+        @semantic-release/exec@7
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
