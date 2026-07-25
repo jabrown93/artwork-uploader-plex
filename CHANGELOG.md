@@ -1,3 +1,10 @@
+## [0.10.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v0.10.0...v0.10.1) (2026-07-25)
+
+
+### Bug Fixes
+
+* **renovate:** actually enable branch automerge ([#115](https://github.com/jabrown93/artwork-uploader-plex/issues/115)) ([45c6827](https://github.com/jabrown93/artwork-uploader-plex/commit/45c6827409b6452568ea65b9b33142e4587b58a3))
+
 # [0.10.0](https://github.com/jabrown93/artwork-uploader-plex/compare/v0.9.1...v0.10.0) (2026-07-20)
 
 
