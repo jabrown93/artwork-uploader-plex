@@ -143,17 +143,42 @@ class TestCookieSecure:
 class TestPublicDict:
 
     def test_secrets_are_redacted(self, config):
+        config.token = "plex-token"
+        config.radarr_api_key = "radarr-key"
+        config.sonarr_api_key = "sonarr-key"
         config.oidc_client_secret = "super-secret"
         config.session_secret = "signing-key"
 
         public = config.to_public_dict()
 
+        assert public["token"] == SECRET_PLACEHOLDER
+        assert public["radarr_api_key"] == SECRET_PLACEHOLDER
+        assert public["sonarr_api_key"] == SECRET_PLACEHOLDER
         assert public["oidc_client_secret"] == SECRET_PLACEHOLDER
         assert "session_secret" not in public
+
+    def test_no_secret_value_survives_redaction(self, config):
+        config.token = "plex-token"
+        config.radarr_api_key = "radarr-key"
+        config.sonarr_api_key = "sonarr-key"
+        config.oidc_client_secret = "super-secret"
+        config.session_secret = "signing-key"
+
+        serialized = json.dumps(config.to_public_dict())
+
+        for secret in ("plex-token", "radarr-key", "sonarr-key", "super-secret", "signing-key"):
+            assert secret not in serialized
 
     def test_absent_secret_is_not_placeholdered(self, config):
         public = config.to_public_dict()
         assert public["oidc_client_secret"] == ""
+        assert public["token"] == ""
+
+    def test_placeholder_satisfies_the_plex_token_input_pattern(self):
+        """The settings form validates the token field, so the placeholder must pass."""
+        import re
+
+        assert re.fullmatch(r"[A-Za-z0-9_\-]{20,40}", SECRET_PLACEHOLDER)
 
     def test_reports_env_managed_secret(self, config, monkeypatch):
         monkeypatch.setenv("OIDC_CLIENT_SECRET", "env-secret")

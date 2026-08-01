@@ -607,12 +607,9 @@ function saveConfig() {
     save_config.oidc_allow_password_fallback = document.getElementById("oidc_allow_password_fallback").checked;
     save_config.external_url = document.getElementById("external_url").value.trim();
 
-    // Only send the client secret when it was actually edited; the backend keeps
-    // the stored secret when it receives the placeholder back
-    const oidcSecret = document.getElementById("oidc_client_secret").value;
-    if (oidcSecret) {
-        save_config.oidc_client_secret = oidcSecret;
-    }
+    // Secrets are sent as-is: the backend keeps the stored value when it gets the
+    // placeholder back, and clearing the field really does clear the secret
+    save_config.oidc_client_secret = document.getElementById("oidc_client_secret").value;
 
     // Check if we need to set a new password
     const newPassword = document.getElementById("auth_password").value;
@@ -705,7 +702,7 @@ function loadConfig() {
             // Load OIDC settings
             document.getElementById("oidc_issuer").value = data.config.oidc_issuer || "";
             document.getElementById("oidc_client_id").value = data.config.oidc_client_id || "";
-            document.getElementById("oidc_client_secret").value = "";
+            document.getElementById("oidc_client_secret").value = data.config.oidc_client_secret || "";
             document.getElementById("oidc_provider_name").value = data.config.oidc_provider_name || "SSO";
             document.getElementById("oidc_scopes").value = data.config.oidc_scopes || "";
             document.getElementById("oidc_groups_claim").value = data.config.oidc_groups_claim || "groups";
@@ -716,7 +713,9 @@ function loadConfig() {
             document.getElementById("oidc_client_secret_help").textContent =
                 data.config.oidc_client_secret_from_env
                     ? "Set by the OIDC_CLIENT_SECRET environment variable, which takes precedence"
-                    : (data.config.oidc_client_secret ? "Leave blank to keep the stored secret" : "No secret stored yet");
+                    : (data.config.oidc_client_secret
+                        ? "A secret is stored; leave this field untouched to keep it, or clear it to remove it"
+                        : "No secret stored yet");
 
             // Toggle Kometa settings visibility
             toggleKometaSettings();

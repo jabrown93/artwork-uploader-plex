@@ -11,7 +11,7 @@ from core.constants import (
     DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY,
     DEFAULT_IP_BINDING, RUNNING_IN_DOCKER, DEFAULT_ZIP_TITLE_STRIP_WORDS,
     AUTH_MODES, AUTH_MODE_NONE, AUTH_MODE_PASSWORD, DEFAULT_AUTH_MODE,
-    DEFAULT_OIDC_SCOPES, DEFAULT_OIDC_GROUPS_CLAIM, SECRET_PLACEHOLDER
+    DEFAULT_OIDC_SCOPES, DEFAULT_OIDC_GROUPS_CLAIM, SECRET_PLACEHOLDER, REDACTED_CONFIG_KEYS
 )
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from logging_config import get_logger
@@ -448,8 +448,10 @@ class Config:
         """
         public = dict(vars(self))
         public.pop("session_secret", None)
-        if self.oidc_client_secret:
-            public["oidc_client_secret"] = SECRET_PLACEHOLDER
+        for key in REDACTED_CONFIG_KEYS:
+            if public.get(key):
+                public[key] = SECRET_PLACEHOLDER
+        public["secret_placeholder"] = SECRET_PLACEHOLDER
         public["auth_required"] = self.auth_required
         public["oidc_client_secret_from_env"] = bool(
             os.environ.get("OIDC_CLIENT_SECRET", "").strip())

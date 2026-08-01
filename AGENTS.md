@@ -121,7 +121,7 @@ Docker: `RUNNING_IN_DOCKER=1` hardcodes Kometa base to `/assets` and temp dir to
 
 - Modes live in `auth_mode`; `AuthenticationService` handles local passwords, `OidcService` (`src/services/oidc_service.py`) runs the OIDC authorization code flow with PKCE via Authlib.
 - HTTP routes use `@login_required`; **every** Socket.IO handler uses `@socket_login_required` and the `connect` handler refuses unauthenticated clients. All real work happens over Socket.IO, so a new handler without the decorator is an authentication bypass.
-- Secrets are redacted by `Config.to_public_dict()` before being sent to the web UI, and `PROTECTED_CONFIG_KEYS` in `src/web_routes.py` blocks the UI from writing them back.
+- Secrets (`REDACTED_CONFIG_KEYS`: Plex token, Radarr/Sonarr API keys, OIDC client secret) never leave the server: `Config.to_public_dict()` swaps them for `SECRET_PLACEHOLDER`, and `apply_config_updates()` keeps the stored value when the UI echoes that placeholder back. `session_secret` is dropped entirely, and `PROTECTED_CONFIG_KEYS` blocks the UI from writing derived keys. Adding a new secret config key means adding it to `REDACTED_CONFIG_KEYS`.
 
 ## Filter Types
 

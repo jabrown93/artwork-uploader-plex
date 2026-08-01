@@ -34,8 +34,15 @@ DEFAULT_OIDC_SCOPES = "openid profile email groups"
 DEFAULT_OIDC_GROUPS_CLAIM = "groups"
 OIDC_DISCOVERY_PATH = "/.well-known/openid-configuration"
 
-# Placeholder sent to the web UI in place of secrets; saving it back means "keep existing"
-SECRET_PLACEHOLDER = "********"
+# Placeholder sent to the web UI in place of secrets; saving it back means "keep existing".
+# The value deliberately satisfies the Plex token input's pattern so the settings form
+# still validates when the real token is never sent to the browser.
+SECRET_PLACEHOLDER = "UNCHANGED_STORED_SECRET"
+
+# Config keys whose values are never sent to the web UI
+REDACTED_CONFIG_KEYS = (
+    "token", "radarr_api_key", "sonarr_api_key", "oidc_client_secret"
+)
 
 # File paths - environment-aware defaults
 # Docker: absolute paths for volume mounts

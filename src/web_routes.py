@@ -20,7 +20,8 @@ from processors.media_metadata import parse_title
 from models.instance import Instance
 from core.constants import (
     SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART,
-    AUTH_MODE_NONE, AUTH_MODE_OIDC, AUTH_MODE_PASSWORD, AUTH_MODES, SECRET_PLACEHOLDER
+    AUTH_MODE_NONE, AUTH_MODE_OIDC, AUTH_MODE_PASSWORD, AUTH_MODES,
+    SECRET_PLACEHOLDER, REDACTED_CONFIG_KEYS
 )
 from core.config import Config
 from core.enums import FilterType
@@ -202,6 +203,26 @@ def external_base_url(config: Config) -> str:
 def oidc_redirect_uri(config: Config) -> str:
     """Absolute callback URL that must be registered with the provider."""
     return f"{external_base_url(config)}{url_for('oidc_callback')}"
+
+
+def apply_config_updates(config: Config, incoming: dict) -> None:
+    """
+    Merge a save_config payload into the config object.
+
+    Protected keys are ignored, and a redacted secret that comes back as the
+    placeholder leaves the stored value alone - the web UI never receives the
+    real one, so echoing the placeholder back must not overwrite it.
+    """
+    for key, value in incoming.items():
+        if key in PROTECTED_CONFIG_KEYS:
+            continue
+        if key in REDACTED_CONFIG_KEYS and value == SECRET_PLACEHOLDER:
+            continue
+        # Only real settings are writable; to_public_dict also carries computed
+        # keys and read-only properties that setattr would reject
+        if key not in vars(config):
+            continue
+        setattr(config, key, value)
 
 
 def apply_auth_mode(config: Config, incoming: dict) -> None:
@@ -729,6 +750,9 @@ def setup_socket_handlers(
         url = data.get("url", "")
         debug_me(f"Obtained Plex URL: {url}", "test_plex_connect")
         token = data.get("token", "")
+        # The UI never receives the stored token, so an untouched field means "use it"
+        if not token or token == SECRET_PLACEHOLDER:
+            token = config.token
         debug_me(f"Obtained Plex token: {'*' * min(len(token), 8) if token else '(not set)'}", "test_plex_connect")
         tv_libs = data.get("tv_libs", "")
         debug_me(f"Obtained {len(tv_libs)} TV libraries: {tv_libs}", "test_plex_connect")
@@ -873,18 +897,7 @@ def setup_socket_handlers(
         incoming = data.get("config") or {}
 
         try:
-            # Unpack the config dictionary into the local config
-            for key, value in incoming.items():
-                if key in PROTECTED_CONFIG_KEYS:
-                    continue
-                # Unchanged secrets come back from the UI as a placeholder
-                if key == "oidc_client_secret" and value == SECRET_PLACEHOLDER:
-                    continue
-                # to_public_dict adds computed keys that are not real settings
-                if not hasattr(config, key):
-                    continue
-                setattr(config, key, value)
-
+            apply_config_updates(config, incoming)
             apply_auth_mode(config, incoming)
             validate_auth_config(config)
             config.save()
@@ -897,19 +910,31 @@ def setup_socket_handlers(
 
             # Pick up issuer/client changes without a restart
             globals.oidc_service.reconfigure(config)
-
-            # Reconnect to Plex because the Plex server or token might have changed
-            update_log(
-                instance, "Saving updated configuration and reconnecting to Plex")
-            globals.plex.reconnect(config)
-            notify_web(instance, "save_config", {
-                       "saved": True, "config": config.to_public_dict()})
         except Exception as config_error:
+            logger.error(
+                f"Could not save configuration: {config_error}", exc_info=True)
             # Discard the partially applied in-memory changes
             config.load()
             globals.oidc_service.reconfigure(config)
             notify_web(instance, "save_config", {"saved": False})
             update_status(instance, str(config_error), color="danger")
+            return
+
+        # Reconnect to Plex because the Plex server or token might have changed.
+        # An unreachable Plex server does not undo the settings we just stored.
+        update_log(
+            instance, "Saving updated configuration and reconnecting to Plex")
+        try:
+            globals.plex.reconnect(config)
+        except Exception as plex_error:
+            logger.warning(
+                f"Configuration saved but reconnecting to Plex failed: {plex_error}")
+            update_status(
+                instance, f"Configuration saved, but connecting to Plex failed: {plex_error}",
+                color="warning")
+
+        notify_web(instance, "save_config", {
+                   "saved": True, "config": config.to_public_dict()})
 
     @globals.web_socket.on("delete_schedule")
     @socket_login_required

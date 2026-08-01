@@ -316,6 +316,14 @@ https://<your external URL>/auth/oidc/callback
 If your provider uses a private certificate authority, point ```REQUESTS_CA_BUNDLE``` at the CA
 bundle rather than disabling verification.
 
+### Secrets in the web UI
+
+Your Plex token, Radarr/Sonarr API keys and OIDC client secret are no longer sent to the
+browser. The settings page shows ```UNCHANGED_STORED_SECRET``` in those fields instead -
+leave it alone to keep the stored value, type over it to set a new one, or clear the field
+to remove it. "Test Plex connection" falls back to the stored token when the field is
+untouched.
+
 A ```session_secret``` is generated on first run and stored in ```config.json``` so that
 sessions survive restarts. Set the ```SESSION_SECRET``` environment variable to keep it out
 of the config file instead.

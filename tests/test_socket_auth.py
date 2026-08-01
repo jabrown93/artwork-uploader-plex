@@ -4,9 +4,7 @@ from flask import Flask, session
 import web_routes
 from core import globals
 from core.config import Config
-from core.constants import (
-    AUTH_MODE_NONE, AUTH_MODE_OIDC, AUTH_MODE_PASSWORD, SECRET_PLACEHOLDER
-)
+from core.constants import AUTH_MODE_NONE, AUTH_MODE_OIDC, AUTH_MODE_PASSWORD
 from core.exceptions import ConfigurationError
 
 pytestmark = pytest.mark.unit
@@ -158,8 +156,50 @@ class TestProtectedConfigKeys:
         assert "auth_mode" in web_routes.PROTECTED_CONFIG_KEYS
         assert "path" in web_routes.PROTECTED_CONFIG_KEYS
 
-    def test_placeholder_secret_is_never_stored(self, config):
-        """The UI echoes back a placeholder; storing it would destroy the secret."""
-        config.oidc_client_secret = "real-secret"
-        public = config.to_public_dict()
-        assert public["oidc_client_secret"] == SECRET_PLACEHOLDER
+
+class TestApplyConfigUpdates:
+
+    def test_ordinary_settings_are_applied(self, config):
+        web_routes.apply_config_updates(config, {"base_url": "http://plex:32400"})
+        assert config.base_url == "http://plex:32400"
+
+    def test_protected_keys_are_ignored(self, config):
+        config.auth_password_hash = "real-hash"
+        config.session_secret = "real-key"
+
+        web_routes.apply_config_updates(
+            config, {"auth_password_hash": "forged", "session_secret": "forged",
+                     "path": "/etc/passwd"})
+
+        assert config.auth_password_hash == "real-hash"
+        assert config.session_secret == "real-key"
+        assert not config.path.endswith("passwd")
+
+    def test_echoed_placeholder_keeps_the_stored_secret(self, config):
+        """The UI never receives the real secret; echoing it back must not clobber it."""
+        config.token = "real-plex-token"
+        config.radarr_api_key = "real-radarr-key"
+        config.sonarr_api_key = "real-sonarr-key"
+        config.oidc_client_secret = "real-client-secret"
+
+        web_routes.apply_config_updates(config, config.to_public_dict())
+
+        assert config.token == "real-plex-token"
+        assert config.radarr_api_key == "real-radarr-key"
+        assert config.sonarr_api_key == "real-sonarr-key"
+        assert config.oidc_client_secret == "real-client-secret"
+
+    def test_edited_secret_is_stored(self, config):
+        config.token = "old-token"
+        web_routes.apply_config_updates(config, {"token": "new-token"})
+        assert config.token == "new-token"
+
+    def test_cleared_secret_is_removed(self, config):
+        config.token = "old-token"
+        web_routes.apply_config_updates(config, {"token": ""})
+        assert config.token == ""
+
+    def test_computed_keys_are_ignored(self, config):
+        web_routes.apply_config_updates(config, config.to_public_dict())
+        assert not hasattr(config, "auth_required_value")
+        assert not hasattr(config, "secret_placeholder")
