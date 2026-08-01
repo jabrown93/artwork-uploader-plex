@@ -22,6 +22,21 @@ DEFAULT_IP_BINDING = "auto"  # Options: "auto", "ipv4", "ipv6"
 # Detect Docker environment
 RUNNING_IN_DOCKER = os.getenv("RUNNING_IN_DOCKER") == "1"
 
+# Authentication modes
+AUTH_MODE_NONE = "none"
+AUTH_MODE_PASSWORD = "password"
+AUTH_MODE_OIDC = "oidc"
+AUTH_MODES = [AUTH_MODE_NONE, AUTH_MODE_PASSWORD, AUTH_MODE_OIDC]
+DEFAULT_AUTH_MODE = AUTH_MODE_NONE
+
+# OIDC defaults
+DEFAULT_OIDC_SCOPES = "openid profile email groups"
+DEFAULT_OIDC_GROUPS_CLAIM = "groups"
+OIDC_DISCOVERY_PATH = "/.well-known/openid-configuration"
+
+# Placeholder sent to the web UI in place of secrets; saving it back means "keep existing"
+SECRET_PLACEHOLDER = "********"
+
 # File paths - environment-aware defaults
 # Docker: absolute paths for volume mounts
 # Non-Docker: relative paths in execution directory

@@ -107,8 +107,21 @@ All application code lives under `src/`:
 | `kometa_library_paths` | dict | Map library names to custom directory names |
 | `reset_overlay` | bool | Remove Kometa overlay label on upload |
 | `skip_locked_artwork` | bool | Skip artwork whose target field is locked in Plex, unless `--force` |
+| `auth_mode` | string | `none`, `password` or `oidc` (legacy `auth_enabled` is migrated to `password`) |
+| `oidc_issuer`, `oidc_client_id`, `oidc_client_secret` | string | OIDC client settings; env `OIDC_*` wins |
+| `oidc_groups_claim`, `oidc_allowed_groups` | string, array | Group allowlist; dotted claim paths supported |
+| `oidc_allow_password_fallback` | bool | Keep `/login?local=1` password sign-in as break-glass |
+| `external_url`, `trusted_proxy_count` | string, int | Public URL and proxy hops used to build the redirect URI |
+| `session_secret`, `session_cookie_secure` | string | Session signing key (env `SESSION_SECRET` wins) and cookie flag |
+| `cors_allowed_origins` | array | Empty means same-origin only for HTTP and Socket.IO |
 
 Docker: `RUNNING_IN_DOCKER=1` hardcodes Kometa base to `/assets` and temp dir to `/temp`.
+
+## Authentication
+
+- Modes live in `auth_mode`; `AuthenticationService` handles local passwords, `OidcService` (`src/services/oidc_service.py`) runs the OIDC authorization code flow with PKCE via Authlib.
+- HTTP routes use `@login_required`; **every** Socket.IO handler uses `@socket_login_required` and the `connect` handler refuses unauthenticated clients. All real work happens over Socket.IO, so a new handler without the decorator is an authentication bypass.
+- Secrets are redacted by `Config.to_public_dict()` before being sent to the web UI, and `PROTECTED_CONFIG_KEYS` in `src/web_routes.py` blocks the UI from writing them back.
 
 ## Filter Types
 

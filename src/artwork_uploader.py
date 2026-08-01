@@ -8,6 +8,7 @@ import uuid
 import eventlet
 eventlet.monkey_patch()
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from core import globals
 from core.config import Config
@@ -38,6 +39,7 @@ from services import (
     BulkFileService,
     ImageService,
     ArtworkProcessor,
+    OidcService,
     ProcessingCallbacks,
     SchedulerService,
     UtilityService
@@ -918,15 +920,32 @@ if __name__ == "__main__":
 
             web_app = Flask(__name__, template_folder="templates")
 
-            # Enable CORS for all routes to allow Socket.IO connections from any origin
-            CORS(web_app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
+            # Trust the reverse proxy's forwarded headers so OIDC redirect URIs and
+            # cookie/CORS origin checks use the public scheme and host
+            if config.trusted_proxy_count > 0:
+                web_app.wsgi_app = ProxyFix(
+                    web_app.wsgi_app,
+                    x_for=config.trusted_proxy_count,
+                    x_proto=config.trusted_proxy_count,
+                    x_host=config.trusted_proxy_count,
+                    x_port=config.trusted_proxy_count
+                )
+
+            # Cross-origin access is opt-in: a wildcard would let any site drive an
+            # authenticated session through the Socket.IO API using the user's cookie
+            cors_origins = config.cors_allowed_origins or None
+            if cors_origins:
+                CORS(web_app, resources={
+                     r"/*": {"origins": cors_origins, "supports_credentials": True}})
 
             # Configure session for authentication
-            import secrets
             from datetime import timedelta
 
-            web_app.config['SECRET_KEY'] = secrets.token_hex(32)
+            web_app.config['SECRET_KEY'] = config.ensure_session_secret()
             web_app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+            web_app.config['SESSION_COOKIE_HTTPONLY'] = True
+            web_app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+            web_app.config['SESSION_COOKIE_SECURE'] = config.session_cookie_is_secure()
 
             # Configure SocketIO with increased timeouts for large file uploads
             # ping_timeout: How long to wait for a pong response before disconnecting (default: 60s)
@@ -935,12 +954,14 @@ if __name__ == "__main__":
             # max_http_buffer_size: Maximum size of HTTP long-polling messages (default: 1MB)
             globals.web_socket = SocketIO(
                 web_app,
-                cors_allowed_origins="*",
+                cors_allowed_origins=cors_origins,  # None restricts to same-origin
                 async_mode="eventlet",
                 ping_timeout=300,  # 5 minutes - allows time for large file processing
                 ping_interval=25,  # Keep default 25s to maintain connection health
                 http_compression=True,  # Enable compression for better performance
                 max_http_buffer_size=10000000  # 10MB - allow larger individual messages
             )
+
+            globals.oidc_service = OidcService(config, web_app)
 
             setup_web_sockets()

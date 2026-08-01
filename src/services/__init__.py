@@ -10,6 +10,7 @@ from .artwork_processor import ArtworkProcessor, ProcessingCallbacks
 from .authentication_service import AuthenticationService
 from .bulk_file_service import BulkFileService
 from .image_service import ImageService
+from .oidc_service import OidcService, OidcError
 from .scheduler_service import SchedulerService
 from .utility_service import UtilityService
 from .notify_service import NotifyService
@@ -23,5 +24,7 @@ __all__ = [
     'SchedulerService',
     'UtilityService',
     'AuthenticationService',
-    'NotifyService'
+    'NotifyService',
+    'OidcService',
+    'OidcError'
 ]

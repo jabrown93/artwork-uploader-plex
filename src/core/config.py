@@ -4,11 +4,14 @@ Application configuration management.
 
 import json
 import os
+import secrets
 from typing import List, Dict, Any, Optional
 
 from core.constants import (
     DEFAULT_CONFIG_PATH, DEFAULT_BULK_IMPORT_FILE, DEFAULT_TV_LIBRARY, DEFAULT_MOVIE_LIBRARY,
-    DEFAULT_IP_BINDING, RUNNING_IN_DOCKER, DEFAULT_ZIP_TITLE_STRIP_WORDS
+    DEFAULT_IP_BINDING, RUNNING_IN_DOCKER, DEFAULT_ZIP_TITLE_STRIP_WORDS,
+    AUTH_MODES, AUTH_MODE_NONE, AUTH_MODE_PASSWORD, DEFAULT_AUTH_MODE,
+    DEFAULT_OIDC_SCOPES, DEFAULT_OIDC_GROUPS_CLAIM, SECRET_PLACEHOLDER
 )
 from core.exceptions import ConfigLoadError, ConfigSaveError, ConfigCreationError
 from logging_config import get_logger
@@ -40,9 +43,23 @@ class Config:
         auto_manage_bulk_files: Whether to auto-organize bulk files
         reset_overlay: Whether to reset Kometa overlay labels on upload
         schedules: List of scheduled bulk import jobs
-        auth_enabled: Whether authentication is enabled for the web server
+        auth_mode: Authentication mode - "none", "password" or "oidc"
+        auth_enabled: Legacy mirror of auth_mode != "none", kept for backward compatibility
         auth_username: Username for web server authentication
         auth_password_hash: Hashed password for web server authentication
+        oidc_issuer: OIDC provider issuer URL (discovery document is fetched from it)
+        oidc_client_id: OIDC client ID
+        oidc_client_secret: OIDC client secret (env OIDC_CLIENT_SECRET takes precedence)
+        oidc_scopes: Space separated scopes requested from the provider
+        oidc_groups_claim: Claim holding the user's groups; dotted paths are supported
+        oidc_allowed_groups: Groups permitted to sign in; empty means any authenticated user
+        oidc_allow_password_fallback: Whether /login?local=1 still accepts the local password
+        oidc_provider_name: Display name shown on the sign-in button
+        session_secret: Flask session signing key (env SESSION_SECRET takes precedence)
+        session_cookie_secure: "auto", "always" or "never" - controls the Secure cookie flag
+        external_url: Public base URL of this app, used to build the OIDC redirect URI
+        trusted_proxy_count: Number of reverse proxies in front of the app; 0 disables ProxyFix
+        cors_allowed_origins: Origins allowed for HTTP/Socket.IO; empty means same-origin only
         ip_binding: IP binding mode - "auto" (default), "ipv4", or "ipv6"
         debug: Enable debug logging
         kometa_library_paths: Dictionary mapping Plex library names to Kometa directory names
@@ -78,9 +95,23 @@ class Config:
         self.auto_manage_bulk_files: bool = True
         self.reset_overlay: bool = False
         self.schedules: List[Dict[str, Any]] = []
+        self.auth_mode: str = DEFAULT_AUTH_MODE
         self.auth_enabled: bool = False
         self.auth_username: str = ""
         self.auth_password_hash: str = ""
+        self.oidc_issuer: str = ""
+        self.oidc_client_id: str = ""
+        self.oidc_client_secret: str = ""
+        self.oidc_scopes: str = DEFAULT_OIDC_SCOPES
+        self.oidc_groups_claim: str = DEFAULT_OIDC_GROUPS_CLAIM
+        self.oidc_allowed_groups: List[str] = []
+        self.oidc_allow_password_fallback: bool = True
+        self.oidc_provider_name: str = "SSO"
+        self.session_secret: str = ""
+        self.session_cookie_secure: str = "auto"
+        self.external_url: str = ""
+        self.trusted_proxy_count: int = 1
+        self.cors_allowed_origins: List[str] = []
         self.ip_binding: str = DEFAULT_IP_BINDING
         self.debug: bool = False
         self.kometa_library_paths: Dict[str, str] = {}
@@ -139,9 +170,31 @@ class Config:
                 "auto_manage_bulk_files", True)
             self.reset_overlay = config.get("reset_overlay", False)
             self.schedules = config.get("schedules", [])
-            self.auth_enabled = config.get("auth_enabled", False)
             self.auth_username = config.get("auth_username", "")
             self.auth_password_hash = config.get("auth_password_hash", "")
+            self._load_auth_mode(config)
+            self.oidc_issuer = config.get("oidc_issuer", "")
+            self.oidc_client_id = config.get("oidc_client_id", "")
+            self.oidc_client_secret = config.get("oidc_client_secret", "")
+            self.oidc_scopes = config.get(
+                "oidc_scopes", DEFAULT_OIDC_SCOPES) or DEFAULT_OIDC_SCOPES
+            self.oidc_groups_claim = config.get(
+                "oidc_groups_claim", DEFAULT_OIDC_GROUPS_CLAIM) or DEFAULT_OIDC_GROUPS_CLAIM
+            self.oidc_allowed_groups = config.get("oidc_allowed_groups", [])
+            self.oidc_allow_password_fallback = config.get(
+                "oidc_allow_password_fallback", True)
+            self.oidc_provider_name = config.get(
+                "oidc_provider_name", "SSO") or "SSO"
+            self.session_secret = config.get("session_secret", "")
+            self.session_cookie_secure = config.get(
+                "session_cookie_secure", "auto") or "auto"
+            self.external_url = config.get("external_url", "")
+            try:
+                self.trusted_proxy_count = max(
+                    0, int(config.get("trusted_proxy_count", 1)))
+            except (TypeError, ValueError):
+                self.trusted_proxy_count = 1
+            self.cors_allowed_origins = config.get("cors_allowed_origins", [])
             self.ip_binding = config.get("ip_binding", DEFAULT_IP_BINDING)
             self.debug = config.get("debug", False)
             self.kometa_library_paths = config.get("kometa_library_paths", {})
@@ -198,6 +251,20 @@ class Config:
             "auto_manage_bulk_files": True,
             "reset_overlay": False,
             "schedules": [],
+            "auth_mode": DEFAULT_AUTH_MODE,
+            "auth_enabled": False,
+            "oidc_issuer": "",
+            "oidc_client_id": "",
+            "oidc_client_secret": "",
+            "oidc_scopes": DEFAULT_OIDC_SCOPES,
+            "oidc_groups_claim": DEFAULT_OIDC_GROUPS_CLAIM,
+            "oidc_allowed_groups": [],
+            "oidc_allow_password_fallback": True,
+            "oidc_provider_name": "SSO",
+            "session_cookie_secure": "auto",
+            "external_url": "",
+            "trusted_proxy_count": 1,
+            "cors_allowed_origins": [],
             "debug": False,
             "kometa_library_paths": {},
             "apprise_urls": [],
@@ -258,9 +325,23 @@ class Config:
             "auto_manage_bulk_files": self.auto_manage_bulk_files,
             "reset_overlay": self.reset_overlay,
             "schedules": self.schedules,
+            "auth_mode": self.auth_mode,
             "auth_enabled": self.auth_enabled,
             "auth_username": self.auth_username,
             "auth_password_hash": self.auth_password_hash,
+            "oidc_issuer": self.oidc_issuer,
+            "oidc_client_id": self.oidc_client_id,
+            "oidc_client_secret": self.oidc_client_secret,
+            "oidc_scopes": self.oidc_scopes,
+            "oidc_groups_claim": self.oidc_groups_claim,
+            "oidc_allowed_groups": self.oidc_allowed_groups,
+            "oidc_allow_password_fallback": self.oidc_allow_password_fallback,
+            "oidc_provider_name": self.oidc_provider_name,
+            "session_secret": self.session_secret,
+            "session_cookie_secure": self.session_cookie_secure,
+            "external_url": self.external_url,
+            "trusted_proxy_count": self.trusted_proxy_count,
+            "cors_allowed_origins": self.cors_allowed_origins,
             "ip_binding": self.ip_binding,
             "debug": self.debug,
             "kometa_library_paths": self.kometa_library_paths,
@@ -280,6 +361,100 @@ class Config:
         except Exception as e:
             raise ConfigSaveError(
                 f"Failed to save config to {self.path}: {str(e)}") from e
+
+    def _load_auth_mode(self, config: Dict[str, Any]) -> None:
+        """
+        Resolve auth_mode from the config file.
+
+        Configs written before auth_mode existed only carry auth_enabled, so an
+        enabled legacy config is migrated to password mode. auth_enabled is kept
+        in sync so a downgrade to an older version still finds authentication on.
+        """
+        legacy_enabled = bool(config.get("auth_enabled", False))
+        mode = config.get("auth_mode")
+        if mode not in AUTH_MODES:
+            mode = AUTH_MODE_PASSWORD if legacy_enabled else AUTH_MODE_NONE
+        self.auth_mode = mode
+        self.auth_enabled = mode != AUTH_MODE_NONE
+
+    def set_auth_mode(self, mode: str) -> None:
+        """Set the authentication mode, keeping the legacy auth_enabled flag in sync."""
+        if mode not in AUTH_MODES:
+            raise ValueError(f"Unknown auth mode: {mode}")
+        self.auth_mode = mode
+        self.auth_enabled = mode != AUTH_MODE_NONE
+
+    @property
+    def auth_required(self) -> bool:
+        """Whether requests must be authenticated."""
+        return self.auth_mode != AUTH_MODE_NONE
+
+    @staticmethod
+    def _env_or(env_name: str, fallback: str) -> str:
+        """Return the environment value when set and non-empty, else the config value."""
+        return os.environ.get(env_name, "").strip() or fallback
+
+    def get_oidc_issuer(self) -> str:
+        """OIDC issuer URL, with OIDC_ISSUER taking precedence."""
+        return self._env_or("OIDC_ISSUER", self.oidc_issuer).rstrip("/")
+
+    def get_oidc_client_id(self) -> str:
+        """OIDC client ID, with OIDC_CLIENT_ID taking precedence."""
+        return self._env_or("OIDC_CLIENT_ID", self.oidc_client_id)
+
+    def get_oidc_client_secret(self) -> str:
+        """OIDC client secret, with OIDC_CLIENT_SECRET taking precedence."""
+        return self._env_or("OIDC_CLIENT_SECRET", self.oidc_client_secret)
+
+    def oidc_is_configured(self) -> bool:
+        """Whether enough OIDC settings are present to attempt a login."""
+        return bool(self.get_oidc_issuer() and self.get_oidc_client_id()
+                    and self.get_oidc_client_secret())
+
+    def ensure_session_secret(self) -> str:
+        """
+        Return the Flask session signing key, generating and persisting one if needed.
+
+        A stable key is required so sessions survive restarts; without it every
+        container restart silently logs everyone out.
+        """
+        env_secret = os.environ.get("SESSION_SECRET", "").strip()
+        if env_secret:
+            return env_secret
+        if not self.session_secret:
+            self.session_secret = secrets.token_hex(32)
+            self.save()
+        return self.session_secret
+
+    def session_cookie_is_secure(self) -> bool:
+        """
+        Whether the session cookie should carry the Secure flag.
+
+        "auto" infers it from external_url so a plain-HTTP LAN deployment keeps
+        working while an HTTPS deployment gets the flag without extra config.
+        """
+        if self.session_cookie_secure == "always":
+            return True
+        if self.session_cookie_secure == "never":
+            return False
+        return self.external_url.lower().startswith("https://")
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """
+        Return the config as a dict safe to send to the web UI.
+
+        Secrets are replaced with a placeholder that save_config treats as
+        "keep the stored value".
+        """
+        public = dict(vars(self))
+        public.pop("session_secret", None)
+        if self.oidc_client_secret:
+            public["oidc_client_secret"] = SECRET_PLACEHOLDER
+        public["auth_required"] = self.auth_required
+        public["oidc_client_secret_from_env"] = bool(
+            os.environ.get("OIDC_CLIENT_SECRET", "").strip())
+        public["oidc_configured"] = self.oidc_is_configured()
+        return public
 
     def resolve_library_directory(self, library_name: str) -> str:
         """

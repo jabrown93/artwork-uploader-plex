@@ -80,6 +80,34 @@
             font-weight: 500;
             margin-bottom: 8px;
         }
+
+        .separator {
+            display: flex;
+            align-items: center;
+            color: #666;
+            margin: 20px 0;
+        }
+
+        .separator::before,
+        .separator::after {
+            content: "";
+            flex: 1;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .separator::before {
+            margin-right: 10px;
+        }
+
+        .separator::after {
+            margin-left: 10px;
+        }
+
+        .local-login {
+            text-align: center;
+            margin: 20px 0 0;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -94,23 +122,39 @@
             </div>
         {% endif %}
 
-        <form method="POST" action="/login">
-            <div class="mb-3">
-                <label for="username" class="form-label"><i class="bi bi-person"></i>&ensp;Username</label>
-                <input type="text" class="form-control" id="username" name="username" required autofocus>
-            </div>
-            <div class="mb-3">
-                <label for="password" class="form-label"><i class="bi bi-lock"></i>&ensp;Password</label>
-                <input type="password" class="form-control" id="password" name="password" required>
-            </div>
-            <div class="mb-3 form-check form-switch">
-                <input type="checkbox" class="form-check-input" id="remember" name="remember">
-                <label class="form-check-label" for="remember" style="color: #666;">
-                    Remember me for 7 days
-                </label>
-            </div>
-            <button type="submit" class="btn btn-primary btn-login">Sign In</button>
-        </form>
+        {% if oidc_enabled %}
+            <a href="{{ url_for('oidc_login') }}" class="btn btn-primary btn-login">
+                <i class="bi bi-box-arrow-in-right"></i>&ensp;Sign in with {{ oidc_provider }}
+            </a>
+        {% endif %}
+
+        {% if oidc_enabled and show_password_form %}
+            <div class="separator">or</div>
+        {% endif %}
+
+        {% if show_password_form %}
+            <form method="POST" action="{{ url_for('login', local='1') }}">
+                <div class="mb-3">
+                    <label for="username" class="form-label"><i class="bi bi-person"></i>&ensp;Username</label>
+                    <input type="text" class="form-control" id="username" name="username" required autofocus>
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label"><i class="bi bi-lock"></i>&ensp;Password</label>
+                    <input type="password" class="form-control" id="password" name="password" required>
+                </div>
+                <div class="mb-3 form-check form-switch">
+                    <input type="checkbox" class="form-check-input" id="remember" name="remember">
+                    <label class="form-check-label" for="remember" style="color: #666;">
+                        Remember me for 7 days
+                    </label>
+                </div>
+                <button type="submit" class="btn btn-primary btn-login">Sign In</button>
+            </form>
+        {% elif password_fallback_available %}
+            <p class="local-login">
+                <a href="{{ url_for('login', local='1') }}">Sign in with a local account</a>
+            </p>
+        {% endif %}
     </div>
 </div>
 

@@ -18,10 +18,13 @@ from services import UtilityService, AuthenticationService
 from services import NotifyService
 from processors.media_metadata import parse_title
 from models.instance import Instance
-from core.constants import SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART
+from core.constants import (
+    SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART,
+    AUTH_MODE_NONE, AUTH_MODE_OIDC, AUTH_MODE_PASSWORD, AUTH_MODES, SECRET_PLACEHOLDER
+)
 from core.config import Config
 from core.enums import FilterType
-from core.exceptions import InvalidUrl, InvalidFlag
+from core.exceptions import InvalidUrl, InvalidFlag, ConfigurationError
 from core import globals
 import base64
 import os
@@ -32,10 +35,12 @@ import unicodedata
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from functools import wraps
 
 from flask import render_template, send_from_directory, request, redirect, url_for, session
+from flask_socketio import ConnectionRefusedError, disconnect
 from packaging import version
 from plexapi.server import PlexServer
 from logging_config import get_logger
@@ -44,6 +49,12 @@ logger = get_logger(__name__)
 
 
 SOURCE_TXT = "source.txt"
+
+# Config keys the web UI must never overwrite directly: secrets, derived values,
+# and the config file path itself
+PROTECTED_CONFIG_KEYS = frozenset({
+    "auth_password_hash", "auth_enabled", "auth_mode", "session_secret", "path"
+})
 
 
 def is_ipv6_available():
@@ -133,6 +144,120 @@ def is_dual_stack_supported():
         return False
 
 
+def is_session_authenticated(config: Optional[Config]) -> bool:
+    """
+    Whether the current Flask session is a valid, still-live login.
+
+    Sessions are invalidated when the identity provider's token has expired, and
+    when a password session survives a switch to OIDC-only authentication.
+    """
+    if not config or not config.auth_required:
+        return True
+
+    if not session.get('authenticated'):
+        return False
+
+    expires_at = session.get('idp_exp')
+    if expires_at:
+        try:
+            if time.time() >= float(expires_at):
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    if (config.auth_mode == AUTH_MODE_OIDC
+            and session.get('auth_via') == 'password'
+            and not config.oidc_allow_password_fallback):
+        return False
+
+    return True
+
+
+def oidc_available(config: Config) -> bool:
+    """Whether an OIDC login can actually be started right now."""
+    return bool(config.auth_mode == AUTH_MODE_OIDC
+                and globals.oidc_service is not None
+                and globals.oidc_service.is_configured)
+
+
+def safe_next(target: Optional[str]) -> str:
+    """Return target if it is a same-site relative path, else the app root."""
+    if not target or not target.startswith("/") or target.startswith("//"):
+        return "/"
+    return target
+
+
+def external_base_url(config: Config) -> str:
+    """
+    Public base URL of this app.
+
+    Prefers the configured external_url; otherwise relies on the request host,
+    which is only correct behind a proxy when trusted_proxy_count is set.
+    """
+    if config.external_url:
+        return config.external_url.rstrip("/")
+    return request.host_url.rstrip("/")
+
+
+def oidc_redirect_uri(config: Config) -> str:
+    """Absolute callback URL that must be registered with the provider."""
+    return f"{external_base_url(config)}{url_for('oidc_callback')}"
+
+
+def apply_auth_mode(config: Config, incoming: dict) -> None:
+    """
+    Apply the auth mode from a save_config payload.
+
+    Clients written before auth_mode existed only send auth_enabled, so that is
+    honoured as a request for password mode.
+    """
+    requested = incoming.get("auth_mode")
+    if requested in AUTH_MODES:
+        config.set_auth_mode(requested)
+    elif "auth_enabled" in incoming:
+        config.set_auth_mode(
+            AUTH_MODE_PASSWORD if incoming["auth_enabled"] else AUTH_MODE_NONE)
+
+
+def validate_auth_config(config: Config) -> None:
+    """
+    Reject auth settings that would lock everyone out.
+
+    Raises:
+        ConfigurationError: If the selected mode cannot actually authenticate anyone.
+    """
+    if config.auth_mode == AUTH_MODE_PASSWORD and not config.auth_password_hash:
+        raise ConfigurationError(
+            "Set a username and password before enabling password protection")
+    if config.auth_mode == AUTH_MODE_OIDC and not config.oidc_is_configured():
+        raise ConfigurationError(
+            "Issuer, client ID and client secret are required before enabling single sign-on")
+
+
+def socket_login_required(f):
+    """
+    Decorator to require authentication for Socket.IO events.
+
+    The connect handler already refuses unauthenticated clients; this re-checks on
+    every event so a session that expires mid-connection stops being honoured.
+    """
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        config = globals.config if hasattr(
+            globals, 'config') and globals.config else None
+
+        if not is_session_authenticated(config):
+            logger.warning(
+                f"Rejected unauthenticated Socket.IO event '{f.__name__}'")
+            disconnect()
+            return None
+
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
 def login_required(f):
     """Decorator to require authentication for routes."""
 
@@ -143,11 +268,13 @@ def login_required(f):
             globals, 'config') and globals.config else None
 
         # If auth not enabled, allow access
-        if not config or not config.auth_enabled:
+        if not config or not config.auth_required:
             return f(*args, **kwargs)
 
-        # Check if user is logged in
-        if not session.get('authenticated'):
+        if not is_session_authenticated(config):
+            session.clear()
+            if oidc_available(config):
+                return redirect(url_for('oidc_login', next=request.path))
             return redirect(url_for('login'))
 
         return f(*args, **kwargs)
@@ -164,38 +291,145 @@ def setup_routes(web_app, config: Config):
         config: Configuration object
     """
 
+    def render_login(error: Optional[str] = None, status: int = 200):
+        """Render the login page with the options available for the current mode."""
+        oidc_ready = oidc_available(config)
+        password_allowed = (config.auth_mode == AUTH_MODE_PASSWORD
+                            or (config.auth_mode == AUTH_MODE_OIDC
+                                and config.oidc_allow_password_fallback
+                                and bool(config.auth_password_hash)))
+        return render_template(
+            "login.html",
+            error=error,
+            oidc_enabled=oidc_ready,
+            oidc_provider=config.oidc_provider_name or "SSO",
+            show_password_form=password_allowed and (
+                config.auth_mode == AUTH_MODE_PASSWORD
+                or request.args.get('local') == '1'),
+            password_fallback_available=password_allowed and config.auth_mode == AUTH_MODE_OIDC
+        ), status
+
     @web_app.route("/login", methods=["GET", "POST"])
     def login():
-        """Handle user login."""
+        """Handle local password login and render the sign-in page."""
         # If auth not enabled, redirect to home
-        if not config.auth_enabled:
+        if not config.auth_required:
             return redirect(url_for('home'))
 
         # Already logged in
-        if session.get('authenticated'):
+        if is_session_authenticated(config):
             return redirect(url_for('home'))
 
-        error = None
+        password_allowed = (config.auth_mode == AUTH_MODE_PASSWORD
+                            or (config.oidc_allow_password_fallback
+                                and bool(config.auth_password_hash)))
+
+        # In OIDC mode the login page is just a pass-through, unless the user
+        # explicitly asked for the break-glass local form
+        if (request.method == "GET" and oidc_available(config)
+                and request.args.get('local') != '1'):
+            return redirect(url_for('oidc_login', next=safe_next(request.args.get('next'))))
 
         if request.method == "POST":
+            if not password_allowed:
+                logger.warning(
+                    "Rejected password login attempt while password auth is disabled")
+                return render_login("Password sign-in is disabled", 403)
+
             username = request.form.get('username', '')
             password = request.form.get('password', '')
             remember = request.form.get('remember') == 'on'
 
             # Authenticate
             if AuthenticationService.authenticate(username, password, config.auth_username, config.auth_password_hash):
+                session.clear()
                 session['authenticated'] = True
+                session['auth_via'] = 'password'
+                session['user'] = username
                 session.permanent = remember  # Set to 7 days if remember is checked
                 return redirect(url_for('home'))
-            else:
-                error = "Invalid username or password"
 
-        return render_template("login.html", error=error)
+            logger.warning(f"Failed password login for user '{username}'")
+            return render_login("Invalid username or password", 401)
+
+        if config.auth_mode == AUTH_MODE_OIDC and not oidc_available(config):
+            return render_login(
+                "Single sign-on is enabled but not fully configured", 200)
+
+        return render_login()
+
+    @web_app.route("/auth/oidc/login")
+    def oidc_login():
+        """Start the OIDC authorization code flow."""
+        if not config.auth_required:
+            return redirect(url_for('home'))
+
+        if not oidc_available(config):
+            return render_login("Single sign-on is enabled but not fully configured", 200)
+
+        session['oidc_next'] = safe_next(request.args.get('next'))
+
+        try:
+            return globals.oidc_service.authorize_redirect(oidc_redirect_uri(config))
+        except Exception as e:
+            logger.error(f"Could not start OIDC login: {e}", exc_info=True)
+            return render_login(f"Could not reach the sign-in provider: {e}", 502)
+
+    @web_app.route("/auth/oidc/callback")
+    def oidc_callback():
+        """Complete the OIDC login and establish the session."""
+        if not oidc_available(config):
+            return render_login("Single sign-on is not enabled", 400)
+
+        service = globals.oidc_service
+
+        try:
+            claims = service.handle_callback()
+        except Exception as e:
+            logger.error(f"OIDC callback failed: {e}", exc_info=True)
+            return render_login(f"Sign-in failed: {e}", 401)
+
+        username = service.get_username(claims)
+        groups = service.get_groups(claims)
+
+        if not service.is_authorized(claims):
+            logger.warning(
+                f"OIDC sign-in denied for '{username}': groups {groups} do not match "
+                f"allowed groups {config.oidc_allowed_groups}")
+            return render_login(
+                "Your account is not a member of a group allowed to use this app", 403)
+
+        target = safe_next(session.get('oidc_next'))
+        session.clear()
+        session['authenticated'] = True
+        session['auth_via'] = 'oidc'
+        session['user'] = username
+        session['groups'] = groups
+        session['id_token'] = claims.get('_id_token', '')
+        if claims.get('exp'):
+            session['idp_exp'] = claims['exp']
+        session.permanent = True
+
+        logger.info(f"OIDC sign-in for '{username}'")
+        return redirect(target)
 
     @web_app.route("/logout")
     def logout():
-        """Handle user logout."""
+        """Handle user logout, including RP-initiated logout at the provider."""
+        auth_via = session.get('auth_via')
+        id_token = session.get('id_token', '')
         session.clear()
+
+        if auth_via == 'oidc' and globals.oidc_service is not None:
+            try:
+                provider_logout = globals.oidc_service.logout_url(
+                    id_token, f"{external_base_url(config)}{url_for('login')}")
+            except Exception as e:
+                logger.debug(f"Could not build provider logout URL: {e}")
+                provider_logout = None
+            if provider_logout:
+                return redirect(provider_logout)
+
         return redirect(url_for('login'))
 
     @web_app.route("/")
@@ -254,7 +488,20 @@ def setup_socket_handlers(
     # Changed from in-memory list to file handles for better memory efficiency with large uploads
     upload_chunks = {}
 
+    @globals.web_socket.on("connect")
+    def handle_connect(auth=None):
+        """
+        Refuse Socket.IO connections from unauthenticated clients.
+
+        Every meaningful action in this app is a Socket.IO event, so without this
+        check the HTTP login only protects the page shell, not the API.
+        """
+        if not is_session_authenticated(config):
+            logger.warning("Refused unauthenticated Socket.IO connection")
+            raise ConnectionRefusedError("Authentication required")
+
     @globals.web_socket.on("debug_mode")
+    @socket_login_required
     def debug_mode(data):
         """Report on debug mode status and toggle debug mode."""
         instance = Instance(data.get("instance_id"), "web")
@@ -272,6 +519,7 @@ def setup_socket_handlers(
                 globals.debug = True
 
     @globals.web_socket.on("update_app")
+    @socket_login_required
     def update_app(data):
         """Pull updates from GitHub and restart the app."""
         instance = Instance(data.get("instance_id"), "web")
@@ -314,6 +562,7 @@ def setup_socket_handlers(
             notify_web(instance, "update_failed", {"error": str(e)})
 
     @globals.web_socket.on("start_scrape")
+    @socket_login_required
     def handle_scrape_from_web(data):
         """Handle scraping request from web UI."""
         instance = Instance(data.get("instance_id"), "web")
@@ -338,6 +587,7 @@ def setup_socket_handlers(
             process_scrape_url_from_web(instance, url)
 
     @globals.web_socket.on("start_bulk_import")
+    @socket_login_required
     def handle_bulk_import_from_web(data):
         """Handle bulk import request from web UI."""
         instance = Instance(data.get("instance_id"), "web")
@@ -347,6 +597,7 @@ def setup_socket_handlers(
         run_bulk_import_scrape_in_thread(instance, bulk_list, filename, scheduled=scheduled)
 
     @globals.web_socket.on("save_bulk_import")
+    @socket_login_required
     def handle_bulk_import(data):
         """Save bulk import file from web UI."""
         instance = Instance(data.get("instance_id"), "web")
@@ -357,14 +608,17 @@ def setup_socket_handlers(
             save_bulk_import_file(instance, content, filename, now_load)
 
     @globals.web_socket.on("load_config")
+    @socket_login_required
     def load_config_web(data):
         """Load configuration from web UI."""
         instance = Instance(data.get("instance_id"), "web")
         config.load()
         update_scheduled_jobs()
-        notify_web(instance, "load_config", {"config": vars(config)})
+        globals.oidc_service.reconfigure(config)
+        notify_web(instance, "load_config", {"config": config.to_public_dict()})
 
     @globals.web_socket.on("load_bulk_filelist")
+    @socket_login_required
     def load_bulk_filelist(data):
         """Load list of bulk import files."""
         instance = Instance(data.get("instance_id"), "web")
@@ -378,12 +632,14 @@ def setup_socket_handlers(
         notify_web(instance, "load_bulk_filelist", {"bulk_files": bulk_files})
 
     @globals.web_socket.on("load_bulk_import")
+    @socket_login_required
     def load_bulk_import(data):
         """Load a specific bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
         load_bulk_import_file(instance, data.get("filename"))
 
     @globals.web_socket.on("rename_bulk_file")
+    @socket_login_required
     def rename_bulk_file(data):
         """Rename a bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
@@ -396,12 +652,14 @@ def setup_socket_handlers(
             add_tasks_to_scheduler({"instance_id": instance.id, "file": new_name, "time": time})
 
     @globals.web_socket.on("delete_bulk_file")
+    @socket_login_required
     def delete_bulk_file(data):
         """Delete a bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
         delete_bulk_import_file(instance, data.get("filename"))
 
     @globals.web_socket.on("create_bulk_file")
+    @socket_login_required
     def create_bulk_file(data):
         """Create a new bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
@@ -439,6 +697,7 @@ def setup_socket_handlers(
                        "created": False, "error": str(e)})
 
     @globals.web_socket.on("display_message")
+    @socket_login_required
     def display_message(data):
         """Log a debug message from the frontend."""
         instance = Instance(data.get("instance_id"), "web")
@@ -449,6 +708,7 @@ def setup_socket_handlers(
             update_log(instance, data.get("message"))
 
     @globals.web_socket.on("test_plex_connect")
+    @socket_login_required
     def test_plex_connect(data):
         """Test connectivity to Plex server."""
 
@@ -523,6 +783,7 @@ def setup_socket_handlers(
         notify_web(instance, "test_plex_connect", {"success": True})
 
     @globals.web_socket.on("test_notifications")
+    @socket_login_required
     def test_notifications(data):
         """Send a test notification."""
         instance = Instance(data.get("instance_id"), "web")
@@ -568,6 +829,7 @@ def setup_socket_handlers(
         notify_web(instance, "element_disable", {"element": ["test_notif_btn"], "mode": False})
 
     @globals.web_socket.on("set_password")
+    @socket_login_required
     def set_password_web(data):
         """Set a new password for authentication."""
         instance = Instance(data.get("instance_id"), "web")
@@ -587,7 +849,9 @@ def setup_socket_handlers(
             # Update config
             config.auth_username = username
             config.auth_password_hash = password_hash
-            config.auth_enabled = True
+            # Setting a password must not downgrade an OIDC deployment
+            if config.auth_mode == AUTH_MODE_NONE:
+                config.set_auth_mode(AUTH_MODE_PASSWORD)
             config.save()
 
             # Also update globals
@@ -601,17 +865,28 @@ def setup_socket_handlers(
                        "success": False, "error": str(e)})
 
     @globals.web_socket.on("save_config")
+    @socket_login_required
     def save_config_web(data):
         """Save configuration from web UI."""
         instance = Instance(data.get("instance_id"), "web")
 
+        incoming = data.get("config") or {}
+
         try:
             # Unpack the config dictionary into the local config
-            for key, value in data.get("config").items():
-                # Skip password_hash - it should only be set via set_password
-                if key == "auth_password_hash":
+            for key, value in incoming.items():
+                if key in PROTECTED_CONFIG_KEYS:
+                    continue
+                # Unchanged secrets come back from the UI as a placeholder
+                if key == "oidc_client_secret" and value == SECRET_PLACEHOLDER:
+                    continue
+                # to_public_dict adds computed keys that are not real settings
+                if not hasattr(config, key):
                     continue
                 setattr(config, key, value)
+
+            apply_auth_mode(config, incoming)
+            validate_auth_config(config)
             config.save()
 
             # Also update globals
@@ -620,16 +895,24 @@ def setup_socket_handlers(
             # Rebuild the Radarr/Sonarr clients in case their URL/API key changed
             globals.arr.reconfigure(config)
 
+            # Pick up issuer/client changes without a restart
+            globals.oidc_service.reconfigure(config)
+
             # Reconnect to Plex because the Plex server or token might have changed
             update_log(
                 instance, "Saving updated configuration and reconnecting to Plex")
             globals.plex.reconnect(config)
             notify_web(instance, "save_config", {
-                       "saved": True, "config": vars(config)})
+                       "saved": True, "config": config.to_public_dict()})
         except Exception as config_error:
+            # Discard the partially applied in-memory changes
+            config.load()
+            globals.oidc_service.reconfigure(config)
+            notify_web(instance, "save_config", {"saved": False})
             update_status(instance, str(config_error), color="danger")
 
     @globals.web_socket.on("delete_schedule")
+    @socket_login_required
     def delete_task_from_scheduler(data):
         """Delete a scheduled task."""
         if data.get("instance_id"):
@@ -666,6 +949,7 @@ def setup_socket_handlers(
                                "deleted": False, "job_id": job_id})
 
     @globals.web_socket.on("add_schedule")
+    @socket_login_required
     def add_tasks_to_scheduler(data):
         """Add a new scheduled task."""
         try:
@@ -728,6 +1012,7 @@ def setup_socket_handlers(
         config.schedules.append({"file": file_name, "time": new_time})
 
     @globals.web_socket.on("upload_artwork_chunk")
+    @socket_login_required
     def handle_upload_chunk(data):
         """Handle chunked file upload - writes directly to temp file for memory efficiency."""
         instance = Instance(data.get("instance_id"), "web")
@@ -786,6 +1071,7 @@ def setup_socket_handlers(
                 )
 
     @globals.web_socket.on("upload_complete")
+    @socket_login_required
     def handle_upload_complete(data):
         """Finalize the upload once all chunks are received."""
         file_name = data.get("fileName")
