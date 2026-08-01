@@ -24,4 +24,14 @@ services:
       # - BULK_IMPORTS_DIR=/custom/bulk_imports
       # - CONFIG_PATH=/config/config.json
       # - LOGS_DIR=/custom/logs
+
+      # Optional: OIDC single sign-on. These take precedence over config.json, so the
+      # client secret never has to be written to disk. Set "auth_mode": "oidc" in config.json.
+      # - OIDC_ISSUER=https://auth.example.com/application/o/artwork-uploader/
+      # - OIDC_CLIENT_ID=artwork-uploader
+      # - OIDC_CLIENT_SECRET=change-me
+      # Optional: keep the session signing key out of config.json (must be stable across restarts)
+      # - SESSION_SECRET=change-me
+      # Optional: trust a private certificate authority for the OIDC provider
+      # - REQUESTS_CA_BUNDLE=/config/ca.pem
     restart: unless-stopped

@@ -591,9 +591,25 @@ function saveConfig() {
     save_config.schedules = Array.isArray(schedules) ? schedules : [];
 
     // Authentication settings
-    save_config.auth_enabled = document.getElementById("auth_enabled").checked;
+    save_config.auth_mode = document.getElementById("auth_mode").value;
+    save_config.auth_enabled = save_config.auth_mode !== "none";
     save_config.auth_username = document.getElementById("auth_username").value.trim();
     // Don't send password in save_config - it's handled separately
+
+    // OIDC settings
+    save_config.oidc_issuer = document.getElementById("oidc_issuer").value.trim();
+    save_config.oidc_client_id = document.getElementById("oidc_client_id").value.trim();
+    save_config.oidc_provider_name = document.getElementById("oidc_provider_name").value.trim() || "SSO";
+    save_config.oidc_scopes = document.getElementById("oidc_scopes").value.trim() || "openid profile email groups";
+    save_config.oidc_groups_claim = document.getElementById("oidc_groups_claim").value.trim() || "groups";
+    save_config.oidc_allowed_groups = document.getElementById("oidc_allowed_groups").value
+        .split(",").map(group => group.trim()).filter(group => group.length > 0);
+    save_config.oidc_allow_password_fallback = document.getElementById("oidc_allow_password_fallback").checked;
+    save_config.external_url = document.getElementById("external_url").value.trim();
+
+    // Secrets are sent as-is: the backend keeps the stored value when it gets the
+    // placeholder back, and clearing the field really does clear the secret
+    save_config.oidc_client_secret = document.getElementById("oidc_client_secret").value;
 
     // Check if we need to set a new password
     const newPassword = document.getElementById("auth_password").value;
@@ -679,8 +695,27 @@ function loadConfig() {
             document.getElementById("apprise_urls").value = (data.config.apprise_urls || []).join(", ");
 
             // Load authentication settings
-            document.getElementById("auth_enabled").checked = data.config.auth_enabled || false;
+            document.getElementById("auth_mode").value = data.config.auth_mode ||
+                (data.config.auth_enabled ? "password" : "none");
             document.getElementById("auth_username").value = data.config.auth_username || "";
+
+            // Load OIDC settings
+            document.getElementById("oidc_issuer").value = data.config.oidc_issuer || "";
+            document.getElementById("oidc_client_id").value = data.config.oidc_client_id || "";
+            document.getElementById("oidc_client_secret").value = data.config.oidc_client_secret || "";
+            document.getElementById("oidc_provider_name").value = data.config.oidc_provider_name || "SSO";
+            document.getElementById("oidc_scopes").value = data.config.oidc_scopes || "";
+            document.getElementById("oidc_groups_claim").value = data.config.oidc_groups_claim || "groups";
+            document.getElementById("oidc_allowed_groups").value = (data.config.oidc_allowed_groups || []).join(", ");
+            document.getElementById("oidc_allow_password_fallback").checked =
+                data.config.oidc_allow_password_fallback !== false;
+            document.getElementById("external_url").value = data.config.external_url || "";
+            document.getElementById("oidc_client_secret_help").textContent =
+                data.config.oidc_client_secret_from_env
+                    ? "Set by the OIDC_CLIENT_SECRET environment variable, which takes precedence"
+                    : (data.config.oidc_client_secret
+                        ? "A secret is stored; leave this field untouched to keep it, or clear it to remove it"
+                        : "No secret stored yet");
 
             // Toggle Kometa settings visibility
             toggleKometaSettings();
@@ -704,7 +739,7 @@ function loadConfig() {
             toggleSkipLockedCheckbox();
 
             // Show/hide logout button based on auth enabled
-            if (data.config.auth_enabled) {
+            if (data.config.auth_required || data.config.auth_enabled) {
                 document.getElementById("logout-link").style.display = "block";
             } else {
                 document.getElementById("logout-link").style.display = "none";
@@ -1700,22 +1735,38 @@ socket.on("disconnect", function () {
     }, 3000);  // Delay for 3 seconds before refresh to allow connection retry
 });
 
+// The server refuses Socket.IO connections without a valid session; reloading
+// sends the browser back through the login flow instead of retrying forever
+socket.on("connect_error", function (error) {
+    if (String(error && error.message).includes("Authentication required")) {
+        location.reload();
+    }
+});
+
 // ==================================================
 // Authentication Settings Toggle
 // ==================================================
 
+/**
+ * Show the credential fields that belong to the selected authentication mode.
+ *
+ * Local credentials stay visible in OIDC mode because they are the break-glass
+ * way back in when the identity provider is unreachable.
+ */
 function toggleAuthSettings() {
-    const authEnabled = document.getElementById("auth_enabled").checked;
-    const authSettings = document.getElementById("auth_settings");
-    if (authEnabled) {
-        authSettings.style.display = "block";
-    } else {
-        authSettings.style.display = "none";
-    }
+    const mode = document.getElementById("auth_mode").value;
+    const showPassword = mode === "password" ||
+        (mode === "oidc" && document.getElementById("oidc_allow_password_fallback").checked);
+    document.getElementById("auth_settings").style.display = showPassword ? "block" : "none";
+    document.getElementById("oidc_settings").style.display = mode === "oidc" ? "block" : "none";
+    document.getElementById("oidc_redirect_uri_hint").textContent =
+        (document.getElementById("external_url").value.trim().replace(/\/$/, "") || window.location.origin) +
+        "/auth/oidc/callback";
 }
 
-// Add event listener for auth_enabled checkbox
-document.getElementById("auth_enabled").addEventListener("change", toggleAuthSettings);
+document.getElementById("auth_mode").addEventListener("change", toggleAuthSettings);
+document.getElementById("oidc_allow_password_fallback").addEventListener("change", toggleAuthSettings);
+document.getElementById("external_url").addEventListener("input", toggleAuthSettings);
 
 // ==================================================
 // Kometa Settings Toggle

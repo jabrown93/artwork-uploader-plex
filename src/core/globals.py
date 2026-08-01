@@ -9,3 +9,4 @@ arr = None  # ArrService (Radarr/Sonarr pre-seed fallback)
 bulk_file_service = None
 scheduler_service = None
 update_service = None
+oidc_service = None  # OidcService (OpenID Connect logins for the web UI)

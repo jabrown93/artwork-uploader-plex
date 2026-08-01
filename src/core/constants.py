@@ -22,6 +22,28 @@ DEFAULT_IP_BINDING = "auto"  # Options: "auto", "ipv4", "ipv6"
 # Detect Docker environment
 RUNNING_IN_DOCKER = os.getenv("RUNNING_IN_DOCKER") == "1"
 
+# Authentication modes
+AUTH_MODE_NONE = "none"
+AUTH_MODE_PASSWORD = "password"
+AUTH_MODE_OIDC = "oidc"
+AUTH_MODES = [AUTH_MODE_NONE, AUTH_MODE_PASSWORD, AUTH_MODE_OIDC]
+DEFAULT_AUTH_MODE = AUTH_MODE_NONE
+
+# OIDC defaults
+DEFAULT_OIDC_SCOPES = "openid profile email groups"
+DEFAULT_OIDC_GROUPS_CLAIM = "groups"
+OIDC_DISCOVERY_PATH = "/.well-known/openid-configuration"
+
+# Placeholder sent to the web UI in place of secrets; saving it back means "keep existing".
+# The value deliberately satisfies the Plex token input's pattern so the settings form
+# still validates when the real token is never sent to the browser.
+SECRET_PLACEHOLDER = "UNCHANGED_STORED_SECRET"
+
+# Config keys whose values are never sent to the web UI
+REDACTED_CONFIG_KEYS = (
+    "token", "radarr_api_key", "sonarr_api_key", "oidc_client_secret"
+)
+
 # File paths - environment-aware defaults
 # Docker: absolute paths for volume mounts
 # Non-Docker: relative paths in execution directory
