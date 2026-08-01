@@ -1,3 +1,35 @@
+# [1.0.0](https://github.com/jabrown93/artwork-uploader-plex/compare/v0.10.1...v1.0.0) (2026-08-01)
+
+
+* feat(auth)!: OIDC single sign-on, Socket.IO authentication, secret redaction ([#116](https://github.com/jabrown93/artwork-uploader-plex/issues/116)) ([3bd99d6](https://github.com/jabrown93/artwork-uploader-plex/commit/3bd99d6e380a621458ab2de22b17381b3b351a4a))
+
+
+### BREAKING CHANGES
+
+* cross-origin HTTP and Socket.IO requests are rejected unless
+the origin is listed in `cors_allowed_origins`, and Socket.IO clients must
+carry an authenticated session whenever authentication is enabled.
+
+Claude-Session: https://claude.ai/code/session_01L36Toh7ZeuvkytjGaAuXnB
+
+* fix(security): stop sending stored secrets to the web UI
+
+The settings payload carried the Plex token and the Radarr/Sonarr API keys to
+the browser in cleartext on every config load. They are now replaced with a
+placeholder, alongside the OIDC client secret that already was.
+
+Echoing the placeholder back keeps the stored value, typing over it sets a new
+one, and clearing the field removes it. "Test Plex connection" falls back to the
+stored token when the field is untouched. The placeholder deliberately matches
+the token input's validation pattern so the settings form still submits.
+
+Saving no longer reports failure when only the Plex reconnect fails: the
+settings are already stored at that point, so an unreachable server now
+produces a warning instead of a misleading "could not be saved", and the UI
+gets its save_config acknowledgement either way.
+
+Claude-Session: https://claude.ai/code/session_01L36Toh7ZeuvkytjGaAuXnB
+
 ## [0.10.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v0.10.0...v0.10.1) (2026-07-25)
 
 
