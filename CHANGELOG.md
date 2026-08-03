@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.0.0...v1.0.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **deps:** pin python docker tag to 5f1cdbc ([a0fc7f4](https://github.com/jabrown93/artwork-uploader-plex/commit/a0fc7f4f46b4de7d6abd921067fb2b16dfa3b7e2))
+
 # [1.0.0](https://github.com/jabrown93/artwork-uploader-plex/compare/v0.10.1...v1.0.0) (2026-08-01)
 
 
