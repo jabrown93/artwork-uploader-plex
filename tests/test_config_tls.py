@@ -41,7 +41,8 @@ class TestTlsConfig:
         assert cfg.tls_is_enabled() is True
 
         cfg.save()
-        saved = json.loads(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as saved_file:
+            saved = json.load(saved_file)
         assert saved["tls_cert_file"] == "/certs/tls.crt"
         assert saved["tls_key_file"] == "/certs/tls.key"
 
@@ -53,9 +54,14 @@ class TestTlsConfig:
         assert config.get_tls_cert_file() == "/env/tls.crt"
         assert config.get_tls_key_file() == "/env/tls.key"
 
-    def test_env_enables_without_config(self, config, monkeypatch):
+    def test_env_pair_enables_without_config(self, config, monkeypatch):
         monkeypatch.setenv("TLS_CERT_FILE", "/env/tls.crt")
+        monkeypatch.setenv("TLS_KEY_FILE", "/env/tls.key")
         assert config.tls_is_enabled() is True
+
+    def test_half_pair_is_not_enabled(self, config, monkeypatch):
+        monkeypatch.setenv("TLS_CERT_FILE", "/env/tls.crt")
+        assert config.tls_is_enabled() is False
 
 
 class TestSessionCookieSecureWithTls:

@@ -430,8 +430,13 @@ class Config:
         return self._env_or("TLS_KEY_FILE", self.tls_key_file)
 
     def tls_is_enabled(self) -> bool:
-        """Whether the web server should terminate TLS itself."""
-        return bool(self.get_tls_cert_file() or self.get_tls_key_file())
+        """
+        Whether the web server terminates TLS itself (both cert and key set).
+
+        A half-configured pair reports False here but still aborts startup in
+        start_web_server rather than silently serving plain HTTP.
+        """
+        return bool(self.get_tls_cert_file() and self.get_tls_key_file())
 
     def ensure_session_secret(self) -> str:
         """
