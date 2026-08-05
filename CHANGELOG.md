@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.0.1...v1.1.0) (2026-08-05)
+
+
+### Features
+
+* serve HTTPS with user-provided TLS cert and key ([#118](https://github.com/jabrown93/artwork-uploader-plex/issues/118)) ([6a92693](https://github.com/jabrown93/artwork-uploader-plex/commit/6a9269349b9759571ba9e56ba43c675a1d088652))
+
 ## [1.0.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.0.0...v1.0.1) (2026-08-03)
 
 
