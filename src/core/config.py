@@ -60,6 +60,8 @@ class Config:
         external_url: Public base URL of this app, used to build the OIDC redirect URI
         trusted_proxy_count: Number of reverse proxies in front of the app; 0 disables ProxyFix
         cors_allowed_origins: Origins allowed for HTTP/Socket.IO; empty means same-origin only
+        tls_cert_file: Path to a PEM certificate (chain) file; with tls_key_file enables HTTPS (env TLS_CERT_FILE wins)
+        tls_key_file: Path to the PEM private key file for tls_cert_file (env TLS_KEY_FILE wins)
         ip_binding: IP binding mode - "auto" (default), "ipv4", or "ipv6"
         debug: Enable debug logging
         kometa_library_paths: Dictionary mapping Plex library names to Kometa directory names
@@ -112,6 +114,8 @@ class Config:
         self.external_url: str = ""
         self.trusted_proxy_count: int = 1
         self.cors_allowed_origins: List[str] = []
+        self.tls_cert_file: str = ""
+        self.tls_key_file: str = ""
         self.ip_binding: str = DEFAULT_IP_BINDING
         self.debug: bool = False
         self.kometa_library_paths: Dict[str, str] = {}
@@ -195,6 +199,8 @@ class Config:
             except (TypeError, ValueError):
                 self.trusted_proxy_count = 1
             self.cors_allowed_origins = config.get("cors_allowed_origins", [])
+            self.tls_cert_file = config.get("tls_cert_file", "") or ""
+            self.tls_key_file = config.get("tls_key_file", "") or ""
             self.ip_binding = config.get("ip_binding", DEFAULT_IP_BINDING)
             self.debug = config.get("debug", False)
             self.kometa_library_paths = config.get("kometa_library_paths", {})
@@ -265,6 +271,8 @@ class Config:
             "external_url": "",
             "trusted_proxy_count": 1,
             "cors_allowed_origins": [],
+            "tls_cert_file": "",
+            "tls_key_file": "",
             "debug": False,
             "kometa_library_paths": {},
             "apprise_urls": [],
@@ -342,6 +350,8 @@ class Config:
             "external_url": self.external_url,
             "trusted_proxy_count": self.trusted_proxy_count,
             "cors_allowed_origins": self.cors_allowed_origins,
+            "tls_cert_file": self.tls_cert_file,
+            "tls_key_file": self.tls_key_file,
             "ip_binding": self.ip_binding,
             "debug": self.debug,
             "kometa_library_paths": self.kometa_library_paths,
@@ -411,6 +421,18 @@ class Config:
         return bool(self.get_oidc_issuer() and self.get_oidc_client_id()
                     and self.get_oidc_client_secret())
 
+    def get_tls_cert_file(self) -> str:
+        """TLS certificate file path, with TLS_CERT_FILE taking precedence."""
+        return self._env_or("TLS_CERT_FILE", self.tls_cert_file)
+
+    def get_tls_key_file(self) -> str:
+        """TLS private key file path, with TLS_KEY_FILE taking precedence."""
+        return self._env_or("TLS_KEY_FILE", self.tls_key_file)
+
+    def tls_is_enabled(self) -> bool:
+        """Whether the web server should terminate TLS itself."""
+        return bool(self.get_tls_cert_file() or self.get_tls_key_file())
+
     def ensure_session_secret(self) -> str:
         """
         Return the Flask session signing key, generating and persisting one if needed.
@@ -437,7 +459,7 @@ class Config:
             return True
         if self.session_cookie_secure == "never":
             return False
-        return self.external_url.lower().startswith("https://")
+        return self.tls_is_enabled() or self.external_url.lower().startswith("https://")
 
     def to_public_dict(self) -> Dict[str, Any]:
         """

@@ -114,6 +114,7 @@ All application code lives under `src/`:
 | `external_url`, `trusted_proxy_count` | string, int | Public URL and proxy hops used to build the redirect URI |
 | `session_secret`, `session_cookie_secure` | string | Session signing key (env `SESSION_SECRET` wins) and cookie flag |
 | `cors_allowed_origins` | array | Empty means same-origin only for HTTP and Socket.IO |
+| `tls_cert_file`, `tls_key_file` | string | PEM cert chain and key paths; both set serves HTTPS directly (env `TLS_CERT_FILE`/`TLS_KEY_FILE` wins) |
 
 Docker: `RUNNING_IN_DOCKER=1` hardcodes Kometa base to `/assets` and temp dir to `/temp`.
 

@@ -307,7 +307,7 @@ https://<your external URL>/auth/oidc/callback
 - Number of reverse proxies in front of the app (default ```1```). Their ```X-Forwarded-*``` headers are trusted so the redirect URI uses the public scheme and host. Set to ```0``` when the app is exposed directly.
 
 ```"session_cookie_secure"```
-- ```"auto"``` (default) sets the ```Secure``` cookie flag when ```external_url``` is HTTPS. Use ```"always"``` or ```"never"``` to override.
+- ```"auto"``` (default) sets the ```Secure``` cookie flag when TLS is enabled or ```external_url``` is HTTPS. Use ```"always"``` or ```"never"``` to override.
 
 ```"cors_allowed_origins"```
 - Array of origins allowed to call the HTTP and Socket.IO APIs. Empty (default) restricts them to the app's own origin.
@@ -315,6 +315,20 @@ https://<your external URL>/auth/oidc/callback
 
 If your provider uses a private certificate authority, point ```REQUESTS_CA_BUNDLE``` at the CA
 bundle rather than disabling verification.
+
+### Serving HTTPS directly
+
+By default the app serves plain HTTP and expects a reverse proxy to terminate TLS. To have
+the app terminate TLS itself, point it at a PEM certificate and private key:
+
+```"tls_cert_file"``` / ```"tls_key_file"```
+- Paths to the PEM certificate (including any intermediate chain) and its private key. The
+  environment variables ```TLS_CERT_FILE``` and ```TLS_KEY_FILE``` take precedence. In Docker,
+  mount the files into the container and point these at the mounted paths.
+- When set, the web server listens on the same port over ```https://``` only. Both values are
+  required and the files must exist, otherwise startup fails rather than silently falling
+  back to plain HTTP.
+- Certificates are read once at startup; restart the app after renewing them.
 
 ### Secrets in the web UI
 

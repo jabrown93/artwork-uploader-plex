@@ -605,7 +605,9 @@ def setup_web_sockets():
 
     # Start the web server
     web_routes.start_web_server(
-        web_app, DEFAULT_WEB_PORT, globals.debug, config.ip_binding)
+        web_app, DEFAULT_WEB_PORT, globals.debug, config.ip_binding,
+        tls_cert_file=config.get_tls_cert_file(),
+        tls_key_file=config.get_tls_key_file())
 
 
 def check_image_orientation(image_path):
