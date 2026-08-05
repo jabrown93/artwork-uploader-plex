@@ -1509,7 +1509,30 @@ def extract_and_list_zip(
     return sorted_data, filtered_files, zip_title, zip_author, zip_source
 
 
-def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: str = "auto"):
+def resolve_tls_files(tls_cert_file: str, tls_key_file: str) -> dict:
+    """
+    Validate the TLS file pair and return the SSL kwargs for SocketIO.run.
+
+    Failing fast beats silently serving plain HTTP when the user asked for
+    HTTPS - a half-configured or missing file would otherwise only surface as
+    browser connection errors.
+
+    Raises:
+        ConfigurationError: If only one of the pair is set or a file is missing.
+    """
+    if not tls_cert_file or not tls_key_file:
+        raise ConfigurationError(
+            "HTTPS needs both tls_cert_file and tls_key_file (or TLS_CERT_FILE/TLS_KEY_FILE); "
+            f"got cert='{tls_cert_file}', key='{tls_key_file}'")
+    for label, path in (("certificate", tls_cert_file), ("private key", tls_key_file)):
+        if not os.path.isfile(path):
+            raise ConfigurationError(
+                f"TLS {label} file not found: {path}")
+    return {"certfile": tls_cert_file, "keyfile": tls_key_file}
+
+
+def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: str = "auto",
+                     tls_cert_file: str = "", tls_key_file: str = ""):
     """
     Start the Flask web server with support for IPv4, IPv6, or dual-stack.
 
@@ -1518,7 +1541,17 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
         web_port: Port to bind to
         debug: Whether to run in debug mode
         ip_binding: IP binding mode - "auto" (dual-stack), "ipv4", or "ipv6"
+        tls_cert_file: PEM certificate (chain) file; with tls_key_file serves HTTPS
+        tls_key_file: PEM private key file for tls_cert_file
     """
+    ssl_kwargs = {}
+    scheme = "http"
+    if tls_cert_file or tls_key_file:
+        ssl_kwargs = resolve_tls_files(tls_cert_file, tls_key_file)
+        scheme = "https"
+        logger.info(
+            f"TLS enabled: serving HTTPS with certificate {tls_cert_file}")
+
     # Determine the binding address based on ip_binding configuration
     ipv6_available = is_ipv6_available()
 
@@ -1532,40 +1565,40 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
                 binding_host = "::"
                 logger.info(
                     f"Starting web server on dual-stack (IPv4 and IPv6) at port {web_port}\n"
-                    f"  - IPv4: http://127.0.0.1:{web_port}\n"
-                    f"  - IPv6: http://[::1]:{web_port}")
+                    f"  - IPv4: {scheme}://127.0.0.1:{web_port}\n"
+                    f"  - IPv6: {scheme}://[::1]:{web_port}")
             else:
                 # Dual-stack not supported, fall back to IPv4 only
                 binding_host = "0.0.0.0"
                 logger.info(
                     f"Dual-stack not supported on this system, using IPv4 only at port {web_port}\n"
-                    f"  - IPv4: http://127.0.0.1:{web_port}")
+                    f"  - IPv4: {scheme}://127.0.0.1:{web_port}")
         else:
             # IPv6 not available, fall back to IPv4 only
             binding_host = "0.0.0.0"
             logger.info(
                 f"IPv6 not available, using IPv4 only at port {web_port}\n"
-                f"  - IPv4: http://127.0.0.1:{web_port}")
+                f"  - IPv4: {scheme}://127.0.0.1:{web_port}")
     elif ip_binding == "ipv6":
         # Prefer IPv6; may also accept IPv4 connections on dual-stack systems
         if ipv6_available:
             binding_host = "::"
             logger.info(
                 f"Starting web server with IPv6 binding at port {web_port}\n"
-                f"  - IPv6: http://[::1]:{web_port}\n"
+                f"  - IPv6: {scheme}://[::1]:{web_port}\n"
                 "    Note: On some systems this binding may also accept IPv4 connections due to dual-stack behavior.")
         else:
             # IPv6 requested but not available, fall back to IPv4
             binding_host = "0.0.0.0"
             logger.info(
                 f"IPv6 requested but not available, falling back to IPv4 at port {web_port}\n"
-                f"  - IPv4: http://127.0.0.1:{web_port}")
+                f"  - IPv4: {scheme}://127.0.0.1:{web_port}")
     else:
         # IPv4 only (default fallback)
         binding_host = "0.0.0.0"
         logger.info(
             f"Starting web server on IPv4 only at port {web_port}\n"
-            f"  - IPv4: http://127.0.0.1:{web_port}")
+            f"  - IPv4: {scheme}://127.0.0.1:{web_port}")
 
     globals.web_socket.run(web_app, host=binding_host,
-                           port=web_port, debug=debug)
+                           port=web_port, debug=debug, **ssl_kwargs)
