@@ -1,3 +1,12 @@
+## [1.1.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.0...v1.1.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **deps:** update python docker tag to v3.14.7 ([50c45df](https://github.com/jabrown93/artwork-uploader-plex/commit/50c45df0e6f414ff733c3b1c339087185422f8ff))
+* **deps:** update python:3.14.6 docker digest to 004e5a1 ([09ab827](https://github.com/jabrown93/artwork-uploader-plex/commit/09ab8274ced9dfbfd141d36344f21ee5703339c5))
+* **deps:** update python:3.14.6 docker digest to 51570a5 ([b49f368](https://github.com/jabrown93/artwork-uploader-plex/commit/b49f3688eecd9bac3d60924adf309c3a45b486c9))
+
 # [1.1.0](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.0.1...v1.1.0) (2026-08-05)
 
 
