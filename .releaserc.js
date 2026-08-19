@@ -47,10 +47,21 @@ module.exports = {
     ],
     "@semantic-release/github",
     [
-      "@semantic-release/git",
+      "@semantic-release/exec",
       {
-        assets: ["CHANGELOG.md", "src/core/__version__.py"],
-        message: "chore(release): v${nextRelease.version} [skip ci]",
+        // Version-bump commit via GitHub's GraphQL createCommitOnBranch
+        // instead of @semantic-release/git: API commits are signed by GitHub
+        // and show as Verified, which a local git commit from the CI bot
+        // never can be. RELEASE_COMMIT_SCRIPT is exported by the
+        // jabrown93/ci/actions/release-commit step in docker-release.yml
+        // (workflows-v1.1.0+); written WITHOUT braces because exec runs this
+        // through a Lodash template that would evaluate ${...} as JS. The
+        // script hard-resets the checkout so the release tag points at the
+        // API commit.
+        prepareCmd:
+          "node $RELEASE_COMMIT_SCRIPT --branch ${branch.name}" +
+          " --message 'chore(release): v${nextRelease.version} [skip ci]' --" +
+          " CHANGELOG.md src/core/__version__.py",
       },
     ],
   ],
