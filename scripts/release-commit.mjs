@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console -- CLI script; console is its user interface */
 // Creates the semantic-release version-bump commit via GitHub's GraphQL
 // createCommitOnBranch instead of local git, so GitHub signs it and the
 // commit shows as Verified. Replaces @semantic-release/git, whose local
@@ -18,8 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
-const git = (...args) =>
-  execFileSync('git', args, { encoding: 'utf8' }).trim();
+const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
 const argv = process.argv.slice(2);
 const flags = {};
@@ -39,23 +39,25 @@ if (!flags.branch || !flags.message || paths.length === 0) {
 }
 
 const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-if (!token) throw new Error('GITHUB_TOKEN or GH_TOKEN must be set');
+if (!token) {
+  throw new Error('GITHUB_TOKEN or GH_TOKEN must be set');
+}
 const repository = process.env.GITHUB_REPOSITORY;
-if (!repository) throw new Error('GITHUB_REPOSITORY must be set');
+if (!repository) {
+  throw new Error('GITHUB_REPOSITORY must be set');
+}
 
 // --porcelain covers modified and untracked alike — a repo's first release
 // creates CHANGELOG.md rather than modifying it. Listing a path that does
 // not exist at all is fine: status prints nothing and it is skipped.
-const changed = paths.filter(
-  (p) => git('status', '--porcelain', '--', p) !== ''
-);
+const changed = paths.filter(p => git('status', '--porcelain', '--', p) !== '');
 if (changed.length === 0) {
   console.log('release-commit: no listed file changed, skipping commit');
   process.exit(0);
 }
 
 const additions = await Promise.all(
-  changed.map(async (path) => ({
+  changed.map(async path => ({
     path,
     contents: (await readFile(path)).toString('base64'),
   }))
@@ -73,7 +75,10 @@ const response = await fetch('https://api.github.com/graphql', {
     }`,
     variables: {
       input: {
-        branch: { repositoryNameWithOwner: repository, branchName: flags.branch },
+        branch: {
+          repositoryNameWithOwner: repository,
+          branchName: flags.branch,
+        },
         message: { headline: flags.message },
         expectedHeadOid: git('rev-parse', 'HEAD'),
         fileChanges: { additions },
@@ -89,6 +94,12 @@ if (!response.ok || body.errors) {
 }
 const oid = body.data.createCommitOnBranch.commit.oid;
 
-git('fetch', 'origin', `+refs/heads/${flags.branch}:refs/remotes/origin/${flags.branch}`);
+git(
+  'fetch',
+  'origin',
+  `+refs/heads/${flags.branch}:refs/remotes/origin/${flags.branch}`
+);
 git('reset', '--hard', oid);
-console.log(`release-commit: created ${oid} on ${flags.branch} (${changed.join(', ')})`);
+console.log(
+  `release-commit: created ${oid} on ${flags.branch} (${changed.join(', ')})`
+);
