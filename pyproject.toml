@@ -1,0 +1,20 @@
+# Ruff replaces black, flake8, isort, autopep8 and pylint, all of which sat in
+# requirements-dev.txt without a single caller. Test and packaging config stay
+# in pytest.ini and the Dockerfile; this file exists only to configure ruff.
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+extend-exclude = ["out", "logs", "bulk_imports"]
+
+[tool.ruff.lint]
+# Deliberately narrow: this repo has never been linted, and ruff's wider
+# default set reports 303 pre-existing findings (130 of them a single pyupgrade
+# rule, and 16 E402 imports-not-at-top that are load-bearing for eventlet
+# monkey-patching). These are the rules that flag actual errors rather than
+# style -- undefined names, broken f-strings, syntax problems -- and the tree
+# is already clean under them, so CI can enforce this set starting now.
+# Widening it (E4, I, B, C4, UP, F401) means a mechanical `ruff check --fix`
+# sweep, which belongs in its own change rather than buried in a dependency
+# swap.
+select = ["E7", "E9", "F63", "F7", "F82"]
