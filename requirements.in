@@ -1,0 +1,23 @@
+# Direct runtime dependencies only. requirements.txt is GENERATED from this
+# file -- do not edit it by hand:
+#
+#   uv pip compile requirements.in -o requirements.txt
+#
+# Every name below is imported somewhere under src/. Transitive dependencies
+# belong in the compiled output, not here.
+
+apprise
+Authlib
+bcrypt
+beautifulsoup4
+eventlet
+Flask
+Flask-CORS
+Flask-SocketIO
+packaging
+pillow
+PlexAPI
+requests
+schedule
+validators
+Werkzeug

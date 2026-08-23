@@ -1,0 +1,20 @@
+# Direct development dependencies only. requirements-dev.txt is GENERATED from
+# this file -- do not edit it by hand:
+#
+#   uv pip compile requirements-dev.in -o requirements-dev.txt
+
+-r requirements.in
+
+# Testing
+pytest
+pytest-cov
+pytest-mock
+pytest-asyncio
+
+# Type checking
+mypy
+types-requests
+types-Pillow
+
+# Lint and format. ruff replaces black, flake8, isort, autopep8 and pylint.
+ruff
