@@ -116,3 +116,4 @@ DEVELOPER_GUIDE.md
 .gitignore
 docker-compose.yml
 out/
+.pi/
