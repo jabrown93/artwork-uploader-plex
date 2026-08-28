@@ -10,7 +10,7 @@ bcrypt==5.0.0
     # via -r requirements.in
 beautifulsoup4==4.15.0
     # via -r requirements.in
-bidict==0.23.1
+bidict==0.24.0
     # via python-socketio
 blinker==1.9.0
     # via
