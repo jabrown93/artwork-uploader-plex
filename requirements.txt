@@ -27,7 +27,7 @@ click==8.4.2
     #   apprise
     #   flask
     #   flask-socketio
-cryptography==50.0.0
+cryptography==50.0.1
     # via
     #   authlib
     #   joserfc
