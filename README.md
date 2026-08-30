@@ -240,6 +240,10 @@ This is optional - if you don't do this, a new config.json will be created when 
 - Setting this to ```true``` will remove the Overlay label that Kometa uses when we upload new artwork, so Kometa can reapply any overlays in future
 - Setting to ```false``` will leave the Overlay label as it is, Kometa will not re-apply your overlays.
 
+```"skip_locked_artwork"```
+- Setting this to ```true``` will skip any artwork whose target field (poster, background or square art) is locked in Plex, unless ```--force``` is used.  Plex locks a field whenever artwork is deliberately set - manually or by an upload - so this makes scheduled bulk imports and user scrapes fill items still on default artwork while leaving anything you've already set alone.
+- Setting to ```false``` (the default) keeps the existing behaviour where artwork is applied regardless of locks.
+
 ```"save_to_kometa"```
 - Setting this to ```true``` will save scraped artwork to the Kometa asset directory
 - Setting to ```false``` will keep the original behavior where the artwork will be immediately applied to Plex directly
@@ -255,6 +259,88 @@ This is optional - if you don't do this, a new config.json will be created when 
 
 ```"apprise_urls"```
 - Provide a comma-separated list of Apprise service URLs to send notifications upong completion of scheduled bulk imports. Check [the Apprise service list](https://appriseit.com/services/) for details on the supported services and how to set them up and generate a notification URL for your favorite services.
+
+```"auth_mode"```
+- ```"none"``` (default) - the web UI is open to anyone who can reach it
+- ```"password"``` - sign in with a local username and password
+- ```"oidc"``` - sign in through an OpenID Connect provider (see **Single sign-on** below)
+- Older configs that only have ```"auth_enabled": true``` are migrated to ```"password"``` automatically.
+
+### Single sign-on (OIDC)
+
+Set ```"auth_mode": "oidc"``` and register this app with your identity provider as a
+**confidential client** using the **authorization code** flow with **PKCE**. The redirect
+URI to register is:
+
+```
+https://<your external URL>/auth/oidc/callback
+```
+
+```"oidc_issuer"```
+- Issuer URL of your provider. The discovery document is read from ```<issuer>/.well-known/openid-configuration```.
+- authentik: ```https://auth.example.com/application/o/artwork-uploader/```
+- Keycloak: ```https://auth.example.com/realms/<realm>```
+
+```"oidc_client_id"``` / ```"oidc_client_secret"```
+- Client credentials issued by your provider. The environment variables ```OIDC_CLIENT_ID``` and ```OIDC_CLIENT_SECRET``` take precedence, so the secret never has to be written to ```config.json```.
+
+```"oidc_scopes"```
+- Space separated scopes. Defaults to ```"openid profile email groups"```.
+
+```"oidc_groups_claim"```
+- Claim that holds the user's groups. Defaults to ```"groups"```. Dotted paths are supported, e.g. ```"resource_access.artwork-uploader.roles"``` for Keycloak client roles.
+
+```"oidc_allowed_groups"```
+- Array of groups permitted to sign in, e.g. ```["media-admins"]```. Matching is case sensitive. Leave empty to allow anyone your provider lets through.
+
+```"oidc_allow_password_fallback"```
+- ```true``` (default) keeps local password sign-in available at ```/login?local=1``` as a break-glass route for when the provider is unreachable. Set a local username and password first, or there is nothing to fall back to.
+- ```false``` disables password sign-in entirely and invalidates existing password sessions.
+
+```"oidc_provider_name"```
+- Label shown on the sign-in button, e.g. ```"authentik"```.
+
+```"external_url"```
+- Public base URL of this app, e.g. ```"https://artwork.example.com"```. Used to build the redirect URI and to decide whether the session cookie gets the ```Secure``` flag. Leave blank to derive it from the incoming request.
+
+```"trusted_proxy_count"```
+- Number of reverse proxies in front of the app (default ```1```). Their ```X-Forwarded-*``` headers are trusted so the redirect URI uses the public scheme and host. Set to ```0``` when the app is exposed directly.
+
+```"session_cookie_secure"```
+- ```"auto"``` (default) sets the ```Secure``` cookie flag when TLS is enabled or ```external_url``` is HTTPS. Use ```"always"``` or ```"never"``` to override.
+
+```"cors_allowed_origins"```
+- Array of origins allowed to call the HTTP and Socket.IO APIs. Empty (default) restricts them to the app's own origin.
+- **Note:** earlier versions allowed every origin. If you drive this app from another site you now have to list that origin here.
+
+If your provider uses a private certificate authority, point ```REQUESTS_CA_BUNDLE``` at the CA
+bundle rather than disabling verification.
+
+### Serving HTTPS directly
+
+By default the app serves plain HTTP and expects a reverse proxy to terminate TLS. To have
+the app terminate TLS itself, point it at a PEM certificate and private key:
+
+```"tls_cert_file"``` / ```"tls_key_file"```
+- Paths to the PEM certificate (including any intermediate chain) and its private key. The
+  environment variables ```TLS_CERT_FILE``` and ```TLS_KEY_FILE``` take precedence. In Docker,
+  mount the files into the container and point these at the mounted paths.
+- When set, the web server listens on the same port over ```https://``` only. Both values are
+  required and the files must exist, otherwise startup fails rather than silently falling
+  back to plain HTTP.
+- Certificates are read once at startup; restart the app after renewing them.
+
+### Secrets in the web UI
+
+Your Plex token, Radarr/Sonarr API keys and OIDC client secret are no longer sent to the
+browser. The settings page shows ```UNCHANGED_STORED_SECRET``` in those fields instead -
+leave it alone to keep the stored value, type over it to set a new one, or clear the field
+to remove it. "Test Plex connection" falls back to the stored token when the field is
+untouched.
+
+A ```session_secret``` is generated on first run and stored in ```config.json``` so that
+sessions survive restarts. Set the ```SESSION_SECRET``` environment variable to keep it out
+of the config file instead.
 
 ### Filter options
 Both mediux_filters and tpdb_filters specify which artwork types to upload by including the flags below.  Specify one or more in an array ["show_cover, "title_card"]. TPDb does not provide title cards or backgrounds so these filters are not available in the web UI.
@@ -370,6 +456,8 @@ The script supports various command-line arguments for flexible use.
 ```--add-posters``` will also parse the additional posters section of the set, when using the Poster DB
    
 ```--force``` will force the artwork to be updated even if it's the same as the one on plex already - or maybe you changed the artwork manually and want to override it...
+
+```--skip-locked``` will skip any artwork whose target field is locked in Plex (i.e. it's been deliberately set, manually or by a previous upload), unless ```--force``` is also used.  This is the same as setting ```skip_locked_artwork``` to ```true``` in ```config.json```, but per URL.
     
 ```--exclude <id1> [<id2> <id3> ...]``` will exclude the poster or artwork with the specified ID from being uploaded.  Grab the ID from the session log...
 - ThePosterDB is a number

@@ -1,4 +1,4 @@
-FROM python:3.14.6
+FROM python:3.14.7@sha256:b0aed0e0059e9b1527ef57689a7206f32526627b0713e2228a916df62880188a
 
 ENV PATH="/app/venv/bin:$PATH"
 
@@ -11,10 +11,6 @@ ENV PYTHONPATH="/app/src:${PYTHONPATH}"
 
 COPY requirements.txt .
 
-COPY src/ /app/src/
-
-COPY entrypoint.sh /entrypoint.sh
-
 # Install gosu for dropping privileges and create necessary directories
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gosu && \
@@ -22,9 +18,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     python -m venv /app/venv && \
     pip install --no-cache-dir -r requirements.txt && \
-    chmod +x /entrypoint.sh && \
     groupadd -g 1027 artwork && \
     useradd -u 1027 -g artwork -m artwork
+
+# Copy source last so editing it doesn't bust the dependency-install layer above
+COPY src/ /app/src/
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Expose web UI port
 EXPOSE 4567

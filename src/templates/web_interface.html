@@ -152,6 +152,10 @@
             <div class="progress-bar bg-info progress-bar-striped progress-bar-animated" id="progress_bar" style="width: 0%"></div>
         </div>
 
+        <div class="progress mt-3 collapse" id="sub_progress_bar_container" role="progressbar" aria-label="Sub-progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar bg-secondary progress-bar-striped progress-bar-animated" id="sub_progress_bar" style="width: 0%"></div>
+        </div>
+
         <div class="tab-content" id="myTabContent">
 
             <!-- Settings Tab -->
@@ -312,9 +316,13 @@
                             <!-- Authentication settings -->
                             <div class="p-3 border mt-3 rounded-3 shadow-sm">
                                 <h5 class="mb-3"><i class="bi bi-shield-check"></i>&ensp;Authentication settings</h5>
-                                <div class="form-check form-switch mb-3">
-                                    <input class="form-check-input" type="checkbox" id="auth_enabled"/>
-                                    <label for="auth_enabled" class="form-check-label">Enable password protection</label>
+                                <div class="mb-3">
+                                    <label for="auth_mode" class="form-label">Authentication mode</label>
+                                    <select id="auth_mode" name="auth_mode" class="form-select">
+                                        <option value="none">Off - anyone can use the app</option>
+                                        <option value="password">Username and password</option>
+                                        <option value="oidc">Single sign-on (OIDC)</option>
+                                    </select>
                                 </div>
                                 <div id="auth_settings" style="display: none;">
                                     <div class="mb-3">
@@ -328,6 +336,54 @@
                                     </div>
                                     <div class="alert alert-info" role="alert">
                                         <i class="bi bi-info-circle"></i> You will need to log in with these credentials after saving. Sessions last 7 days with "Remember me" enabled.
+                                    </div>
+                                </div>
+                                <div id="oidc_settings" style="display: none;">
+                                    <div class="mb-3">
+                                        <label for="oidc_issuer" class="form-label"><i class="bi bi-globe"></i>&ensp;Issuer URL</label>
+                                        <input type="text" id="oidc_issuer" name="oidc_issuer" class="form-control" placeholder="https://auth.example.com/application/o/artwork-uploader/">
+                                        <small class="form-text text-muted">The discovery document is read from <code>&lt;issuer&gt;/.well-known/openid-configuration</code></small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="oidc_client_id" class="form-label"><i class="bi bi-person-badge"></i>&ensp;Client ID</label>
+                                        <input type="text" id="oidc_client_id" name="oidc_client_id" class="form-control" placeholder="client id">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="oidc_client_secret" class="form-label"><i class="bi bi-key"></i>&ensp;Client secret</label>
+                                        <input type="password" id="oidc_client_secret" name="oidc_client_secret" class="form-control" placeholder="client secret">
+                                        <small class="form-text text-muted" id="oidc_client_secret_help">Leave unchanged to keep the stored secret</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="oidc_provider_name" class="form-label"><i class="bi bi-tag"></i>&ensp;Provider name</label>
+                                        <input type="text" id="oidc_provider_name" name="oidc_provider_name" class="form-control" placeholder="SSO">
+                                        <small class="form-text text-muted">Shown on the sign-in button</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="oidc_scopes" class="form-label"><i class="bi bi-list-check"></i>&ensp;Scopes</label>
+                                        <input type="text" id="oidc_scopes" name="oidc_scopes" class="form-control" placeholder="openid profile email groups">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="oidc_groups_claim" class="form-label"><i class="bi bi-people"></i>&ensp;Groups claim</label>
+                                        <input type="text" id="oidc_groups_claim" name="oidc_groups_claim" class="form-control" placeholder="groups">
+                                        <small class="form-text text-muted">Dotted paths are supported, e.g. <code>resource_access.artwork.roles</code></small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="oidc_allowed_groups" class="form-label"><i class="bi bi-shield-lock"></i>&ensp;Allowed groups</label>
+                                        <input type="text" id="oidc_allowed_groups" name="oidc_allowed_groups" class="form-control" placeholder="plex-admins, media">
+                                        <small class="form-text text-muted">Comma separated. Leave blank to allow any user your provider lets through.</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="external_url" class="form-label"><i class="bi bi-link-45deg"></i>&ensp;External URL</label>
+                                        <input type="text" id="external_url" name="external_url" class="form-control" placeholder="https://artwork.example.com">
+                                        <small class="form-text text-muted">Used to build the redirect URI. Leave blank to use the request host.</small>
+                                    </div>
+                                    <div class="form-check form-switch mb-3">
+                                        <input class="form-check-input" type="checkbox" id="oidc_allow_password_fallback"/>
+                                        <label for="oidc_allow_password_fallback" class="form-check-label">Keep local password sign-in as a break-glass option</label>
+                                    </div>
+                                    <div class="alert alert-info" role="alert">
+                                        <i class="bi bi-info-circle"></i> Register this redirect URI with your provider:
+                                        <code id="oidc_redirect_uri_hint"></code>
                                     </div>
                                 </div>
                             </div>
@@ -443,6 +499,11 @@
                                             <input class="form-check-input" type="checkbox" value="auto_manage" id="auto_manage_bulk_files"/>
                                             <label for="auto_manage_bulk_files" class="form-check-label">Sort and label bulk files automatically</label>
                                         </div>
+                                        <div class="form-check form-switch mb-3">
+                                            <input class="form-check-input" type="checkbox" value="skip_locked_artwork" id="skip_locked_artwork"/>
+                                            <label for="skip_locked_artwork" class="form-check-label">Skip locked artwork</label>
+                                            <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-title="Skips artwork that is locked in Plex, so scheduled runs only update default artwork"></i>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -455,7 +516,7 @@
                                             <div class="mb-3">
                                                 <label for="apprise_urls" class="form-label"><i class="bi bi-link-45deg"></i>&ensp;Apprise URLs to notify</label>
                                                 &nbsp;<i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-delay='{"hide": 500}' data-bs-html="true" data-bs-title='Enter one or more Apprise URLs separated by commas. See <a href="https://appriseit.com/services/" target="_blank" rel="noopener noreferrer">the Apprise services list</a> for details.'></i>
-                                                <input type="text" id="apprise_urls" name="apprise_urls" class="form-control" placeholder="discord://{botname}@​{WebhookID}/{WebhookToken}"
+                                                <input type="text" id="apprise_urls" name="apprise_urls" class="form-control" placeholder="discord://{botname}@{WebhookID}/{WebhookToken}"
                                                     title="Enter one or more Apprise URLs separated by commas.">
                                                 <div class="invalid-feedback">
                                                     Enter one or more Apprise URLs separated by commas.
@@ -595,6 +656,11 @@
                                     <input class="form-check-input" type="checkbox" value="--force" id="option-force"/>
                                     <label for="option-force" class="form-check-label">Force upload the artwork, even if it
                                         already exists</label>
+                                </div>
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" value="--skip-locked" id="option-skip-locked"/>
+                                    <label for="option-skip-locked" class="form-check-label">Skip locked artwork</label>
+                                    <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-title="Skips artwork that is locked in Plex, so scheduled runs only update default artwork"></i>
                                 </div>
                                 <div class="form-check form-switch mb-2">
                                     <input class="form-check-input" type="checkbox" value="--stage" id="option-stage"/>
@@ -763,6 +829,11 @@
                                 <input class="form-check-input" type="checkbox" value="force" id="upload-option-force"/>
                                 <label for="upload-option-force" class="form-check-label">Force upload the artwork, even if it
                                     already exists</label>
+                            </div>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" value="skip-locked" id="upload-option-skip-locked"/>
+                                <label for="upload-option-skip-locked" class="form-check-label">Skip locked artwork</label>
+                                <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-title="Skips artwork that is locked in Plex, so scheduled runs only update default artwork"></i>
                             </div>
                             <div class="form-check form-switch mb-2">
                                 <input class="form-check-input" type="checkbox" value="stage" id="upload-option-stage"/>

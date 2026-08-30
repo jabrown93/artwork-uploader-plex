@@ -111,8 +111,12 @@ REFACTORING_*.md
 REMAINING_IMPROVEMENTS.md
 DEVELOPER_GUIDE.md
 
+# Architecture review reports cite unpatched vulnerability locations; public repo
+ARCHITECTURE-REVIEW*.md
+
 # Keep technical documentation for contributors
 !TECHNICAL_INFO.md
 .gitignore
 docker-compose.yml
 out/
+.pi/

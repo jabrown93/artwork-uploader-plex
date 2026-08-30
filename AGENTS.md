@@ -106,8 +106,23 @@ All application code lives under `src/`:
 | `kometa_base` | string | Kometa asset directory path |
 | `kometa_library_paths` | dict | Map library names to custom directory names |
 | `reset_overlay` | bool | Remove Kometa overlay label on upload |
+| `skip_locked_artwork` | bool | Skip artwork whose target field is locked in Plex, unless `--force` |
+| `auth_mode` | string | `none`, `password` or `oidc` (legacy `auth_enabled` is migrated to `password`) |
+| `oidc_issuer`, `oidc_client_id`, `oidc_client_secret` | string | OIDC client settings; env `OIDC_*` wins |
+| `oidc_groups_claim`, `oidc_allowed_groups` | string, array | Group allowlist; dotted claim paths supported |
+| `oidc_allow_password_fallback` | bool | Keep `/login?local=1` password sign-in as break-glass |
+| `external_url`, `trusted_proxy_count` | string, int | Public URL and proxy hops used to build the redirect URI |
+| `session_secret`, `session_cookie_secure` | string | Session signing key (env `SESSION_SECRET` wins) and cookie flag |
+| `cors_allowed_origins` | array | Empty means same-origin only for HTTP and Socket.IO |
+| `tls_cert_file`, `tls_key_file` | string | PEM cert chain and key paths; both set serves HTTPS directly (env `TLS_CERT_FILE`/`TLS_KEY_FILE` wins) |
 
 Docker: `RUNNING_IN_DOCKER=1` hardcodes Kometa base to `/assets` and temp dir to `/temp`.
+
+## Authentication
+
+- Modes live in `auth_mode`; `AuthenticationService` handles local passwords, `OidcService` (`src/services/oidc_service.py`) runs the OIDC authorization code flow with PKCE via Authlib.
+- HTTP routes use `@login_required`; **every** Socket.IO handler uses `@socket_login_required` and the `connect` handler refuses unauthenticated clients. All real work happens over Socket.IO, so a new handler without the decorator is an authentication bypass.
+- Secrets (`REDACTED_CONFIG_KEYS`: Plex token, Radarr/Sonarr API keys, OIDC client secret) never leave the server: `Config.to_public_dict()` swaps them for `SECRET_PLACEHOLDER`, and `apply_config_updates()` keeps the stored value when the UI echoes that placeholder back. `session_secret` is dropped entirely, and `PROTECTED_CONFIG_KEYS` blocks the UI from writing derived keys. Adding a new secret config key means adding it to `REDACTED_CONFIG_KEYS`.
 
 ## Filter Types
 

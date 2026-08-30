@@ -8,6 +8,7 @@ let schedules = [];             // Scheduled imports
 let currentBulkImport = '';     // Current bulk import file
 let bulkTextAsLoaded = '';      // File contents when loaded, to determine changes
 let barTimer = null;            // Timer for progress bar
+let subBarTimer = null;         // Timer for sub-progress bar
 
 const socket = io();
 const instanceId = getInstanceId();
@@ -246,8 +247,18 @@ function updateLog(message, color = null, artwork_title = null) {
         message = message.replace(/^\[(\d{2}:\d{2}:\d{2})\.\d{3}\]/, '[$1]');
     }
 
-    // Prepend the new message with timestamp
-    statusElement.innerHTML = '<div class="log_message">' + message + '</div>' + statusElement.innerHTML;
+    // Prepend the new message (newest first) as a node, so we do not re-parse the entire log
+    // on every line. That, plus the line cap below, stops a long scrape from growing the page
+    // until the browser runs out of memory.
+    const entry = document.createElement("div");
+    entry.className = "log_message";
+    entry.innerHTML = message;
+    statusElement.prepend(entry);
+
+    const MAX_LOG_LINES = 500;
+    while (statusElement.childElementCount > MAX_LOG_LINES) {
+        statusElement.removeChild(statusElement.lastElementChild);
+    }
 }
 
 socket.on("log_update", (data) => {
@@ -285,6 +296,38 @@ function progress_bar(percent, message = "") {
 socket.on("progress_bar", (data) => {
     if (validResponse(data)) {
         progress_bar(data.percent, data.message)
+    }
+})
+
+
+// Update the sub-progress bar (progress within the current item, e.g. page/set n of N), showing and hiding as required
+function sub_progress_bar(percent, message = "") {
+
+    const bar_container = document.getElementById("sub_progress_bar_container")
+    const bar = document.getElementById("sub_progress_bar")
+
+    percent = percent > 100 ? 100 : percent;
+
+    if (percent <= 100) {
+        if (subBarTimer) {
+            clearTimeout(subBarTimer); // Cancel the previous timeout
+        }
+        bar_container.classList.add("show")
+        bar.style.width = percent + "%"
+        bar_container.ariaValueNow = percent
+        bar.innerHTML = message || ""
+    }
+
+    if (percent === 100) {
+        subBarTimer = setTimeout(() => {
+            bar_container.classList.remove('show'); // Fade out the sub-progress bar after a second
+        }, 2000);
+    }
+}
+
+socket.on("sub_progress_bar", (data) => {
+    if (validResponse(data)) {
+        sub_progress_bar(data.percent, data.message)
     }
 })
 
@@ -532,6 +575,10 @@ function saveConfig() {
     // Checkbox for reset overlay for Kometa
     save_config.reset_overlay = document.getElementById("reset_overlay").checked;
 
+    // Checkbox for skipping artwork with locked fields in Plex
+    save_config.skip_locked_artwork = document.getElementById("skip_locked_artwork").checked;
+    toggleSkipLockedCheckbox();
+
     // Get selected mediux filters
     save_config.mediux_filters = Array.from(document.querySelectorAll('[id^="m_filter-"]:checked'))
         .map(checkbox => checkbox.value);
@@ -544,9 +591,25 @@ function saveConfig() {
     save_config.schedules = Array.isArray(schedules) ? schedules : [];
 
     // Authentication settings
-    save_config.auth_enabled = document.getElementById("auth_enabled").checked;
+    save_config.auth_mode = document.getElementById("auth_mode").value;
+    save_config.auth_enabled = save_config.auth_mode !== "none";
     save_config.auth_username = document.getElementById("auth_username").value.trim();
     // Don't send password in save_config - it's handled separately
+
+    // OIDC settings
+    save_config.oidc_issuer = document.getElementById("oidc_issuer").value.trim();
+    save_config.oidc_client_id = document.getElementById("oidc_client_id").value.trim();
+    save_config.oidc_provider_name = document.getElementById("oidc_provider_name").value.trim() || "SSO";
+    save_config.oidc_scopes = document.getElementById("oidc_scopes").value.trim() || "openid profile email groups";
+    save_config.oidc_groups_claim = document.getElementById("oidc_groups_claim").value.trim() || "groups";
+    save_config.oidc_allowed_groups = document.getElementById("oidc_allowed_groups").value
+        .split(",").map(group => group.trim()).filter(group => group.length > 0);
+    save_config.oidc_allow_password_fallback = document.getElementById("oidc_allow_password_fallback").checked;
+    save_config.external_url = document.getElementById("external_url").value.trim();
+
+    // Secrets are sent as-is: the backend keeps the stored value when it gets the
+    // placeholder back, and clearing the field really does clear the secret
+    save_config.oidc_client_secret = document.getElementById("oidc_client_secret").value;
 
     // Check if we need to set a new password
     const newPassword = document.getElementById("auth_password").value;
@@ -627,12 +690,32 @@ function loadConfig() {
 
             document.getElementById("auto_manage_bulk_files").checked = data.config.auto_manage_bulk_files;
             document.getElementById("reset_overlay").checked = data.config.reset_overlay;
+            document.getElementById("skip_locked_artwork").checked = data.config.skip_locked_artwork;
             document.getElementById("option-add-to-bulk").checked = data.config.auto_manage_bulk_files;
             document.getElementById("apprise_urls").value = (data.config.apprise_urls || []).join(", ");
 
             // Load authentication settings
-            document.getElementById("auth_enabled").checked = data.config.auth_enabled || false;
+            document.getElementById("auth_mode").value = data.config.auth_mode ||
+                (data.config.auth_enabled ? "password" : "none");
             document.getElementById("auth_username").value = data.config.auth_username || "";
+
+            // Load OIDC settings
+            document.getElementById("oidc_issuer").value = data.config.oidc_issuer || "";
+            document.getElementById("oidc_client_id").value = data.config.oidc_client_id || "";
+            document.getElementById("oidc_client_secret").value = data.config.oidc_client_secret || "";
+            document.getElementById("oidc_provider_name").value = data.config.oidc_provider_name || "SSO";
+            document.getElementById("oidc_scopes").value = data.config.oidc_scopes || "";
+            document.getElementById("oidc_groups_claim").value = data.config.oidc_groups_claim || "groups";
+            document.getElementById("oidc_allowed_groups").value = (data.config.oidc_allowed_groups || []).join(", ");
+            document.getElementById("oidc_allow_password_fallback").checked =
+                data.config.oidc_allow_password_fallback !== false;
+            document.getElementById("external_url").value = data.config.external_url || "";
+            document.getElementById("oidc_client_secret_help").textContent =
+                data.config.oidc_client_secret_from_env
+                    ? "Set by the OIDC_CLIENT_SECRET environment variable, which takes precedence"
+                    : (data.config.oidc_client_secret
+                        ? "A secret is stored; leave this field untouched to keep it, or clear it to remove it"
+                        : "No secret stored yet");
 
             // Toggle Kometa settings visibility
             toggleKometaSettings();
@@ -652,8 +735,11 @@ function loadConfig() {
             // Make sure scraper stage option visibility is set correctly on load
             toggleScraperStageCheckbox();
 
+            // Make sure skip locked artwork option visibility is set correctly on load
+            toggleSkipLockedCheckbox();
+
             // Show/hide logout button based on auth enabled
-            if (data.config.auth_enabled) {
+            if (data.config.auth_required || data.config.auth_enabled) {
                 document.getElementById("logout-link").style.display = "block";
             } else {
                 document.getElementById("logout-link").style.display = "none";
@@ -1649,22 +1735,38 @@ socket.on("disconnect", function () {
     }, 3000);  // Delay for 3 seconds before refresh to allow connection retry
 });
 
+// The server refuses Socket.IO connections without a valid session; reloading
+// sends the browser back through the login flow instead of retrying forever
+socket.on("connect_error", function (error) {
+    if (String(error && error.message).includes("Authentication required")) {
+        location.reload();
+    }
+});
+
 // ==================================================
 // Authentication Settings Toggle
 // ==================================================
 
+/**
+ * Show the credential fields that belong to the selected authentication mode.
+ *
+ * Local credentials stay visible in OIDC mode because they are the break-glass
+ * way back in when the identity provider is unreachable.
+ */
 function toggleAuthSettings() {
-    const authEnabled = document.getElementById("auth_enabled").checked;
-    const authSettings = document.getElementById("auth_settings");
-    if (authEnabled) {
-        authSettings.style.display = "block";
-    } else {
-        authSettings.style.display = "none";
-    }
+    const mode = document.getElementById("auth_mode").value;
+    const showPassword = mode === "password" ||
+        (mode === "oidc" && document.getElementById("oidc_allow_password_fallback").checked);
+    document.getElementById("auth_settings").style.display = showPassword ? "block" : "none";
+    document.getElementById("oidc_settings").style.display = mode === "oidc" ? "block" : "none";
+    document.getElementById("oidc_redirect_uri_hint").textContent =
+        (document.getElementById("external_url").value.trim().replace(/\/$/, "") || window.location.origin) +
+        "/auth/oidc/callback";
 }
 
-// Add event listener for auth_enabled checkbox
-document.getElementById("auth_enabled").addEventListener("change", toggleAuthSettings);
+document.getElementById("auth_mode").addEventListener("change", toggleAuthSettings);
+document.getElementById("oidc_allow_password_fallback").addEventListener("change", toggleAuthSettings);
+document.getElementById("external_url").addEventListener("input", toggleAuthSettings);
 
 // ==================================================
 // Kometa Settings Toggle
@@ -1706,6 +1808,7 @@ function toggleKometaSettings() {
     toggleTempCheckbox();
     togglePlexOptions();
     toggleScraperStageCheckbox();
+    toggleSkipLockedCheckbox();
 }
 
 function toggleScraperStageCheckbox() {
@@ -1756,18 +1859,51 @@ function togglePlexOptions() {
     const saveToKometa = document.getElementById("save_to_kometa").checked;
     const trackArtworkIDs = document.getElementById("track_artwork_ids").parentElement;
     const resetOverlay = document.getElementById("reset_overlay").parentElement;
+    const skipLocked = document.getElementById("skip_locked_artwork").parentElement;
 
     // Ony show the Track Artwork IDs and Reset Overlay options if Kometa is disabled
     if (!saveToKometa) {
         trackArtworkIDs.style.display = "block";
         resetOverlay.style.display = "block";
+        skipLocked.style.display = "block";
     } else {
         trackArtworkIDs.style.display = "none";
         resetOverlay.style.display = "none";
+        skipLocked.style.display = "none"; // Hide only; preserve the checked state so it isn't lost when Kometa is toggled off again
         document.getElementById("track_artwork_ids").checked = true;
         //    document.getElementById("reset_overlay").checked = false;
     }
 }
+
+function toggleSkipLockedCheckbox() {
+    const saveToKometa = document.getElementById("save_to_kometa").checked;
+    const globalSetting = document.getElementById("skip_locked_artwork").checked;
+    const skipLockedCheckbox = document.getElementById("option-skip-locked");
+    const skipLockedCheckboxUpload = document.getElementById("upload-option-skip-locked");
+
+    // Hide and uncheck the skip locked option if Kometa is enabled
+    if (saveToKometa) {
+        skipLockedCheckbox.parentElement.style.display = "none";
+        skipLockedCheckbox.checked = false;
+        skipLockedCheckboxUpload.parentElement.style.display = "none";
+        skipLockedCheckboxUpload.checked = false;
+    } else {
+        if (globalSetting) {
+            skipLockedCheckbox.parentElement.style.display = "none";
+            skipLockedCheckbox.checked = true;
+            skipLockedCheckboxUpload.parentElement.style.display = "none";
+            skipLockedCheckboxUpload.checked = true;
+        } else {
+            skipLockedCheckbox.parentElement.style.display = "block";
+            skipLockedCheckbox.checked = false;
+            skipLockedCheckboxUpload.parentElement.style.display = "block";
+            skipLockedCheckboxUpload.checked = false;
+        }
+    }
+}
+
+// Add event listener for global skip locked artwork checkbox
+document.getElementById("skip_locked_artwork").addEventListener("change", toggleSkipLockedCheckbox);
 
 // Add event listener for save_to_kometa checkbox
 document.getElementById("save_to_kometa").addEventListener("change", toggleKometaSettings);

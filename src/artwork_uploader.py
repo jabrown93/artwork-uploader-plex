@@ -8,6 +8,7 @@ import uuid
 import eventlet
 eventlet.monkey_patch()
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from core import globals
 from core.config import Config
@@ -38,6 +39,7 @@ from services import (
     BulkFileService,
     ImageService,
     ArtworkProcessor,
+    OidcService,
     ProcessingCallbacks,
     SchedulerService,
     UtilityService
@@ -369,7 +371,16 @@ def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, ass
         for page in range(pages):
             page_url = f"{url}?section=uploads&page={page + 1}"
             scrape_and_upload(instance, page_url, options, success_counter, assets_processed)
+
+            # Only show progress across pages when there's more than one page to scrape
+            if pages > 1:
+                percent = ((page + 1) / pages) * 100
+                notify_web(instance, "sub_progress_bar",
+                           {"message": f"Page {page + 1} / {pages}", "percent": percent})
     except Exception:
+        # Clear the sub-progress bar if it was showing so a failed page doesn't leave it stuck
+        if pages > 1:
+            notify_web(instance, "sub_progress_bar", {"percent": 100})
         raise ScraperException(f"Failed to process and upload from URL: {url}")
 
 
@@ -389,6 +400,13 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None, as
     def log_callback(message: str):
         update_log(instance, message)
 
+    # Reports "n of N sets processed" while scraping a MediUX boxset (a no-op for any
+    # other URL, since only the boxset branch of MediuxScraper ever calls it)
+    def sub_progress_callback(current: int, total: int):
+        percent = (current / total * 100) if total > 0 else 0
+        notify_web(instance, "sub_progress_bar",
+                   {"message": f"Set {current} / {total}", "percent": percent})
+
     callbacks = ProcessingCallbacks(
         on_status_update=status_callback,
         on_log_update=log_callback,
@@ -399,7 +417,7 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None, as
     # Use the service to do the actual work
     try:
         processor = ArtworkProcessor(globals.plex)
-        return processor.scrape_and_process(url, options, callbacks)
+        return processor.scrape_and_process(url, options, callbacks, progress_callback=sub_progress_callback)
     except PlexConnectorException as not_connected:
         debug_me(f"PlexConnectorException: {str(not_connected)}", "scrape_and_upload")
         update_status(instance, str(not_connected), "danger")
@@ -446,7 +464,8 @@ def process_uploaded_artwork(instance: Instance, file_list, skipped, zip_title, 
         year=int(plex_year) if plex_year else None,
         temp=True if "temp" in options else False,
         stage=True if "stage" in options else False,
-        force=True if "force" in options else False
+        force=True if "force" in options else False,
+        skip_locked=True if "skip-locked" in options else False
     )
     processor = ArtworkProcessor(globals.plex)
     processor.process_uploaded_files(file_list, skipped, zip_title, zip_author, zip_source, opts, callbacks, override_title=plex_title)
@@ -586,7 +605,9 @@ def setup_web_sockets():
 
     # Start the web server
     web_routes.start_web_server(
-        web_app, DEFAULT_WEB_PORT, globals.debug, config.ip_binding)
+        web_app, DEFAULT_WEB_PORT, globals.debug, config.ip_binding,
+        tls_cert_file=config.get_tls_cert_file(),
+        tls_key_file=config.get_tls_key_file())
 
 
 def check_image_orientation(image_path):
@@ -708,6 +729,7 @@ if __name__ == "__main__":
     cli_options = Options(add_posters=args.add_posters,
                           add_sets=args.add_sets,
                           force=args.force,
+                          skip_locked=args.skip_locked,
                           filters=args.filters,
                           exclude=args.exclude,
                           year=args.year,
@@ -900,15 +922,32 @@ if __name__ == "__main__":
 
             web_app = Flask(__name__, template_folder="templates")
 
-            # Enable CORS for all routes to allow Socket.IO connections from any origin
-            CORS(web_app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
+            # Trust the reverse proxy's forwarded headers so OIDC redirect URIs and
+            # cookie/CORS origin checks use the public scheme and host
+            if config.trusted_proxy_count > 0:
+                web_app.wsgi_app = ProxyFix(
+                    web_app.wsgi_app,
+                    x_for=config.trusted_proxy_count,
+                    x_proto=config.trusted_proxy_count,
+                    x_host=config.trusted_proxy_count,
+                    x_port=config.trusted_proxy_count
+                )
+
+            # Cross-origin access is opt-in: a wildcard would let any site drive an
+            # authenticated session through the Socket.IO API using the user's cookie
+            cors_origins = config.cors_allowed_origins or None
+            if cors_origins:
+                CORS(web_app, resources={
+                     r"/*": {"origins": cors_origins, "supports_credentials": True}})
 
             # Configure session for authentication
-            import secrets
             from datetime import timedelta
 
-            web_app.config['SECRET_KEY'] = secrets.token_hex(32)
+            web_app.config['SECRET_KEY'] = config.ensure_session_secret()
             web_app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+            web_app.config['SESSION_COOKIE_HTTPONLY'] = True
+            web_app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+            web_app.config['SESSION_COOKIE_SECURE'] = config.session_cookie_is_secure()
 
             # Configure SocketIO with increased timeouts for large file uploads
             # ping_timeout: How long to wait for a pong response before disconnecting (default: 60s)
@@ -917,12 +956,14 @@ if __name__ == "__main__":
             # max_http_buffer_size: Maximum size of HTTP long-polling messages (default: 1MB)
             globals.web_socket = SocketIO(
                 web_app,
-                cors_allowed_origins="*",
+                cors_allowed_origins=cors_origins,  # None restricts to same-origin
                 async_mode="eventlet",
                 ping_timeout=300,  # 5 minutes - allows time for large file processing
                 ping_interval=25,  # Keep default 25s to maintain connection health
                 http_compression=True,  # Enable compression for better performance
                 max_http_buffer_size=10000000  # 10MB - allow larger individual messages
             )
+
+            globals.oidc_service = OidcService(config, web_app)
 
             setup_web_sockets()
