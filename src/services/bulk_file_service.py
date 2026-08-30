@@ -46,14 +46,25 @@ class BulkFileService:
 
         Returns:
             Full path to the bulk import file
+
+        Raises:
+            ValueError: If filename resolves outside the bulk imports directory
         """
         from core.constants import DEFAULT_BULK_IMPORT_FILE
 
         bulk_filename = filename if filename else DEFAULT_BULK_IMPORT_FILE
 
-        if self.base_dir:
-            return os.path.join(self.base_dir, self.bulk_imports_path, bulk_filename)
-        return os.path.join(self.bulk_imports_path, bulk_filename)
+        # filename arrives straight off the Socket.IO wire, so an absolute path or
+        # a ../ sequence would otherwise escape into the host filesystem.
+        base = self.get_bulk_imports_directory().resolve()
+        candidate = base / bulk_filename
+        # Resolve only to test containment: returning the resolved path would make
+        # rename/delete act on an in-tree symlink's target instead of the symlink.
+        if not candidate.resolve().is_relative_to(base):
+            raise ValueError(
+                f"Filename escapes the bulk imports directory: {bulk_filename}")
+
+        return str(candidate)
 
     def get_bulk_imports_directory(self) -> Path:
         """
@@ -74,9 +85,13 @@ class BulkFileService:
             filename: Name of the file to check
 
         Returns:
-            True if file exists, False otherwise
+            True if file exists, False otherwise. A filename that escapes the
+            bulk imports directory is reported as not existing.
         """
-        file_path = self.get_bulk_file_path(filename)
+        try:
+            file_path = self.get_bulk_file_path(filename)
+        except ValueError:
+            return False
         return os.path.exists(file_path)
 
     def read_file(self, filename: Optional[str] = None) -> str:

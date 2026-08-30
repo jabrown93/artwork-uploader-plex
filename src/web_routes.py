@@ -1042,7 +1042,9 @@ def setup_socket_handlers(
         """Handle chunked file upload - writes directly to temp file for memory efficiency."""
         instance = Instance(data.get("instance_id"), "web")
 
-        file_name = data["fileName"]
+        # basename: fileName is client-supplied and later used as a path component
+        # in save_uploaded_file, so a ../ sequence would escape the temp directory.
+        file_name = os.path.basename(data["fileName"])
         chunk_data = data["chunkData"]
         chunk_index = data["chunkIndex"]
         total_chunks = data["totalChunks"]
@@ -1099,7 +1101,8 @@ def setup_socket_handlers(
     @socket_login_required
     def handle_upload_complete(data):
         """Finalize the upload once all chunks are received."""
-        file_name = data.get("fileName")
+        # Must match the basename key written by handle_upload_chunk.
+        file_name = os.path.basename(data.get("fileName") or "")
         filters = data.get("filters")
         plex_year = data.get("plex_year")
         plex_title = data.get("plex_title")
