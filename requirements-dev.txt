@@ -123,7 +123,7 @@ requests==2.34.2
     #   requests-oauthlib
 requests-oauthlib==2.0.0
     # via apprise
-ruff==0.16.4
+ruff==0.16.5
     # via -r requirements-dev.in
 schedule==1.2.2
     # via -r requirements.in
