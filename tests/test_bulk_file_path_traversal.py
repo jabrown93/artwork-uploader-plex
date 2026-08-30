@@ -59,6 +59,28 @@ class TestMutatingOperationsAreContained:
         assert not (tmp_path / "moved.txt").exists()
 
 
+class TestSymlinksInsideBase:
+    def test_delete_removes_the_symlink_not_its_target(self, service, tmp_path):
+        bulk_dir = tmp_path / "bulk_imports"
+        target = bulk_dir / "real.txt"
+        target.write_text("contents")
+        alias = bulk_dir / "alias.txt"
+        alias.symlink_to(target)
+
+        service.delete_file("alias.txt")
+
+        assert not alias.exists()
+        assert target.exists()
+
+    def test_symlink_escaping_base_is_rejected(self, service, tmp_path):
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret")
+        (tmp_path / "bulk_imports" / "escape.txt").symlink_to(outside)
+
+        with pytest.raises(ValueError):
+            service.read_file("escape.txt")
+
+
 class TestFileExistsIsAPredicate:
     """Runs on a scheduler thread, so it answers False rather than raising."""
 

@@ -57,12 +57,14 @@ class BulkFileService:
         # filename arrives straight off the Socket.IO wire, so an absolute path or
         # a ../ sequence would otherwise escape into the host filesystem.
         base = self.get_bulk_imports_directory().resolve()
-        resolved = (base / bulk_filename).resolve()
-        if not resolved.is_relative_to(base):
+        candidate = base / bulk_filename
+        # Resolve only to test containment: returning the resolved path would make
+        # rename/delete act on an in-tree symlink's target instead of the symlink.
+        if not candidate.resolve().is_relative_to(base):
             raise ValueError(
                 f"Filename escapes the bulk imports directory: {bulk_filename}")
 
-        return str(resolved)
+        return str(candidate)
 
     def get_bulk_imports_directory(self) -> Path:
         """
