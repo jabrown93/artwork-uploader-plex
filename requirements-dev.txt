@@ -29,7 +29,7 @@ click==8.5.0
     #   apprise
     #   flask
     #   flask-socketio
-coverage==7.15.4
+coverage==7.16.0
     # via pytest-cov
 cryptography==50.0.1
     # via
