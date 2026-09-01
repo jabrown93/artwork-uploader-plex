@@ -56,7 +56,7 @@ jinja2==3.1.6
     # via
     #   flask
     #   flask-socketio
-joserfc==1.7.4
+joserfc==1.7.5
     # via authlib
 markdown==3.10.3
     # via apprise
