@@ -112,6 +112,7 @@ def _is_http_url(url: str) -> bool:
 
     try:
         parsed = urlsplit(url)
+        _ = parsed.port
         return parsed.scheme in {"http", "https"} and parsed.hostname is not None
     except ValueError:
         return False

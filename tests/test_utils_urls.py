@@ -21,6 +21,8 @@ def test_is_valid_url_accepts_http_urls(url):
     [
         "ftp://example.com/poster.jpg",
         "example.com/poster.jpg",
+        "https://example.com:abc/poster.jpg",
+        "https://example.com:99999/poster.jpg",
         "",
     ],
 )
@@ -30,7 +32,12 @@ def test_is_valid_url_rejects_non_http_or_malformed_urls(url):
 
 @pytest.mark.parametrize(
     "url",
-    ["ftp://example.com/poster.jpg", "https://exa mple.com/poster.jpg"],
+    [
+        "ftp://example.com/poster.jpg",
+        "https://exa mple.com/poster.jpg",
+        "https://example.com:abc/poster.jpg",
+        "https://example.com:99999/poster.jpg",
+    ],
 )
 def test_parse_url_and_options_rejects_non_http_or_malformed_url(url):
     with pytest.raises(InvalidUrl):
