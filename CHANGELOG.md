@@ -1,3 +1,10 @@
+## [1.1.6](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.5...v1.1.6) (2026-09-01)
+
+
+### Bug Fixes
+
+* isolate chunked uploads by socket client ([#140](https://github.com/jabrown93/artwork-uploader-plex/issues/140)) ([2db9c9a](https://github.com/jabrown93/artwork-uploader-plex/commit/2db9c9a0029976862ca0801b4c528ccd503e8d47))
+
 ## [1.1.5](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.4...v1.1.5) (2026-09-01)
 
 
