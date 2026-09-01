@@ -49,6 +49,7 @@ class SchedulerService:
             hour=hour,
             minute=minute,
             args=[filename],
+            misfire_grace_time=None,
         )
 
         self.scheduled_jobs[job.id] = job
@@ -83,6 +84,7 @@ class SchedulerService:
         )
         if file_to_remove:
             del self.scheduled_jobs_by_file[file_to_remove]
+            del self.run_times_by_file[file_to_remove]
 
         return True
 
@@ -123,6 +125,7 @@ class SchedulerService:
         self.scheduler.remove_all_jobs()
         self.scheduled_jobs.clear()
         self.scheduled_jobs_by_file.clear()
+        self.run_times_by_file.clear()
 
     def get_all_job_ids(self) -> list[str]:
         """
