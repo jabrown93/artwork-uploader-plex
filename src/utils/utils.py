@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import json
 import re
 from pathlib import PureWindowsPath, PurePosixPath
@@ -106,6 +107,43 @@ def is_not_comment(url):
     return True if re.match(pattern, url) else False
 
 
+def _is_valid_hostname(hostname: str) -> bool:
+    hostname = hostname[:-1] if hostname.endswith(".") else hostname
+    if not hostname:
+        return False
+
+    if ":" in hostname:
+        try:
+            return ipaddress.ip_address(hostname).version == 6
+        except ValueError:
+            return False
+
+    if "." in hostname and all(
+        character in "0123456789." for character in hostname
+    ):
+        try:
+            return ipaddress.ip_address(hostname).version == 4
+        except ValueError:
+            return False
+
+    try:
+        ascii_hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+
+    if len(ascii_hostname) > 253:
+        return False
+
+    return all(
+        label
+        and len(label) <= 63
+        and not label.startswith("-")
+        and not label.endswith("-")
+        and re.fullmatch(r"[A-Za-z0-9-]+", label)
+        for label in ascii_hostname.split(".")
+    )
+
+
 def _is_http_url(url: str) -> bool:
     if any(character.isspace() for character in url):
         return False
@@ -113,7 +151,11 @@ def _is_http_url(url: str) -> bool:
     try:
         parsed = urlsplit(url)
         _ = parsed.port
-        return parsed.scheme in {"http", "https"} and parsed.hostname is not None
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname is not None
+            and _is_valid_hostname(parsed.hostname)
+        )
     except ValueError:
         return False
 
