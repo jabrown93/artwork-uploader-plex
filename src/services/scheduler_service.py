@@ -5,12 +5,10 @@ Extracted from artwork_uploader.py to reduce file size and improve
 maintainability.
 """
 
-import threading
-import time
-import uuid
-from typing import Dict, Callable, Optional
+from typing import Callable, Dict, Optional
 
-import schedule
+from apscheduler.job import Job  # type: ignore
+from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
 
 
 class SchedulerService:
@@ -21,20 +19,17 @@ class SchedulerService:
         Initialize the scheduler service.
 
         Args:
-            check_interval: Seconds between scheduler checks (default: 1)
+            check_interval: Retained for backwards-compatible construction.
         """
         self.check_interval = check_interval
-        self.scheduler_thread: Optional[threading.Thread] = None
-        self.scheduled_jobs: Dict[str, schedule.Job] = {}
+        self.scheduler = BackgroundScheduler()
+        self.scheduled_jobs: Dict[str, Job] = {}
         self.scheduled_jobs_by_file: Dict[str, str] = {}
-        self.run_times_by_file: Dict [str, str] = {}
+        self.run_times_by_file: Dict[str, str] = {}
         self.is_running = False
 
     def add_schedule(
-            self,
-            filename: str,
-            schedule_time: str,
-            callback: Callable[[str], None]
+        self, filename: str, schedule_time: str, callback: Callable[[str], None]
     ) -> str:
         """
         Add a new scheduled job.
@@ -47,20 +42,20 @@ class SchedulerService:
         Returns:
             Unique job ID for this schedule
         """
-        # Create the scheduled job
-        job = schedule.every().day.at(schedule_time).do(
-            lambda: callback(filename)
+        hour, minute = (int(part) for part in schedule_time.split(":"))
+        job = self.scheduler.add_job(
+            callback,
+            trigger="cron",
+            hour=hour,
+            minute=minute,
+            args=[filename],
         )
 
-        # Create a unique job ID
-        job_id = str(uuid.uuid4())
-
-        # Store job references
-        self.scheduled_jobs[job_id] = job
-        self.scheduled_jobs_by_file[filename] = job_id
+        self.scheduled_jobs[job.id] = job
+        self.scheduled_jobs_by_file[filename] = job.id
         self.run_times_by_file[filename] = schedule_time
 
-        return job_id
+        return job.id
 
     def remove_schedule(self, job_id: str) -> bool:
         """
@@ -75,21 +70,17 @@ class SchedulerService:
         if job_id not in self.scheduled_jobs:
             return False
 
-        # Get the job
-        job = self.scheduled_jobs[job_id]
-
-        # Remove from schedule library
-        schedule.cancel_job(job)
-
-        # Remove from our tracking dicts
+        self.scheduler.remove_job(job_id)
         del self.scheduled_jobs[job_id]
 
-        # Remove from file lookup (find which file maps to this job_id)
-        file_to_remove = None
-        for filename, jid in self.scheduled_jobs_by_file.items():
-            if jid == job_id:
-                file_to_remove = filename
-                break
+        file_to_remove = next(
+            (
+                filename
+                for filename, jid in self.scheduled_jobs_by_file.items()
+                if jid == job_id
+            ),
+            None,
+        )
         if file_to_remove:
             del self.scheduled_jobs_by_file[file_to_remove]
 
@@ -114,31 +105,22 @@ class SchedulerService:
         Returns:
             True if started, False if already running
         """
-        if self.scheduler_thread is None or not self.scheduler_thread.is_alive():
-            self.is_running = True
-            self.scheduler_thread = threading.Thread(
-                target=self._run_scheduler,
-                daemon=True
-            )
-            self.scheduler_thread.start()
-            return True
-        return False
+        if self.scheduler.running:
+            return False
+
+        self.scheduler.start()
+        self.is_running = True
+        return True
 
     def stop(self) -> None:
         """Stop the scheduler thread."""
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=False)
         self.is_running = False
-        if self.scheduler_thread:
-            self.scheduler_thread.join(timeout=2)
-
-    def _run_scheduler(self) -> None:
-        """Internal method that runs in the scheduler thread."""
-        while self.is_running:
-            schedule.run_pending()
-            time.sleep(self.check_interval)
 
     def clear_all_schedules(self) -> None:
         """Clear all scheduled jobs."""
-        schedule.clear()
+        self.scheduler.remove_all_jobs()
         self.scheduled_jobs.clear()
         self.scheduled_jobs_by_file.clear()
 

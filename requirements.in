@@ -7,6 +7,7 @@
 # belong in the compiled output, not here.
 
 apprise
+APScheduler<4
 Authlib
 bcrypt
 beautifulsoup4
@@ -18,6 +19,4 @@ packaging
 pillow
 PlexAPI
 requests
-schedule
-validators
 Werkzeug

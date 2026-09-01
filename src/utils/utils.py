@@ -2,9 +2,9 @@ import hashlib
 import json
 import re
 from pathlib import PureWindowsPath, PurePosixPath
-from core.exceptions import InvalidUrl, InvalidFlag
+from urllib.parse import urlsplit
 
-import validators
+from core.exceptions import InvalidUrl, InvalidFlag
 from core.constants import (
     TPDB_BASE_URL, MEDIUX_BASE_URL,
     SEASON_COVER, SEASON_BACKDROP, EPISODE_COVER,
@@ -106,6 +106,17 @@ def is_not_comment(url):
     return True if re.match(pattern, url) else False
 
 
+def _is_http_url(url: str) -> bool:
+    if any(character.isspace() for character in url):
+        return False
+
+    try:
+        parsed = urlsplit(url)
+        return parsed.scheme in {"http", "https"} and parsed.hostname is not None
+    except ValueError:
+        return False
+
+
 def validate_scraper_url(url: str) -> tuple:
     """
     Validate that URL is from a supported scraper source.
@@ -169,7 +180,7 @@ def parse_url_and_options(line):
 
     # The first part should be a valid URL, raise exception otherwise
     url = parts[0].strip()
-    if not validators.url(url) and not url.endswith('.html'):
+    if not _is_http_url(url) and not url.endswith('.html'):
         raise InvalidUrl(url)
 
     # Initiate list of invalid flags for logging purposes
@@ -229,11 +240,7 @@ def parse_url_and_options(line):
 def is_valid_url(line):
     # Split the line by spaces - to handle a line with a url and options
     parts = line.strip().split()
-
-    # The first part should be the URL
-    url = parts[0]
-
-    return validators.url(url) is True
+    return bool(parts and _is_http_url(parts[0]))
 
 
 def get_artwork_type(artwork):
