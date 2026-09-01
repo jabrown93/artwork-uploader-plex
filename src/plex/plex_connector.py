@@ -23,6 +23,8 @@ class PlexConnector:
         self.token: Optional[str] = token
         self.tv_libraries: List[ShowSection] = []
         self.movie_libraries: List[MovieSection] = []
+        self._tv_library_names: Optional[List[str]] = None
+        self._movie_library_names: Optional[List[str]] = None
         self.options: Options = Options()
 
     def set_options(self, options: Options) -> None:
@@ -111,14 +113,16 @@ class PlexConnector:
 
     def set_tv_libraries(self, tv_libraries: Union[str, List[str]]) -> List[ShowSection]:
 
-        if not self.plex:
-            self.connect()
-
         if isinstance(tv_libraries, str):
             tv_libraries = [tv_libraries]
         elif not isinstance(tv_libraries, list):
             raise PlexConnectorException(
                 "tv_libraries must be either a string or a list")
+        self._tv_library_names = list(tv_libraries)
+
+        if not self.plex:
+            self.connect()
+        assert self.plex is not None
 
         self.tv_libraries = []
         for tv_library in tv_libraries:
@@ -135,14 +139,16 @@ class PlexConnector:
 
     def set_movie_libraries(self, movie_libraries: Union[str, List[str]]) -> List[MovieSection]:
 
-        if not self.plex:
-            self.connect()
-
         if isinstance(movie_libraries, str):
             movie_libraries = [movie_libraries]
         elif not isinstance(movie_libraries, list):
             raise PlexConnectorException(
                 "movie_libraries must be either a string or a list")
+        self._movie_library_names = list(movie_libraries)
+
+        if not self.plex:
+            self.connect()
+        assert self.plex is not None
 
         self.movie_libraries = []
         for movie_library in movie_libraries:
@@ -157,11 +163,26 @@ class PlexConnector:
                  "PlexConnector/set_movie_libraries")
         return self.movie_libraries
 
+    def _refresh_missing_libraries(self, item_type: Optional[str] = None) -> None:
+        if (
+            item_type in (None, "tv")
+            and not self.tv_libraries
+            and self._tv_library_names is not None
+        ):
+            self.set_tv_libraries(self._tv_library_names)
+        if (
+            item_type in (None, "movie")
+            and not self.movie_libraries
+            and self._movie_library_names is not None
+        ):
+            self.set_movie_libraries(self._movie_library_names)
+
     # Find a specific collection in the movies library
     def find_collection(self, collection_title: str) -> tuple[list[Any], list[Any]] | tuple[None, None]:
 
         if not self.plex:
             self.connect()
+        self._refresh_missing_libraries("movie")
 
         collections = []
         libraries = []
@@ -203,6 +224,7 @@ class PlexConnector:
         """
         if not self.plex:
             self.connect()
+        self._refresh_missing_libraries(item_type)
 
         items = []
         libs = []
@@ -238,7 +260,7 @@ class PlexConnector:
                 "PlexConnector/find_in_library")
             for i, library in enumerate(libraries):
                 try:
-                    search_kwargs = {'title': title}
+                    search_kwargs: dict[str, Union[str, int]] = {'title': title}
                     if year is not None:
                         search_kwargs['year'] = int(year)
                     search_results = library.search(**search_kwargs)
@@ -284,6 +306,7 @@ class PlexConnector:
 
         if not self.plex:
             self.connect()
+        self._refresh_missing_libraries()
 
         # First check movie libraries
         libraries_with_type = (
@@ -292,7 +315,7 @@ class PlexConnector:
         )
         for library, media_type in libraries_with_type:
             try:
-                search_kwargs = {'title': title}
+                search_kwargs: dict[str, Union[str, int]] = {'title': title}
                 if year is not None:
                     search_kwargs['year'] = year
                 search_results = library.search(**search_kwargs)
