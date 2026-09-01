@@ -1223,7 +1223,8 @@ def save_uploaded_file(
     finally:
         shutil.rmtree(temp_zip_folder, ignore_errors=True)
         debug_me(
-            f"Deleted temporary ZIP file: {temp_zip_path}", "save_uploaded_file")
+            f"{'Deleted' if not os.path.exists(temp_zip_folder) else 'Failed to delete'} "
+            f"temporary ZIP file: {temp_zip_path}", "save_uploaded_file")
 
     process_uploaded_artwork(instance, extracted_files, skipped, zip_title, zip_author, zip_source,
                              options, filters, plex_title, plex_year)
