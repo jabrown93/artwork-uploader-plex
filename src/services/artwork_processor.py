@@ -232,6 +232,8 @@ class ArtworkProcessor:
                 callbacks.on_log_update(f"⏩ {str(e)}")
 
         except Exception as e:
+            if callbacks and callbacks.error_counter is not None:
+                callbacks.error_counter[0] += 1
             if callbacks and callbacks.on_log_update:
                 callbacks.on_log_update(f"❌ {str(e)}")
             if callbacks and callbacks.on_status_update:

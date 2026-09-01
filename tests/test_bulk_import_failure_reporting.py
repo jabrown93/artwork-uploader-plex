@@ -43,6 +43,11 @@ class FailedUploadProcessor:
         return ["❌ Failed Movie | failed to update poster in Movies"]
 
 
+class RaisingUploadProcessor(FailedUploadProcessor):
+    def process_movie_artwork(self, artwork):
+        raise RuntimeError("unexpected upload failure")
+
+
 @pytest.fixture
 def bulk_ui(monkeypatch):
     logs = []
@@ -83,10 +88,15 @@ def bulk_ui(monkeypatch):
     )
 
 
-def test_all_failed_uploads_report_bulk_import_errors(monkeypatch, bulk_ui):
+@pytest.mark.parametrize(
+    "upload_processor", [FailedUploadProcessor, RaisingUploadProcessor]
+)
+def test_all_failed_uploads_report_bulk_import_errors(
+    monkeypatch, bulk_ui, upload_processor
+):
     monkeypatch.setattr(artwork_processor_module, "Scraper", FailedScraper)
     monkeypatch.setattr(
-        artwork_processor_module, "UploadProcessor", FailedUploadProcessor
+        artwork_processor_module, "UploadProcessor", upload_processor
     )
     parsed_urls = [
         SimpleNamespace(url="https://mediux.pro/sets/123", options=Options())
