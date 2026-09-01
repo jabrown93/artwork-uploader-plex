@@ -30,6 +30,6 @@ RUN chmod +x /entrypoint.sh
 # Expose web UI port
 EXPOSE 4567
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh", "python", "/app/src/artwork_uploader.py"]
 
-CMD ["python", "/app/src/artwork_uploader.py", "--debug"]
+CMD ["--debug"]
