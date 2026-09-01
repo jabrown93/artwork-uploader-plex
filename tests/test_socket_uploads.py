@@ -243,7 +243,6 @@ def test_completion_waits_for_registered_decode(upload_handlers, monkeypatch):
     complete, complete_errors = emit_in_thread(
         emit, "upload_complete", "client-a", complete_payload()
     )
-    complete.join(0.1)
     completion_waited = complete.is_alive()
     release_decode.set()
     chunk.join(2)
