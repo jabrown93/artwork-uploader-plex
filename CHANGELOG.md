@@ -1,3 +1,10 @@
+## [1.1.5](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.4...v1.1.5) (2026-09-01)
+
+
+### Bug Fixes
+
+* report bulk import upload failures ([#139](https://github.com/jabrown93/artwork-uploader-plex/issues/139)) ([eb50aad](https://github.com/jabrown93/artwork-uploader-plex/commit/eb50aadf711de8761de41525b6ef351e6b2ef5c0))
+
 ## [1.1.4](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.3...v1.1.4) (2026-09-01)
 
 
