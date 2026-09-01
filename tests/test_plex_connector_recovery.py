@@ -71,6 +71,56 @@ def test_concurrent_library_discovery_publishes_complete_lists_atomically(
     assert getattr(connector, libraries_attr) == [library]
 
 
+def test_reconnect_failure_clears_stale_state_and_recovers_with_new_names(
+    monkeypatch,
+):
+    connector = PlexConnector("http://old-plex:32400", "old-token")
+    connector._tv_library_names = ["Old TV"]
+    connector._movie_library_names = ["Old Movies"]
+    connector.tv_libraries = [Mock(title="Old TV")]
+    connector.movie_libraries = [Mock(title="Old Movies")]
+
+    movie = Mock(title="The Matrix", year=1999)
+    movie_library = Mock(title="New Movies")
+    movie_library.getGuid.return_value = movie
+    server = Mock()
+    server.library.section.return_value = movie_library
+    attempts = 0
+
+    def connect():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PlexConnectorException("Plex unavailable")
+        connector.plex = server
+
+    monkeypatch.setattr(connector, "connect", connect)
+    updated_config = Mock(
+        base_url="http://new-plex:32400",
+        token="new-token",
+        tv_library=["New TV"],
+        movie_library=["New Movies"],
+    )
+
+    with pytest.raises(PlexConnectorException):
+        connector.reconnect(updated_config)
+
+    assert connector.plex is None
+    assert connector.base_url == "http://new-plex:32400"
+    assert connector.token == "new-token"
+    assert connector._tv_library_names == ["New TV"]
+    assert connector._movie_library_names == ["New Movies"]
+    assert connector.tv_libraries == []
+    assert connector.movie_libraries == []
+
+    items, libraries = connector.find_in_library("movie", _artwork())
+
+    assert items == [movie]
+    assert libraries == ["New Movies"]
+    assert attempts == 2
+    server.library.section.assert_called_once_with("New Movies")
+
+
 def test_lookup_recovers_libraries_after_startup_connection_failure(monkeypatch):
     connector = PlexConnector("http://plex:32400", "token")
     movie = Mock(title="The Matrix", year=1999)

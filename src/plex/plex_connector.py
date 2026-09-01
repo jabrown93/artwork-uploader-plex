@@ -34,11 +34,23 @@ class PlexConnector:
         self.plex = None
         self.base_url = updated_config.base_url
         self.token = updated_config.token
+        self._tv_library_names = (
+            [updated_config.tv_library]
+            if isinstance(updated_config.tv_library, str)
+            else list(updated_config.tv_library)
+        )
+        self._movie_library_names = (
+            [updated_config.movie_library]
+            if isinstance(updated_config.movie_library, str)
+            else list(updated_config.movie_library)
+        )
+        self.tv_libraries = []
+        self.movie_libraries = []
 
         try:
             self.connect()
-            self.set_tv_libraries(updated_config.tv_library)
-            self.set_movie_libraries(updated_config.movie_library)
+            self.set_tv_libraries(self._tv_library_names)
+            self.set_movie_libraries(self._movie_library_names)
         except PlexConnectorException:
             raise
         except Exception:
