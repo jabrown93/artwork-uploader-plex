@@ -39,6 +39,7 @@ import tempfile
 import time
 import zipfile
 from functools import wraps
+from threading import Event
 
 from flask import render_template, send_from_directory, request, redirect, url_for, session
 from flask_socketio import ConnectionRefusedError, disconnect
@@ -536,6 +537,9 @@ def setup_socket_handlers(
         """Discard one pending upload. Caller must hold upload_chunks_lock."""
         upload = upload_chunks.pop(upload_key, None)
         if upload is not None:
+            chunks_complete = upload.get("chunks_complete")
+            if chunks_complete is not None:
+                chunks_complete.set()
             cleanup_upload_file(upload, upload_key[1])
         return upload
 
@@ -1087,6 +1091,7 @@ def setup_socket_handlers(
         upload_key = (request.sid, file_name)
         chunk_index = data.get("chunkIndex")
 
+        upload = None
         try:
             chunk_data = data["chunkData"]
             chunk_index = int(data["chunkIndex"])
@@ -1105,17 +1110,41 @@ def setup_socket_handlers(
                         "temp_path": temp_file.name,
                         "chunks_received": 0,
                         "total_chunks": total_chunks,
-                        "instance": instance
+                        "instance": instance,
+                        "chunk_indexes": set(),
+                        "decoded_chunks": {},
+                        "chunks_complete": Event(),
                     }
 
-                decoded_chunk = base64.b64decode(chunk_data)
-                upload_chunks[upload_key]["temp_file"].write(decoded_chunk)
-                upload_chunks[upload_key]["chunks_received"] += 1
+                upload = upload_chunks[upload_key]
+                if not 0 <= chunk_index < total_chunks:
+                    raise ValueError(f"Invalid chunk index {chunk_index}")
+                if total_chunks != upload["total_chunks"]:
+                    raise ValueError("Chunk count changed during upload")
+                if chunk_index in upload["chunk_indexes"]:
+                    raise ValueError(f"Duplicate chunk index {chunk_index}")
+                upload["chunk_indexes"].add(chunk_index)
+
+            decoded_chunk = base64.b64decode(chunk_data)
+
+            with upload_chunks_lock:
+                # A replacement upload may have superseded this decode.
+                if upload_chunks.get(upload_key) is not upload:
+                    return
+                upload["decoded_chunks"][chunk_index] = decoded_chunk
+                while upload["chunks_received"] in upload["decoded_chunks"]:
+                    next_chunk = upload["chunks_received"]
+                    upload["temp_file"].write(
+                        upload["decoded_chunks"].pop(next_chunk))
+                    upload["chunks_received"] += 1
+                if upload["chunks_received"] == upload["total_chunks"]:
+                    upload["chunks_complete"].set()
         except Exception as e:
             logger.error(
                 f"Error decoding/writing chunk {chunk_index}: {e}", exc_info=True)
             with upload_chunks_lock:
-                cleanup_upload(upload_key)
+                if upload is None or upload_chunks.get(upload_key) is upload:
+                    cleanup_upload(upload_key)
 
     @globals.web_socket.on("upload_complete")
     @socket_login_required
@@ -1134,10 +1163,25 @@ def setup_socket_handlers(
 
         with upload_chunks_lock:
             upload = upload_chunks.get(upload_key)
+            wait_for_chunks = (
+                upload["chunks_complete"]
+                if upload
+                and len(upload["chunk_indexes"]) == upload["total_chunks"]
+                and upload["chunks_received"] != upload["total_chunks"]
+                else None
+            )
+
+        if wait_for_chunks is not None:
+            wait_for_chunks.wait()
+
+        with upload_chunks_lock:
+            current_upload = upload_chunks.get(upload_key)
+            upload = current_upload if current_upload is upload else None
             chunks_received = upload["chunks_received"] if upload else 0
             expected_chunks = upload["total_chunks"] if upload else 0
             if not upload or chunks_received != expected_chunks:
-                cleanup_upload(upload_key)
+                if upload is not None:
+                    cleanup_upload(upload_key)
                 upload = None
             else:
                 upload_chunks.pop(upload_key)
