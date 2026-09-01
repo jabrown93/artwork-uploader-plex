@@ -62,7 +62,7 @@ jinja2==3.1.6
     # via
     #   flask
     #   flask-socketio
-joserfc==1.7.4
+joserfc==1.7.5
     # via authlib
 librt==0.15.0
     # via mypy
