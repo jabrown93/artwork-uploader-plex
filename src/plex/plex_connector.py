@@ -129,14 +129,15 @@ class PlexConnector:
                 "Plex connection did not initialize a server handle")
 
         self.tv_libraries = []
+        tv_library_handles = []
         for tv_library in tv_libraries:
             try:
-                plex_tv = plex.library.section(tv_library)
-                self.tv_libraries.append(plex_tv)
+                tv_library_handles.append(plex.library.section(tv_library))
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'TV library named "{tv_library}" not found. Please check the "tv_library" in config.json or provide one.',
                     f'TV library named "{tv_library}" not found.')
+        self.tv_libraries = tv_library_handles
         debug_me(f"The following TV libraries have been set: {[library.title for library in self.tv_libraries]}",
                  "PlexConnector/set_tv_libraries")
         return self.tv_libraries
@@ -159,14 +160,15 @@ class PlexConnector:
                 "Plex connection did not initialize a server handle")
 
         self.movie_libraries = []
+        movie_library_handles = []
         for movie_library in movie_libraries:
             try:
-                plex_movies = plex.library.section(movie_library)
-                self.movie_libraries.append(plex_movies)
+                movie_library_handles.append(plex.library.section(movie_library))
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'Movie library named "{movie_library}" not found. Please check the "movie_library" in config.json or provide one.',
                     f'Movie library named "{movie_library}" not found')
+        self.movie_libraries = movie_library_handles
         debug_me(f"The following movie libraries have been set: {[library.title for library in self.movie_libraries]}",
                  "PlexConnector/set_movie_libraries")
         return self.movie_libraries

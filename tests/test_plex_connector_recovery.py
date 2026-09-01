@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import Mock
 
 import pytest
@@ -34,6 +36,39 @@ def test_set_libraries_rejects_missing_server_after_connect(
 
     with pytest.raises(PlexConnectorException, match="did not initialize"):
         getattr(connector, setter)(library_name)
+
+
+@pytest.mark.parametrize(
+    ("setter", "libraries_attr", "library_name"),
+    (
+        ("set_tv_libraries", "tv_libraries", "TV Shows"),
+        ("set_movie_libraries", "movie_libraries", "Movies"),
+    ),
+)
+def test_concurrent_library_discovery_publishes_complete_lists_atomically(
+    setter, libraries_attr, library_name
+):
+    connector = PlexConnector("http://plex:32400", "token")
+    library = Mock(title=library_name)
+    barrier = Barrier(2)
+    server = Mock()
+
+    def section(_library_name):
+        barrier.wait(timeout=2)
+        return library
+
+    server.library.section.side_effect = section
+    connector.plex = server
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _: getattr(connector, setter)(library_name), range(2)
+            )
+        )
+
+    assert results == [[library], [library]]
+    assert getattr(connector, libraries_attr) == [library]
 
 
 def test_lookup_recovers_libraries_after_startup_connection_failure(monkeypatch):
