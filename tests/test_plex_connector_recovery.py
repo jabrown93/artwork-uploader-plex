@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 from unittest.mock import Mock
 
 import pytest
@@ -62,13 +62,101 @@ def test_concurrent_library_discovery_publishes_complete_lists_atomically(
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(
-            executor.map(
-                lambda _: getattr(connector, setter)(library_name), range(2)
-            )
+            executor.map(lambda _: getattr(connector, setter)(library_name), range(2))
         )
 
     assert results == [[library], [library]]
     assert getattr(connector, libraries_attr) == [library]
+
+
+def test_reconnect_generation_discards_stale_library_refresh(monkeypatch):
+    connector = PlexConnector("http://old-plex:32400", "old-token")
+    stale_started = Event()
+    release_stale = Event()
+    old_movie_library = Mock(title="Old Movies")
+    old_server = Mock()
+
+    def old_section(_library_name):
+        stale_started.set()
+        assert release_stale.wait(timeout=2)
+        return old_movie_library
+
+    old_server.library.section.side_effect = old_section
+    connector.plex = old_server
+    connector._movie_library_names = ["Old Movies"]
+
+    new_tv_library = Mock(title="New TV")
+    new_movie_library = Mock(title="New Movies")
+    new_server = Mock()
+    new_server.library.section.side_effect = {
+        "New TV": new_tv_library,
+        "New Movies": new_movie_library,
+    }.__getitem__
+    monkeypatch.setattr(
+        connector, "connect", lambda: setattr(connector, "plex", new_server)
+    )
+    updated_config = Mock(
+        base_url="http://new-plex:32400",
+        token="new-token",
+        tv_library=["New TV"],
+        movie_library=["New Movies"],
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_refresh = executor.submit(connector._refresh_missing_libraries, "movie")
+        assert stale_started.wait(timeout=2)
+        connector.reconnect(updated_config)
+        release_stale.set()
+        assert stale_refresh.result() is None
+
+    assert connector.plex is new_server
+    assert connector._tv_library_names == ["New TV"]
+    assert connector._movie_library_names == ["New Movies"]
+    assert connector.tv_libraries == [new_tv_library]
+    assert connector.movie_libraries == [new_movie_library]
+
+
+def test_reconnect_generation_discards_stale_connect_result(monkeypatch):
+    connector = PlexConnector("http://old-plex:32400", "old-token")
+    stale_started = Event()
+    release_stale = Event()
+    old_server = Mock()
+    new_server = Mock()
+    new_server.library.section.side_effect = lambda name: Mock(title=name)
+    test_socket = Mock()
+    test_socket.connect_ex.return_value = 0
+    monkeypatch.setattr(
+        "plex.plex_connector.socket.socket", Mock(return_value=test_socket)
+    )
+
+    def create_server(base_url, _token, timeout):
+        assert timeout == 10
+        if base_url == "http://old-plex:32400":
+            stale_started.set()
+            assert release_stale.wait(timeout=2)
+            return old_server
+        return new_server
+
+    monkeypatch.setattr("plex.plex_connector.PlexServer", create_server)
+    updated_config = Mock(
+        base_url="http://new-plex:32400",
+        token="new-token",
+        tv_library=["New TV"],
+        movie_library=["New Movies"],
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_connect = executor.submit(connector.connect)
+        assert stale_started.wait(timeout=2)
+        connector.reconnect(updated_config)
+        release_stale.set()
+        stale_connect.result()
+
+    assert connector.plex is new_server
+    assert connector._tv_library_names == ["New TV"]
+    assert connector._movie_library_names == ["New Movies"]
+    assert [library.title for library in connector.tv_libraries] == ["New TV"]
+    assert [library.title for library in connector.movie_libraries] == ["New Movies"]
 
 
 def test_reconnect_failure_clears_stale_state_and_recovers_with_new_names(

@@ -1,5 +1,6 @@
 import socket
 import xml.etree.ElementTree
+from threading import Lock
 from typing import Optional, List, Tuple, Union, Any
 from urllib.parse import urlparse
 
@@ -25,179 +26,270 @@ class PlexConnector:
         self.movie_libraries: List[MovieSection] = []
         self._tv_library_names: Optional[List[str]] = None
         self._movie_library_names: Optional[List[str]] = None
+        self._state_generation = 0
+        self._state_lock = Lock()
         self.options: Options = Options()
 
     def set_options(self, options: Options) -> None:
         self.options = options
 
     def reconnect(self, updated_config: Config) -> None:
-        self.plex = None
-        self.base_url = updated_config.base_url
-        self.token = updated_config.token
-        self._tv_library_names = (
+        tv_library_names = (
             [updated_config.tv_library]
             if isinstance(updated_config.tv_library, str)
             else list(updated_config.tv_library)
         )
-        self._movie_library_names = (
+        movie_library_names = (
             [updated_config.movie_library]
             if isinstance(updated_config.movie_library, str)
             else list(updated_config.movie_library)
         )
-        self.tv_libraries = []
-        self.movie_libraries = []
+        with self._state_lock:
+            self._state_generation += 1
+            generation = self._state_generation
+            self.plex = None
+            self.base_url = updated_config.base_url
+            self.token = updated_config.token
+            self._tv_library_names = tv_library_names
+            self._movie_library_names = movie_library_names
+            self.tv_libraries = []
+            self.movie_libraries = []
 
         try:
             self.connect()
-            self.set_tv_libraries(self._tv_library_names)
-            self.set_movie_libraries(self._movie_library_names)
+            self.set_tv_libraries(
+                tv_library_names, _expected_generation=generation)
+            self.set_movie_libraries(
+                movie_library_names, _expected_generation=generation)
         except PlexConnectorException:
             raise
         except Exception:
             raise
 
     def connect(self) -> None:
-        if not self.plex:
-            if not self.base_url or not self.token:
+        with self._state_lock:
+            if self.plex is not None:
+                return
+            generation = self._state_generation
+            base_url = self.base_url
+            token = self.token
+
+        if not base_url or not token:
+            raise PlexConnectorException(
+                "Invalid Plex token or base URL. Please provide valid values in config.json or via the GUI.")
+
+        # Quick connectivity check before attempting full connection
+        try:
+            parsed = urlparse(base_url)
+            host = parsed.hostname or 'localhost'
+            port = parsed.port or 32400
+
+            # Try to connect with a short timeout using connect_ex (non-blocking check)
+            test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_socket.settimeout(3)
+            result = test_socket.connect_ex((host, port))
+            test_socket.close()
+
+            if result != 0:
+                debug_me(f"Connection refused (error code: {result})")
                 raise PlexConnectorException(
-                    "Invalid Plex token or base URL. Please provide valid values in config.json or via the GUI.")
+                    f'Cannot reach Plex server at {base_url}. Please check that the server is running and the address is correct.',
+                    f"Connection refused (error code: {result})")
+        except PlexConnectorException:
+            raise
+        except (socket.timeout, socket.error, OSError) as e:
+            raise PlexConnectorException(
+                f'Cannot reach Plex server at {base_url}. Connection timed out after 3 seconds.',
+                f"Connection failed: {str(e)}")
 
-            # Quick connectivity check before attempting full connection
-            try:
-                parsed = urlparse(self.base_url)
-                host = parsed.hostname or 'localhost'
-                port = parsed.port or 32400
+        try:
+            plex = PlexServer(base_url, token,
+                              timeout=10)  # Initialize the Plex server connection with 10 second timeout
 
-                # Try to connect with a short timeout using connect_ex (non-blocking check)
-                test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                test_socket.settimeout(3)
-                result = test_socket.connect_ex((host, port))
-                test_socket.close()
+        except requests.exceptions.Timeout as e:
+            # Handle timeout errors specifically
+            raise PlexConnectorException(
+                f'Connection to Plex server at {base_url} timed out after 10 seconds. Please check that the server is running and accessible.',
+                f"Plex connection timeout: {str(e)}")
 
-                if result != 0:
-                    debug_me(f"Connection refused (error code: {result})")
-                    raise PlexConnectorException(
-                        f'Cannot reach Plex server at {self.base_url}. Please check that the server is running and the address is correct.',
-                        f"Connection refused (error code: {result})")
-            except PlexConnectorException:
-                raise
-            except (socket.timeout, socket.error, OSError) as e:
-                raise PlexConnectorException(
-                    f'Cannot reach Plex server at {self.base_url}. Connection timed out after 3 seconds.',
-                    f"Connection failed: {str(e)}")
+        except requests.exceptions.RequestException as e:
+            # Handle network-related errors (e.g., unable to reach the server)
+            raise PlexConnectorException(
+                f'Unable to connect to Plex server at {base_url}. Please check the "base_url" in config.json and ensure the server is accessible.',
+                f"Unable to connect to Plex server: {str(e)}")
 
-            try:
-                self.plex = PlexServer(self.base_url, self.token,
-                                       timeout=10)  # Initialize the Plex server connection with 10 second timeout
+        except plexapi.exceptions.Unauthorized as e:
+            # Handle authentication-related errors (e.g., invalid token)
+            raise PlexConnectorException(
+                f'Invalid Plex token "{token}" -  please check the "token" in config.json or provide one.',
+                f"Invalid Plex token: {str(e)}")
 
-            except requests.exceptions.Timeout as e:
-                # Handle timeout errors specifically
-                self.plex = None
-                raise PlexConnectorException(
-                    f'Connection to Plex server at {self.base_url} timed out after 10 seconds. Please check that the server is running and accessible.',
-                    f"Plex connection timeout: {str(e)}")
+        except xml.etree.ElementTree.ParseError as e:
+            # Handle XML parsing errors (e.g., invalid XML response from Plex)
+            raise PlexConnectorException('Received invalid XML from Plex server. Check server connection.',
+                                         f"Received invalid XML from Plex server: {str(e)}")
 
-            except requests.exceptions.RequestException as e:
-                # Handle network-related errors (e.g., unable to reach the server)
-                self.plex = None
-                raise PlexConnectorException(
-                    f'Unable to connect to Plex server at {self.base_url}. Please check the "base_url" in config.json and ensure the server is accessible.',
-                    f"Unable to connect to Plex server: {str(e)}")
+        except Exception as e:
+            # Handle any other unexpected errors
+            raise PlexConnectorException(
+                f"Unexpected error: {str(e)}", f"Unexpected error: {str(e)}")
 
-            except plexapi.exceptions.Unauthorized as e:
-                # Handle authentication-related errors (e.g., invalid token)
-                self.plex = None
-                raise PlexConnectorException(
-                    f'Invalid Plex token "{self.token}" -  please check the "token" in config.json or provide one.',
-                    f"Invalid Plex token: {str(e)}")
+        with self._state_lock:
+            if (
+                generation == self._state_generation
+                and base_url == self.base_url
+                and token == self.token
+                and self.plex is None
+            ):
+                self.plex = plex
 
-            except xml.etree.ElementTree.ParseError as e:
-                # Handle XML parsing errors (e.g., invalid XML response from Plex)
-                self.plex = None
-                raise PlexConnectorException('Received invalid XML from Plex server. Check server connection.',
-                                             f"Received invalid XML from Plex server: {str(e)}")
-
-            except Exception as e:
-                # Handle any other unexpected errors
-                self.plex = None
-                raise PlexConnectorException(
-                    f"Unexpected error: {str(e)}", f"Unexpected error: {str(e)}")
-
-    def set_tv_libraries(self, tv_libraries: Union[str, List[str]]) -> List[ShowSection]:
+    def set_tv_libraries(
+        self,
+        tv_libraries: Union[str, List[str]],
+        _expected_generation: Optional[int] = None,
+    ) -> List[ShowSection]:
 
         if isinstance(tv_libraries, str):
             tv_libraries = [tv_libraries]
         elif not isinstance(tv_libraries, list):
             raise PlexConnectorException(
                 "tv_libraries must be either a string or a list")
-        self._tv_library_names = list(tv_libraries)
+        tv_library_names = list(tv_libraries)
 
-        plex = self.plex
+        with self._state_lock:
+            if (
+                _expected_generation is not None
+                and _expected_generation != self._state_generation
+            ):
+                return self.tv_libraries
+            if (
+                _expected_generation is None
+                and self._tv_library_names != tv_library_names
+            ):
+                self._state_generation += 1
+            generation = self._state_generation
+            self._tv_library_names = tv_library_names
+            self.tv_libraries = []
+            plex = self.plex
+
         if plex is None:
             self.connect()
-            plex = self.plex
+            with self._state_lock:
+                if (
+                    generation != self._state_generation
+                    or self._tv_library_names != tv_library_names
+                ):
+                    return self.tv_libraries
+                plex = self.plex
         if plex is None:
             raise PlexConnectorException(
                 "Plex connection did not initialize a server handle")
 
-        self.tv_libraries = []
         tv_library_handles = []
-        for tv_library in tv_libraries:
+        for tv_library in tv_library_names:
             try:
                 tv_library_handles.append(plex.library.section(tv_library))
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'TV library named "{tv_library}" not found. Please check the "tv_library" in config.json or provide one.',
                     f'TV library named "{tv_library}" not found.')
-        self.tv_libraries = tv_library_handles
-        debug_me(f"The following TV libraries have been set: {[library.title for library in self.tv_libraries]}",
+        with self._state_lock:
+            if (
+                generation == self._state_generation
+                and self._tv_library_names == tv_library_names
+                and self.plex is plex
+            ):
+                self.tv_libraries = tv_library_handles
+            published_libraries = self.tv_libraries
+        debug_me(f"The following TV libraries have been set: {[library.title for library in published_libraries]}",
                  "PlexConnector/set_tv_libraries")
-        return self.tv_libraries
+        return published_libraries
 
-    def set_movie_libraries(self, movie_libraries: Union[str, List[str]]) -> List[MovieSection]:
+    def set_movie_libraries(
+        self,
+        movie_libraries: Union[str, List[str]],
+        _expected_generation: Optional[int] = None,
+    ) -> List[MovieSection]:
 
         if isinstance(movie_libraries, str):
             movie_libraries = [movie_libraries]
         elif not isinstance(movie_libraries, list):
             raise PlexConnectorException(
                 "movie_libraries must be either a string or a list")
-        self._movie_library_names = list(movie_libraries)
+        movie_library_names = list(movie_libraries)
 
-        plex = self.plex
+        with self._state_lock:
+            if (
+                _expected_generation is not None
+                and _expected_generation != self._state_generation
+            ):
+                return self.movie_libraries
+            if (
+                _expected_generation is None
+                and self._movie_library_names != movie_library_names
+            ):
+                self._state_generation += 1
+            generation = self._state_generation
+            self._movie_library_names = movie_library_names
+            self.movie_libraries = []
+            plex = self.plex
+
         if plex is None:
             self.connect()
-            plex = self.plex
+            with self._state_lock:
+                if (
+                    generation != self._state_generation
+                    or self._movie_library_names != movie_library_names
+                ):
+                    return self.movie_libraries
+                plex = self.plex
         if plex is None:
             raise PlexConnectorException(
                 "Plex connection did not initialize a server handle")
 
-        self.movie_libraries = []
         movie_library_handles = []
-        for movie_library in movie_libraries:
+        for movie_library in movie_library_names:
             try:
                 movie_library_handles.append(plex.library.section(movie_library))
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'Movie library named "{movie_library}" not found. Please check the "movie_library" in config.json or provide one.',
                     f'Movie library named "{movie_library}" not found')
-        self.movie_libraries = movie_library_handles
-        debug_me(f"The following movie libraries have been set: {[library.title for library in self.movie_libraries]}",
+        with self._state_lock:
+            if (
+                generation == self._state_generation
+                and self._movie_library_names == movie_library_names
+                and self.plex is plex
+            ):
+                self.movie_libraries = movie_library_handles
+            published_libraries = self.movie_libraries
+        debug_me(f"The following movie libraries have been set: {[library.title for library in published_libraries]}",
                  "PlexConnector/set_movie_libraries")
-        return self.movie_libraries
+        return published_libraries
 
     def _refresh_missing_libraries(self, item_type: Optional[str] = None) -> None:
-        if (
-            item_type in (None, "tv")
-            and not self.tv_libraries
-            and self._tv_library_names is not None
-        ):
-            self.set_tv_libraries(self._tv_library_names)
-        if (
-            item_type in (None, "movie")
-            and not self.movie_libraries
-            and self._movie_library_names is not None
-        ):
-            self.set_movie_libraries(self._movie_library_names)
+        with self._state_lock:
+            generation = self._state_generation
+            tv_library_names = (
+                list(self._tv_library_names)
+                if item_type in (None, "tv")
+                and not self.tv_libraries
+                and self._tv_library_names is not None
+                else None
+            )
+            movie_library_names = (
+                list(self._movie_library_names)
+                if item_type in (None, "movie")
+                and not self.movie_libraries
+                and self._movie_library_names is not None
+                else None
+            )
+        if tv_library_names is not None:
+            self.set_tv_libraries(
+                tv_library_names, _expected_generation=generation)
+        if movie_library_names is not None:
+            self.set_movie_libraries(
+                movie_library_names, _expected_generation=generation)
 
     # Find a specific collection in the movies library
     def find_collection(self, collection_title: str) -> tuple[list[Any], list[Any]] | tuple[None, None]:
