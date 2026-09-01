@@ -1,3 +1,10 @@
+## [1.1.7](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.6...v1.1.7) (2026-09-01)
+
+
+### Bug Fixes
+
+* **plex:** recover libraries after startup outage ([#137](https://github.com/jabrown93/artwork-uploader-plex/issues/137)) ([8396c2f](https://github.com/jabrown93/artwork-uploader-plex/commit/8396c2f49246416ddc44d2d34ab47c66bd0cfa99))
+
 ## [1.1.6](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.5...v1.1.6) (2026-09-01)
 
 
