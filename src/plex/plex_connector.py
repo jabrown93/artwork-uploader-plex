@@ -120,14 +120,18 @@ class PlexConnector:
                 "tv_libraries must be either a string or a list")
         self._tv_library_names = list(tv_libraries)
 
-        if not self.plex:
+        plex = self.plex
+        if plex is None:
             self.connect()
-        assert self.plex is not None
+            plex = self.plex
+        if plex is None:
+            raise PlexConnectorException(
+                "Plex connection did not initialize a server handle")
 
         self.tv_libraries = []
         for tv_library in tv_libraries:
             try:
-                plex_tv = self.plex.library.section(tv_library)
+                plex_tv = plex.library.section(tv_library)
                 self.tv_libraries.append(plex_tv)
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
@@ -146,14 +150,18 @@ class PlexConnector:
                 "movie_libraries must be either a string or a list")
         self._movie_library_names = list(movie_libraries)
 
-        if not self.plex:
+        plex = self.plex
+        if plex is None:
             self.connect()
-        assert self.plex is not None
+            plex = self.plex
+        if plex is None:
+            raise PlexConnectorException(
+                "Plex connection did not initialize a server handle")
 
         self.movie_libraries = []
         for movie_library in movie_libraries:
             try:
-                plex_movies = self.plex.library.section(movie_library)
+                plex_movies = plex.library.section(movie_library)
                 self.movie_libraries.append(plex_movies)
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(

@@ -22,6 +22,20 @@ def _artwork() -> MovieArtwork:
     }
 
 
+@pytest.mark.parametrize(
+    ("setter", "library_name"),
+    (("set_tv_libraries", "TV Shows"), ("set_movie_libraries", "Movies")),
+)
+def test_set_libraries_rejects_missing_server_after_connect(
+    monkeypatch, setter, library_name
+):
+    connector = PlexConnector("http://plex:32400", "token")
+    monkeypatch.setattr(connector, "connect", lambda: None)
+
+    with pytest.raises(PlexConnectorException, match="did not initialize"):
+        getattr(connector, setter)(library_name)
+
+
 def test_lookup_recovers_libraries_after_startup_connection_failure(monkeypatch):
     connector = PlexConnector("http://plex:32400", "token")
     movie = Mock(title="The Matrix", year=1999)
