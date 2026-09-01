@@ -138,8 +138,8 @@ services:
     ports:
       - "4567:4567"
     volumes:
-      - ./bulk_imports:/artwork-uploader/bulk_imports:rw
-      - ./config:/artwork-uploader/config:rw
+      - ./bulk_imports:/bulk_imports:rw
+      - ./config.json:/config/config.json:rw
       - <HOST_PATH_TO_KOMETA_ASSET_DIRECTORY>:/assets:rw
       - <HOST_TEMP_PATH>:/temp:rw
     environment:

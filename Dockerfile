@@ -11,9 +11,9 @@ ENV PYTHONPATH="/app/src:${PYTHONPATH}"
 
 COPY requirements.txt .
 
-# Install gosu for dropping privileges and create necessary directories
+# Install tini for signal forwarding and gosu for dropping privileges
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gosu && \
+    apt-get install -y --no-install-recommends gosu tini && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     python -m venv /app/venv && \
@@ -30,8 +30,6 @@ RUN chmod +x /entrypoint.sh
 # Expose web UI port
 EXPOSE 4567
 
-USER artwork
-
-ENTRYPOINT ["python", "/app/src/artwork_uploader.py"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh", "python", "/app/src/artwork_uploader.py"]
 
 CMD ["--debug"]
