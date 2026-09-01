@@ -42,12 +42,17 @@ class SchedulerService:
         Returns:
             Unique job ID for this schedule
         """
-        hour, minute = (int(part) for part in schedule_time.split(":"))
+        time_parts = [int(part) for part in schedule_time.split(":")]
+        if len(time_parts) not in {2, 3}:
+            raise ValueError("Schedule time must use HH:MM or HH:MM:SS")
+        hour, minute = time_parts[:2]
+        second = time_parts[2] if len(time_parts) == 3 else 0
         job = self.scheduler.add_job(
             callback,
             trigger="cron",
             hour=hour,
             minute=minute,
+            second=second,
             args=[filename],
             misfire_grace_time=None,
         )

@@ -33,6 +33,20 @@ def test_add_and_remove_schedule(scheduler_service):
     assert not scheduler_service.has_schedules()
 
 
+def test_add_schedule_accepts_seconds(scheduler_service):
+    job_id = scheduler_service.add_schedule(
+        "precise.txt", "14:30:15", lambda _: None
+    )
+    fields = {
+        field.name: str(field)
+        for field in scheduler_service.scheduled_jobs[job_id].trigger.fields
+    }
+
+    assert fields["hour"] == "14"
+    assert fields["minute"] == "30"
+    assert fields["second"] == "15"
+
+
 def test_clear_all_schedules(scheduler_service):
     scheduler_service.add_schedule("first.txt", "10:00", lambda _: None)
     scheduler_service.add_schedule("second.txt", "11:00", lambda _: None)
