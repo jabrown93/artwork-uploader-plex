@@ -107,17 +107,20 @@ class SchedulerService:
         Returns:
             True if started, False if already running
         """
-        if self.scheduler.running:
+        if self.is_running:
             return False
 
-        self.scheduler.start()
+        if self.scheduler.running:
+            self.scheduler.resume()
+        else:
+            self.scheduler.start()
         self.is_running = True
         return True
 
     def stop(self) -> None:
-        """Stop the scheduler thread."""
-        if self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
+        """Pause scheduled jobs without discarding them."""
+        if self.is_running:
+            self.scheduler.pause()
         self.is_running = False
 
     def clear_all_schedules(self) -> None:

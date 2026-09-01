@@ -7,8 +7,9 @@ from services.scheduler_service import SchedulerService
 def scheduler_service():
     service = SchedulerService()
     yield service
-    service.stop()
     service.clear_all_schedules()
+    if service.scheduler.running:
+        service.scheduler.shutdown(wait=False)
 
 
 def test_add_and_remove_schedule(scheduler_service):
@@ -46,3 +47,17 @@ def test_clear_all_schedules(scheduler_service):
 def test_start_is_idempotent(scheduler_service):
     assert scheduler_service.start()
     assert not scheduler_service.start()
+
+
+def test_stop_and_start_preserves_jobs(scheduler_service):
+    job_id = scheduler_service.add_schedule("nightly.txt", "14:30", lambda _: None)
+
+    assert scheduler_service.start()
+    running_state = scheduler_service.scheduler.state
+    scheduler_service.stop()
+
+    assert scheduler_service.scheduler.state != running_state
+    assert scheduler_service.scheduler.get_job(job_id) is not None
+    assert scheduler_service.start()
+    assert scheduler_service.scheduler.state == running_state
+    assert scheduler_service.scheduler.get_job(job_id) is not None
