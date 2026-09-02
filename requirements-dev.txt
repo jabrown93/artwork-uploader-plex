@@ -6,7 +6,7 @@ apscheduler==3.11.3
     # via -r requirements.in
 ast-serialize==0.8.0
     # via mypy
-authlib==1.7.2
+authlib==1.8.0
     # via -r requirements.in
 bcrypt==5.0.0
     # via -r requirements.in
