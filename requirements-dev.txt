@@ -111,7 +111,7 @@ pytest-cov==7.1.0
     # via -r requirements-dev.in
 pytest-mock==3.15.1
     # via -r requirements-dev.in
-python-engineio==4.13.5
+python-engineio==4.14.0
     # via python-socketio
 python-socketio==5.16.4
     # via flask-socketio
