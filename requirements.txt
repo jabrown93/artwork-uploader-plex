@@ -46,7 +46,7 @@ flask-cors==6.0.5
     # via -r requirements.in
 flask-socketio==5.6.1
     # via -r requirements.in
-greenlet==3.5.5
+greenlet==3.5.6
     # via eventlet
 h11==0.16.0
     # via wsproto
