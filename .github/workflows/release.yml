@@ -1,18 +1,25 @@
 name: Release
 
 on:
+  # Deliberately main-only. merge-back pushes main into beta as the release
+  # App, and App-token pushes trigger workflows, so a `beta` push trigger made
+  # every merge-back cut a prerelease of main's own commits. Those release
+  # commits rewrite the same CHANGELOG.md and src/core/__version__.py lines
+  # main rewrites, so the next merge-back conflicted — v1.1.4-beta.1 and PR
+  # #141 were exactly that loop. Cut beta prereleases from the manual trigger
+  # instead, which is a deliberate act rather than a side effect of syncing.
   push:
     branches:
       - main
-      - beta
   # Weekly roll-up of the fix(deps) commits that .releaserc.js suppresses on
   # push, promoted into a single patch release. GitHub only fires schedule
   # from the default branch, so this sweeps main only; use the manual trigger
   # below to sweep beta.
   schedule:
     - cron: '0 9 * * 1' # Mondays 09:00 UTC — weekly dependency roll-up
-  # Also sets RELEASE_DEPS, so a manual run is an on-demand dependency sweep
-  # (and the only way to promote beta's suppressed fix(deps) commits).
+  # Run against the beta ref to cut a prerelease; this is now beta's only
+  # release path. Also sets RELEASE_DEPS, so such a run doubles as an
+  # on-demand dependency sweep (the only way to promote suppressed fix(deps)).
   workflow_dispatch: {}
 
 concurrency:
