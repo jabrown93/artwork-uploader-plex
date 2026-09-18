@@ -273,10 +273,10 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
         scheduled:      Whether this was triggered by a scheduled job (for notification on completion).
     """
 
-    # Track successful poster uploads (those with ✅ or ♻️)
+    # Track upload outcomes reported by ArtworkProcessor
     success_counter = [0]
     assets_processed = [0]
-    errors = 0
+    error_counter = [0]
 
     try:
 
@@ -302,19 +302,19 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
             if TPBD_USER_BASE_PATH in parsed_line.url:
                 try:
                     scrape_tpdb_user(instance, parsed_line.url,
-                                     parsed_line.options, success_counter, assets_processed)
-                except Exception:
-                    debug_me(f"Failed to scrape TPDb user URL: {parsed_line.url}", "process_bulk_import_from_ui")
-                    pass
+                                     parsed_line.options, success_counter, assets_processed, error_counter)
+                except Exception as e:
+                    update_log(instance, f"❌ Error processing line: '{parsed_line.url}'")
+                    debug_me(f"Failed to scrape TPDb user URL: {parsed_line.url} | {str(e)}", "process_bulk_import_from_ui")
+                    error_counter[0] += 1
             else:
                 try:
                     scrape_and_upload(instance, parsed_line.url,
-                                      parsed_line.options, success_counter, assets_processed)
+                                      parsed_line.options, success_counter, assets_processed, error_counter)
                 except ScraperException as e:
                     update_log(instance, f"❌ Error processing line: '{parsed_line.url}'")
                     debug_me(f"ScraperException: Failed to scrape URL: {parsed_line.url} | {str(e)}", "process_bulk_import_from_ui")
-                    errors += 1
-                    pass
+                    error_counter[0] += 1
 
             percent = ((i + 1) / len(parsed_urls)) * 100
             notify_web(instance, "progress_bar",
@@ -326,6 +326,7 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
 
         # Log the completion of the bulk import process
         poster_count = success_counter[0]
+        errors = error_counter[0]
 
         message = (
             ("🏁 " if errors == 0 else "⚠️ ")
@@ -354,7 +355,7 @@ def process_bulk_import_from_ui(instance: Instance, parsed_urls: list, filename:
 
 
 # Scrape all pages of a TPDb user's uploaded artwork
-def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, assets_processed=None):
+def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, assets_processed=None, error_counter=None):
     if "?" in url:
         cleaned_url = url.split("?")[0]
         url = cleaned_url
@@ -370,7 +371,7 @@ def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, ass
     try:
         for page in range(pages):
             page_url = f"{url}?section=uploads&page={page + 1}"
-            scrape_and_upload(instance, page_url, options, success_counter, assets_processed)
+            scrape_and_upload(instance, page_url, options, success_counter, assets_processed, error_counter)
 
             # Only show progress across pages when there's more than one page to scrape
             if pages > 1:
@@ -385,7 +386,7 @@ def scrape_tpdb_user(instance: Instance, url, options, success_counter=None, ass
 
 
 # Scraped the URL then uploads what it's scraped to Plex
-def scrape_and_upload(instance: Instance, url, options, success_counter=None, assets_processed=None):
+def scrape_and_upload(instance: Instance, url, options, success_counter=None, assets_processed=None, error_counter=None):
     """
     Scrape artwork from a URL and upload to Plex.
 
@@ -411,7 +412,8 @@ def scrape_and_upload(instance: Instance, url, options, success_counter=None, as
         on_status_update=status_callback,
         on_log_update=log_callback,
         success_counter=success_counter,
-        assets_processed=assets_processed
+        assets_processed=assets_processed,
+        error_counter=error_counter
     )
 
     # Use the service to do the actual work

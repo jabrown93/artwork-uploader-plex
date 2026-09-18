@@ -1,3 +1,39 @@
+## [1.1.8](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.7...v1.1.8) (2026-09-14)
+
+
+### Bug Fixes
+
+* **deps:** update python:3.14.7 docker digest to e06cc11 ([5d724cd](https://github.com/jabrown93/artwork-uploader-plex/commit/5d724cd5c1a98efcc2c65421edb86286cb409eff))
+
+## [1.1.7](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.6...v1.1.7) (2026-09-01)
+
+
+### Bug Fixes
+
+* **plex:** recover libraries after startup outage ([#137](https://github.com/jabrown93/artwork-uploader-plex/issues/137)) ([8396c2f](https://github.com/jabrown93/artwork-uploader-plex/commit/8396c2f49246416ddc44d2d34ab47c66bd0cfa99))
+
+## [1.1.6](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.5...v1.1.6) (2026-09-01)
+
+
+### Bug Fixes
+
+* isolate chunked uploads by socket client ([#140](https://github.com/jabrown93/artwork-uploader-plex/issues/140)) ([2db9c9a](https://github.com/jabrown93/artwork-uploader-plex/commit/2db9c9a0029976862ca0801b4c528ccd503e8d47))
+
+## [1.1.5](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.4...v1.1.5) (2026-09-01)
+
+
+### Bug Fixes
+
+* report bulk import upload failures ([#139](https://github.com/jabrown93/artwork-uploader-plex/issues/139)) ([eb50aad](https://github.com/jabrown93/artwork-uploader-plex/commit/eb50aadf711de8761de41525b6ef351e6b2ef5c0))
+
+## [1.1.4](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.3...v1.1.4) (2026-09-01)
+
+
+### Bug Fixes
+
+* **deps:** update python:3.14.7 docker digest to 8edbf9e ([228471d](https://github.com/jabrown93/artwork-uploader-plex/commit/228471d96803de98e6bd6a0848bb39017ae4012d))
+* **docker:** restore runtime user and signal handling ([#138](https://github.com/jabrown93/artwork-uploader-plex/issues/138)) ([6d76252](https://github.com/jabrown93/artwork-uploader-plex/commit/6d762528a71e2ac8bdc4bd68241e171523350927))
+
 ## [1.1.4-beta.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.3...v1.1.4-beta.1) (2026-09-01)
 
 

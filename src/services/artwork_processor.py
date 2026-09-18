@@ -38,6 +38,7 @@ class ProcessingCallbacks:
     on_debug: Optional[Callable[[str, str], None]] = None  # (message, context) - for debug messages
     success_counter: Optional[list] = None  # Mutable list to track successful uploads (contains count as single element)
     assets_processed: Optional[list] = None  # Mutable list to track total assets processed (contains count as single element)
+    error_counter: Optional[list] = None  # Mutable list to track failed uploads (contains count as single element)
 
 
 class ArtworkProcessor:
@@ -200,9 +201,11 @@ class ArtworkProcessor:
             results = process_func(artwork)
 
             for result in results:
-                # Track successful uploads (those starting with ✅ or ♻️)
+                # Track successful uploads (those starting with ✅ or ♻️) and failed uploads
                 if callbacks and callbacks.success_counter is not None and (result.startswith('✅') or result.startswith('♻️')):
                     callbacks.success_counter[0] += 1
+                if callbacks and callbacks.error_counter is not None and result.startswith('❌'):
+                    callbacks.error_counter[0] += 1
 
                 # Log the result
                 if callbacks and callbacks.on_log_update:
@@ -229,6 +232,8 @@ class ArtworkProcessor:
                 callbacks.on_log_update(f"⏩ {str(e)}")
 
         except Exception as e:
+            if callbacks and callbacks.error_counter is not None:
+                callbacks.error_counter[0] += 1
             if callbacks and callbacks.on_log_update:
                 callbacks.on_log_update(f"❌ {str(e)}")
             if callbacks and callbacks.on_status_update:

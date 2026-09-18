@@ -39,9 +39,11 @@ import tempfile
 import time
 import zipfile
 from functools import wraps
+from threading import Event
 
 from flask import render_template, send_from_directory, request, redirect, url_for, session
 from flask_socketio import ConnectionRefusedError, disconnect
+from eventlet.semaphore import Semaphore
 from packaging import version
 from plexapi.server import PlexServer
 from logging_config import get_logger
@@ -505,9 +507,41 @@ def setup_socket_handlers(
         sort_key
     )
 
-    # Temporary storage for chunked uploads
-    # Changed from in-memory list to file handles for better memory efficiency with large uploads
+    # Temporary storage for chunked uploads, isolated by Socket.IO connection.
     upload_chunks = {}
+    upload_chunks_lock = Semaphore()
+
+    def cleanup_upload_file(upload, file_name):
+        """Close and remove one upload's temporary file."""
+        try:
+            upload["temp_file"].close()
+        except Exception as close_err:
+            logger.warning(
+                f"Error closing temp file for {file_name}: {close_err}",
+                exc_info=True,
+            )
+
+        temp_path = upload.get("temp_path")
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError as remove_err:
+                logger.warning(
+                    f"Error removing temp file {temp_path} for {file_name}: {remove_err}",
+                    exc_info=True,
+                )
+
+    def cleanup_upload(upload_key):
+        """Discard one pending upload. Caller must hold upload_chunks_lock."""
+        upload = upload_chunks.pop(upload_key, None)
+        if upload is not None:
+            chunks_complete = upload.get("chunks_complete")
+            if chunks_complete is not None:
+                chunks_complete.set()
+            cleanup_upload_file(upload, upload_key[1])
+        return upload
 
     @globals.web_socket.on("connect")
     def handle_connect(auth=None):
@@ -520,6 +554,15 @@ def setup_socket_handlers(
         if not is_session_authenticated(config):
             logger.warning("Refused unauthenticated Socket.IO connection")
             raise ConnectionRefusedError("Authentication required")
+
+    # Cleanup must run even if authentication expired before disconnect.
+    @globals.web_socket.on("disconnect")
+    def handle_disconnect(reason=None):
+        """Discard uploads owned by the disconnecting Socket.IO client."""
+        sid = request.sid
+        with upload_chunks_lock:
+            for upload_key in [key for key in upload_chunks if key[0] == sid]:
+                cleanup_upload(upload_key)
 
     @globals.web_socket.on("debug_mode")
     @socket_login_required
@@ -1045,64 +1088,70 @@ def setup_socket_handlers(
         # basename: fileName is client-supplied and later used as a path component
         # in save_uploaded_file, so a ../ sequence would escape the temp directory.
         file_name = os.path.basename(data["fileName"])
-        chunk_data = data["chunkData"]
-        chunk_index = data["chunkIndex"]
-        total_chunks = data["totalChunks"]
+        upload_key = (request.sid, file_name)
+        chunk_index = data.get("chunkIndex")
 
-        if file_name not in upload_chunks:
-            # Create a temporary file to stream chunks to disk instead of memory
-            temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.upload')
-            upload_chunks[file_name] = {
-                "temp_file": temp_file,
-                "temp_path": temp_file.name,
-                "chunks_received": 0,
-                "total_chunks": total_chunks,
-                "instance": instance
-            }
-
-        # Decode and write chunk directly to disk
+        upload = None
         try:
+            chunk_data = data["chunkData"]
+            chunk_index = int(data["chunkIndex"])
+            total_chunks = int(data["totalChunks"])
+
+            with upload_chunks_lock:
+                # A new first chunk replaces any abandoned upload with the same client/name.
+                if chunk_index == 0:
+                    cleanup_upload(upload_key)
+
+                if upload_key not in upload_chunks:
+                    temp_file = tempfile.NamedTemporaryFile(
+                        mode='wb', delete=False, suffix='.upload')
+                    upload_chunks[upload_key] = {
+                        "temp_file": temp_file,
+                        "temp_path": temp_file.name,
+                        "chunks_received": 0,
+                        "total_chunks": total_chunks,
+                        "instance": instance,
+                        "chunk_indexes": set(),
+                        "decoded_chunks": {},
+                        "chunks_complete": Event(),
+                    }
+
+                upload = upload_chunks[upload_key]
+                if not 0 <= chunk_index < total_chunks:
+                    raise ValueError(f"Invalid chunk index {chunk_index}")
+                if total_chunks != upload["total_chunks"]:
+                    raise ValueError("Chunk count changed during upload")
+                if chunk_index in upload["chunk_indexes"]:
+                    raise ValueError(f"Duplicate chunk index {chunk_index}")
+                upload["chunk_indexes"].add(chunk_index)
+
             decoded_chunk = base64.b64decode(chunk_data)
-            upload_chunks[file_name]["temp_file"].write(decoded_chunk)
-            upload_chunks[file_name]["chunks_received"] += 1
+
+            with upload_chunks_lock:
+                # A replacement upload may have superseded this decode.
+                if upload_chunks.get(upload_key) is not upload:
+                    return
+                upload["decoded_chunks"][chunk_index] = decoded_chunk
+                while upload["chunks_received"] in upload["decoded_chunks"]:
+                    next_chunk = upload["chunks_received"]
+                    upload["temp_file"].write(
+                        upload["decoded_chunks"].pop(next_chunk))
+                    upload["chunks_received"] += 1
+                if upload["chunks_received"] == upload["total_chunks"]:
+                    upload["chunks_complete"].set()
         except Exception as e:
             logger.error(
                 f"Error decoding/writing chunk {chunk_index}: {e}", exc_info=True)
-            # Cleanup temp file and state to avoid resource leaks and partial uploads
-            try:
-                if file_name in upload_chunks:
-                    temp_file_obj = upload_chunks[file_name].get("temp_file")
-                    temp_path = upload_chunks[file_name].get("temp_path")
-                    if temp_file_obj is not None:
-                        try:
-                            temp_file_obj.close()
-                        except Exception as close_err:
-                            logger.warning(
-                                f"Error closing temp file for {file_name}: {close_err}",
-                                exc_info=True,
-                            )
-                    if temp_path and os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except OSError as remove_err:
-                            logger.warning(
-                                f"Error removing temp file {temp_path} for {file_name}: {remove_err}",
-                                exc_info=True,
-                            )
-                    # Remove the upload entry so it does not appear partially complete
-                    del upload_chunks[file_name]
-            except Exception as cleanup_err:
-                logger.error(
-                    f"Error during cleanup after failed chunk {chunk_index} for {file_name}: {cleanup_err}",
-                    exc_info=True,
-                )
+            with upload_chunks_lock:
+                if upload is None or upload_chunks.get(upload_key) is upload:
+                    cleanup_upload(upload_key)
 
     @globals.web_socket.on("upload_complete")
     @socket_login_required
     def handle_upload_complete(data):
         """Finalize the upload once all chunks are received."""
-        # Must match the basename key written by handle_upload_chunk.
         file_name = os.path.basename(data.get("fileName") or "")
+        upload_key = (request.sid, file_name)
         filters = data.get("filters")
         plex_year = data.get("plex_year")
         plex_title = data.get("plex_title")
@@ -1112,15 +1161,43 @@ def setup_socket_handlers(
 
         instance = Instance(data.get("instance_id"), "web")
 
-        if file_name in upload_chunks and upload_chunks[file_name]["chunks_received"] == int(
-                upload_chunks[file_name]["total_chunks"]
-        ):
+        with upload_chunks_lock:
+            upload = upload_chunks.get(upload_key)
+            wait_for_chunks = (
+                upload["chunks_complete"]
+                if upload
+                and len(upload["chunk_indexes"]) == upload["total_chunks"]
+                and upload["chunks_received"] != upload["total_chunks"]
+                else None
+            )
+
+        if wait_for_chunks is not None:
+            wait_for_chunks.wait()
+
+        with upload_chunks_lock:
+            current_upload = upload_chunks.get(upload_key)
+            upload = current_upload if current_upload is upload else None
+            chunks_received = upload["chunks_received"] if upload else 0
+            expected_chunks = upload["total_chunks"] if upload else 0
+            if not upload or chunks_received != expected_chunks:
+                if upload is not None:
+                    cleanup_upload(upload_key)
+                upload = None
+            else:
+                upload_chunks.pop(upload_key)
+
+        if upload is None:
             debug_me(
-                f"Upload complete for {file_name}, processing file...", "handle_upload_complete")
+                f'Upload complete event received for {file_name}, but with '
+                f'{chunks_received} of {expected_chunks}, some chunks are missing.',
+                "handle_upload_complete"
+            )
+            return
 
-            # Close the temp file before processing
-            upload_chunks[file_name]["temp_file"].close()
-
+        debug_me(
+            f"Upload complete for {file_name}, processing file...", "handle_upload_complete")
+        try:
+            upload["temp_file"].close()
             save_uploaded_file(
                 instance,
                 file_name,
@@ -1128,47 +1205,13 @@ def setup_socket_handlers(
                 filters,
                 plex_title,
                 plex_year,
-                upload_chunks,
+                upload["temp_path"],
                 filename_pattern,
                 check_image_orientation,
                 sort_key
             )
-
-            # Cleanup after saving the file
-            try:
-                temp_path = upload_chunks[file_name]["temp_path"]
-                # Delete temp file if it still exists
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except OSError as remove_err:
-                        logger.error(
-                            f"Error removing temp file {temp_path}: {remove_err}")
-                del upload_chunks[file_name]
-            except (KeyError, OSError) as e:
-                debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
-        else:
-            chunks_received = upload_chunks[file_name]["chunks_received"] if file_name in upload_chunks else 0
-            expected_chunks = upload_chunks[file_name]["total_chunks"] if file_name in upload_chunks else 0
-            debug_me(
-                f'Upload complete event received for {file_name}, but with '
-                f'{chunks_received} of {expected_chunks}, some chunks are missing.',
-                "handle_upload_complete"
-            )
-            try:
-                # Clean up temp file
-                if file_name in upload_chunks:
-                    upload_chunks[file_name]["temp_file"].close()
-                    temp_path = upload_chunks[file_name]["temp_path"]
-                    if os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except OSError as remove_err:
-                            logger.error(
-                                f"Error removing temp file {temp_path}: {remove_err}")
-                del upload_chunks[file_name]
-            except (KeyError, OSError) as e:
-                debug_me(f"Error during cleanup: {e}", "handle_upload_complete")
+        finally:
+            cleanup_upload_file(upload, file_name)
 
 
 def save_uploaded_file(
@@ -1178,7 +1221,7 @@ def save_uploaded_file(
         filters: list,
         plex_title: str,
         plex_year: int,
-        upload_chunks: dict,
+        temp_upload_path: str,
         filename_pattern: re.Pattern,
         check_image_orientation_func,
         sort_key_func
@@ -1193,15 +1236,13 @@ def save_uploaded_file(
         filters: List of filters to apply
         plex_title: Optional title override
         plex_year: Optional year override
-        upload_chunks: Dictionary with temp file info
+        temp_upload_path: Path to the completed temporary upload
         filename_pattern: Regex pattern for validating filenames
         check_image_orientation_func: Function to check image orientation
         sort_key_func: Function to generate sort keys
     """
     from artwork_uploader import process_uploaded_artwork
 
-    # Get the temp file path that was written during chunk upload
-    temp_upload_path = upload_chunks[file_name]["temp_path"]
     debug_me(
         f"Processing uploaded file {file_name} from temp path: {temp_upload_path}", "save_uploaded_file")
 
@@ -1209,45 +1250,25 @@ def save_uploaded_file(
     temp_zip_folder = tempfile.mkdtemp()
     temp_zip_path = os.path.join(temp_zip_folder, file_name)
 
-    # Move/rename the upload temp file to processing location
     try:
         shutil.move(temp_upload_path, temp_zip_path)
-    except OSError as e:
-        debug_me(
-            f"Failed to move uploaded file from {temp_upload_path} to {temp_zip_path}: {e}",
-            "save_uploaded_file",
+        debug_me(f"Moved uploaded file to: {temp_zip_path}", "save_uploaded_file")
+
+        extracted_files, skipped, zip_title, zip_author, zip_source = extract_and_list_zip(
+            instance,
+            temp_zip_path,
+            filename_pattern,
+            filters,
+            plex_title,
+            plex_year,
+            check_image_orientation_func,
+            sort_key_func
         )
-        # Best-effort cleanup of the temporary zip folder created for processing
-        try:
-            os.rmdir(temp_zip_folder)
-        except Exception:
-            # Ignore cleanup errors here to avoid masking the original exception
-            pass
-        # Re-raise so callers can handle the failure as before
-        raise
-
-    debug_me(f"Moved uploaded file to: {temp_zip_path}", "save_uploaded_file")
-
-    extracted_files, skipped, zip_title, zip_author, zip_source = extract_and_list_zip(
-        instance,
-        temp_zip_path,
-        filename_pattern,
-        filters,
-        plex_title,
-        plex_year,
-        check_image_orientation_func,
-        sort_key_func
-    )
-
-    # Delete the ZIP file after extraction
-    try:
-        os.remove(temp_zip_path)
-        os.rmdir(temp_zip_folder)
+    finally:
+        shutil.rmtree(temp_zip_folder, ignore_errors=True)
         debug_me(
-            f"Deleted temporary ZIP file: {temp_zip_path}", "save_uploaded_file")
-    except Exception as e:
-        debug_me(
-            f"Error deleting temporary ZIP file: {e}", "save_uploaded_file")
+            f"{'Deleted' if not os.path.exists(temp_zip_folder) else 'Failed to delete'} "
+            f"temporary ZIP file: {temp_zip_path}", "save_uploaded_file")
 
     process_uploaded_artwork(instance, extracted_files, skipped, zip_title, zip_author, zip_source,
                              options, filters, plex_title, plex_year)
