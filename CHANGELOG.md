@@ -1,3 +1,10 @@
+## [1.1.10](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.9...v1.1.10) (2026-09-26)
+
+
+### Bug Fixes
+
+* **release:** build and sign image in this repo's workflow ([#143](https://github.com/jabrown93/artwork-uploader-plex/issues/143)) ([4797f2f](https://github.com/jabrown93/artwork-uploader-plex/commit/4797f2f8326e85de1863f41e993408869aa2968b)), closes [jabrown93/homelab#3190](https://github.com/jabrown93/homelab/issues/3190)
+
 ## [1.1.9](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.8...v1.1.9) (2026-09-21)
 
 
