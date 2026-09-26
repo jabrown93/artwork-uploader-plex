@@ -28,13 +28,10 @@ concurrency:
 
 jobs:
   release:
-    uses: jabrown93/ci/.github/workflows/docker-release.yml@ae4c0bc7c75c6d86853aad5dbc830dfa6607c446 # workflows-v2.1.4
+    uses: jabrown93/ci/.github/workflows/docker-release.yml@b70e41bf036b757899993918c1788f38c3c472fc # workflows-v3.0.0
     permissions:
       contents: write
-      packages: write
-      id-token: write
     with:
-      image: ghcr.io/jabrown93/artwork-uploader
       # .releaserc.js's @semantic-release/exec plugin isn't in the action's
       # bundled set (commit-analyzer/release-notes-generator/changelog/git/github).
       extra-plugins: |
@@ -42,3 +39,27 @@ jobs:
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+
+  image:
+    name: Build & push image
+    needs: release
+    # Must stay in THIS repo's own workflow file, not inside docker-release.yml
+    # (a public reusable workflow every jabrown93 repo calls): cosign's keyless
+    # signing asks Fulcio for a cert whose SAN is the OIDC identity of the
+    # workflow FILE that requested the token. Running the build/push/sign step
+    # here makes that SAN this repo's own path, which is what Kyverno's
+    # verify-ghcr-images policy trusts -- inside docker-release.yml every
+    # caller would get the identical jabrown93/ci SAN instead.
+    if: ${{ !cancelled() && needs.release.outputs.published == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: jabrown93/ci/actions/docker-image@3b3f9d74d9c06b48e8f7e1cc9ae8bacf927ca1b4 # docker-image-v1.0.0
+        with:
+          image: ghcr.io/jabrown93/artwork-uploader
+          version: ${{ needs.release.outputs.version }}
+          channel: ${{ needs.release.outputs.channel }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
