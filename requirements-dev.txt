@@ -68,7 +68,7 @@ joserfc==1.7.5
     # via authlib
 librt==0.15.0
     # via mypy
-markdown==3.10.3
+markdown==3.11
     # via apprise
 markupsafe==3.0.3
     # via
