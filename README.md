@@ -416,14 +416,15 @@ source .venv/bin/activate  # macOS/Linux
 .venv\Scripts\activate     # Windows
 
 # Then run normally
-python artwork_uploader.py
+./run.sh                        # macOS/Linux
+python src\artwork_uploader.py  # Windows
 ```
 
 **If NOT using a virtual environment:**
 ```bash
-python artwork_uploader.py
-# or
-python3 artwork_uploader.py
+./run.sh                        # macOS/Linux
+python3 src/artwork_uploader.py # macOS/Linux, if `python` isn't on your PATH
+python src\artwork_uploader.py  # Windows
 ```
 
 **💡 Tip:** If you get dependency errors, you're probably not using the virtual environment. See [Troubleshooting](#troubleshooting) below.
@@ -438,17 +439,12 @@ The script supports various command-line arguments for flexible use.
    Provide a link directly to set posters from a single set or boxset:
 
 ```bash
-   python artwork_uploader.py https://mediux.pro/sets/9242
+   ./run.sh https://mediux.pro/sets/9242
 
    # Or for a boxset (collection of multiple sets)
-   python artwork_uploader.py https://mediux.pro/boxsets/1153
-
-   or, depending on your environment
-
-   python3 artwork_uploader.py https://mediux.pro/sets/9242
-   python3 artwork_uploader.py https://mediux.pro/boxsets/1153
-
+   ./run.sh https://mediux.pro/boxsets/1153
 ```
+
 #### Optional command line arguments
 
 ```--add-sets``` will also parse any additional sets when using the Poster DB 
@@ -496,8 +492,8 @@ The script supports various command-line arguments for flexible use.
    Import multiple links from a .txt file using the bulk argument:
    
 ```bash
-   python artwork_uploader.py bulk bulk_import.txt
-   ```
+   ./run.sh bulk bulk_import.txt
+```
 
    - The .txt file should contain one URL per line. Lines starting with # or // will be ignored as comments.
 
@@ -550,7 +546,8 @@ source .venv/bin/activate  # On macOS/Linux
 pip install -r requirements.txt
 
 # Run the application
-python artwork_uploader.py
+./run.sh                        # macOS/Linux
+python src\artwork_uploader.py  # Windows
 ```
 
 **IMPORTANT: Always activate the virtual environment before running!**
@@ -559,14 +556,14 @@ If you created a `.venv` but are still getting import errors, you're likely usin
 
 ```bash
 # Wrong - uses system Python ❌
-python3 artwork_uploader.py
+python3 src/artwork_uploader.py
 
 # Right - activate first, then run ✅
 source .venv/bin/activate
-python artwork_uploader.py
+./run.sh
 
 # Alternative - run directly from venv ✅
-.venv/bin/python artwork_uploader.py
+PYTHONPATH=src .venv/bin/python src/artwork_uploader.py
 ```
 
 ### "Cannot access localhost:4567" or "Server won't start"
