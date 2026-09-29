@@ -257,6 +257,32 @@ class TestResolvePlexTitleMemoization:
         assert file_list[1]["media"] == "TV Show"
         assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020), ("Some Show", 2020)]
 
+    def test_fallback_hit_after_variant_error_not_cached_and_retries(self, tmp_path):
+        # The exact filename-derived title errors, then the colon-restored
+        # variant hits. Keep that hit for the first entry, but do not cache it:
+        # a retry after Plex recovers may resolve the exact title differently.
+        plex_stub = StubPlexConnector(
+            responses_by_title={
+                "Show: Subtitle": ("TV Show", 7, "Show: Subtitle", 2019),
+            },
+            error_calls_by_title={"Show_ Subtitle": 1},
+        )
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Show_ Subtitle (2019) - S01 E01.jpg": b"fake",
+                "Show_ Subtitle (2019) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert [item["media"] for item in file_list] == ["TV Show", "TV Show"]
+        assert plex_stub.calls == [
+            ("Show_ Subtitle", 2019),
+            ("Show: Subtitle", 2019),
+            ("Show_ Subtitle", 2019),
+            ("Show: Subtitle", 2019),
+        ]
+
     def test_hit_after_library_error_not_cached_and_next_entry_requeries(self, tmp_path):
         class ErrorThenMissLibrary:
             title = "Movies"

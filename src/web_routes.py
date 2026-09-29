@@ -1399,10 +1399,10 @@ def _resolve_plex_title(
                 candidate_title = short_title
                 break
 
-    if media_type is None and errored:
+    if errored:
         raise PlexLookupError(
             f"'{original_title} ({lookup_year})' resolution incomplete: at least one variant errored",
-            partial_result=(None, None, None, None, candidate_title),
+            partial_result=(media_type, tmdb_id, title, year, candidate_title),
         )
 
     return media_type, tmdb_id, title, year, candidate_title
