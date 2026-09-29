@@ -618,7 +618,12 @@ def setup_socket_handlers(
             notify_web(Instance(broadcast=True), "backend_restarting", {})
 
             # Restart the app
-            os.execlp(python_cmd, python_cmd, "artwork_uploader.py")
+            # Absolute path: cwd is not src/ (Docker WORKDIR is /app,
+            # run.sh runs from repo root).
+            entrypoint = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "artwork_uploader.py"
+            )
+            os.execlp(python_cmd, python_cmd, entrypoint)
 
         except Exception as e:
             update_status(Instance(broadcast=True),
