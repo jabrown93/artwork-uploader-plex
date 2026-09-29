@@ -810,7 +810,8 @@ Here are some areas where contributions would be particularly valuable:
 
 5. **Run the application**:
    ```bash
-   ./run.sh
+   ./run.sh                        # macOS/Linux
+   python src\artwork_uploader.py  # Windows
    ```
 
 6. **Access the web UI**:

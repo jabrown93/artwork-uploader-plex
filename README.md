@@ -416,12 +416,15 @@ source .venv/bin/activate  # macOS/Linux
 .venv\Scripts\activate     # Windows
 
 # Then run normally
-./run.sh
+./run.sh                        # macOS/Linux
+python src\artwork_uploader.py  # Windows
 ```
 
 **If NOT using a virtual environment:**
 ```bash
-./run.sh
+./run.sh                        # macOS/Linux
+python3 src/artwork_uploader.py # macOS/Linux, if `python` isn't on your PATH
+python src\artwork_uploader.py  # Windows
 ```
 
 **💡 Tip:** If you get dependency errors, you're probably not using the virtual environment. See [Troubleshooting](#troubleshooting) below.
