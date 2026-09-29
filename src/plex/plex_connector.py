@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import plexapi.exceptions
 import requests
 from core.config import Config
-from core.exceptions import PlexConnectorException, LibraryNotFound
+from core.exceptions import PlexConnectorException, LibraryNotFound, PlexLookupError
 from models.artwork_types import AnyArtwork
 from models.options import Options
 from plexapi.library import MovieSection, ShowSection
@@ -416,6 +416,11 @@ class PlexConnector:
             - tmdb_id (int | None): The TMDb ID if found, else None
             - found_title (str | None): The exact title found in Plex, else None
             - found_year (int | None): The year of the title found in Plex, else None
+
+        Raises:
+            PlexLookupError: no library produced a hit and at least one library
+                raised, so the miss is not definitive and must not be cached
+                as a genuine "not found".
         """
 
         if not self.plex:
@@ -427,6 +432,9 @@ class PlexConnector:
             [(lib, "Movie") for lib in self.movie_libraries] +
             [(lib, "TV Show") for lib in self.tv_libraries]
         )
+        # Set when a library raises, so a lookup that never got a clean
+        # answer isn't confused with (and cached as) a genuine miss.
+        errored = False
         for library, media_type in libraries_with_type:
             try:
                 search_kwargs: dict[str, Union[str, int]] = {'title': title}
@@ -460,10 +468,16 @@ class PlexConnector:
                                  "PlexConnector/movie_or_show")
                     return media_type, tmdb_id, found_title, found_year
             except Exception as e:
+                errored = True
                 debug_me(
                     f"Error searching for movie in library '{library.title}': {e}", "PlexConnector/movie_or_show")
                 pass
 
         debug_me(f"'{title} ({year})' not found in any library",
                  "PlexConnector/movie_or_show")
+        if errored:
+            raise PlexLookupError(
+                f"'{title} ({year})' lookup incomplete: at least one library raised an error",
+                partial_result=(None, None, None, None),
+            )
         return None, None, None, None

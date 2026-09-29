@@ -59,6 +59,14 @@ class LibraryNotFound(PlexError):
     pass
 
 
+class PlexLookupError(PlexError):
+    """A Plex lookup found nothing definitive because at least one library raised."""
+
+    def __init__(self, message: str, partial_result: tuple) -> None:
+        super().__init__(message)
+        self.partial_result = partial_result
+
+
 # ============================================================================
 # Scraper errors
 # ============================================================================

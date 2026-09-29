@@ -14,6 +14,7 @@ import pytest
 import web_routes
 from core import globals
 from core.config import Config
+from core.exceptions import PlexLookupError
 from models.instance import Instance
 
 pytestmark = pytest.mark.unit
@@ -22,15 +23,27 @@ FILENAME_PATTERN = re.compile(r'^[^/]+(?:\.jpg|\.jpeg|\.png)$', re.IGNORECASE)
 
 
 class StubPlexConnector:
-    """Stub for globals.plex; movie_or_show responses are queued per-call."""
+    """Stub for globals.plex; movie_or_show responses are queued per-call.
 
-    def __init__(self, responses_by_title=None, default=(None, None, None, None)):
+    `error_calls_by_title` raises `PlexLookupError` for the first N calls
+    made for a given title (simulating a transient `library.search` failure)
+    before falling back to the normal queued response.
+    """
+
+    def __init__(self, responses_by_title=None, default=(None, None, None, None), error_calls_by_title=None):
         self.responses_by_title = responses_by_title or {}
         self.default = default
         self.calls = []
+        self._errors_remaining_by_title = dict(error_calls_by_title or {})
 
     def movie_or_show(self, title, year=None):
         self.calls.append((title, year))
+        remaining = self._errors_remaining_by_title.get(title, 0)
+        if remaining > 0:
+            self._errors_remaining_by_title[title] = remaining - 1
+            raise PlexLookupError(
+                f"transient failure for '{title}'", partial_result=(None, None, None, None)
+            )
         return self.responses_by_title.get(title, self.default)
 
 
@@ -215,6 +228,31 @@ class TestResolvePlexTitleMemoization:
         _extract(tmp_path, "export1.zip", files, plex_stub=plex_stub)
         _extract(tmp_path, "export2.zip", files, plex_stub=plex_stub)
         assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020)]
+
+    def test_transient_error_not_cached_next_entry_retries_and_can_succeed(self, tmp_path):
+        # "Some Show" is a 2-word title, so the word-stripping fallback never
+        # fires (min_words == len(words)); the direct lookup and the (no-op)
+        # colon-substitution retry are the only 2 attempts _resolve_plex_title
+        # makes. Both raise a transient PlexLookupError for the first entry,
+        # so nothing definitive was found and the miss must not be cached.
+        # The second entry with the same (title, year) must retry from
+        # scratch and can still succeed once Plex has recovered.
+        plex_stub = StubPlexConnector(
+            default=("TV Show", 1, "Some Show", 2020),
+            error_calls_by_title={"Some Show": 2},
+        )
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Some Show (2020) - S01 E01.jpg": b"fake",
+                "Some Show (2020) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert len(file_list) == 2
+        assert file_list[0]["media"] == "unavailable"
+        assert file_list[1]["media"] == "TV Show"
+        assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020), ("Some Show", 2020)]
 
 
 class TestOrientationReclassification:
