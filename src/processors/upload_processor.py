@@ -37,6 +37,7 @@ class UploadProcessor:
         self._sonarr_series_cache: dict = {}
         self._plex_item_cache: dict = {}
         self._show_structure_cache: dict = {}
+        self._plex_cache_generation = self._current_plex_state_generation()
         self._recompute_options_dependent_state()
 
     def _recompute_options_dependent_state(self) -> None:
@@ -53,6 +54,20 @@ class UploadProcessor:
     def set_options(self, options: Options) -> None:
         self.options = options
         self._recompute_options_dependent_state()
+
+    def _current_plex_state_generation(self) -> int:
+        """Return Plex's connection generation, treating lightweight test doubles as zero."""
+        generation = getattr(self.plex, "state_generation", 0)
+        return generation if isinstance(generation, int) else 0
+
+    def _invalidate_plex_caches_after_reconnect(self) -> None:
+        """Drop cached Plex objects after reconnect replaces the server and library handles."""
+        generation = self._current_plex_state_generation()
+        if generation == self._plex_cache_generation:
+            return
+        self._plex_item_cache.clear()
+        self._show_structure_cache.clear()
+        self._plex_cache_generation = generation
 
     def _get_show_structure(self, tv_show) -> dict:
         """Lazily caches a show's seasons/episodes by object identity, since one MediUX
@@ -100,6 +115,7 @@ class UploadProcessor:
         metadata service, so repeating it per season/episode entry is especially costly.
         A PlexLookupError means at least one library errored transiently rather than
         confirming a miss, so its partial result is returned but never cached."""
+        self._invalidate_plex_caches_after_reconnect()
         cache_key = (item_type, artwork.get("tmdb_id"), artwork.get("title"), artwork.get("year"))
         if cache_key not in self._plex_item_cache:
             try:

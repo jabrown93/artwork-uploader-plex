@@ -30,6 +30,12 @@ class PlexConnector:
         self._state_lock = Lock()
         self.options: Options = Options()
 
+    @property
+    def state_generation(self) -> int:
+        """Return the connection generation for consumers caching Plex objects."""
+        with self._state_lock:
+            return self._state_generation
+
     def set_options(self, options: Options) -> None:
         self.options = options
 

@@ -32,6 +32,7 @@ class CountingFakePlex:
         self._items = items
         self._libraries = libraries
         self.find_in_library_calls = 0
+        self.state_generation = 0
 
     def find_in_library(self, item_type, artwork):
         self.find_in_library_calls += 1
@@ -45,6 +46,7 @@ class ScriptedFakePlex:
     def __init__(self, script):
         self._script = list(script)
         self.find_in_library_calls = 0
+        self.state_generation = 0
 
     def find_in_library(self, item_type, artwork):
         self.find_in_library_calls += 1
@@ -235,6 +237,21 @@ class TestFindInLibraryMemoization:
         proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
 
         assert plex.find_in_library_calls == 2
+        assert len(capture_kometa_saves) == 2
+
+    def test_reconnect_invalidates_plex_object_caches(self, configured, capture_kometa_saves):
+        """A reconnect swaps Plex's server and library handles, so the next entry
+        must re-query instead of serving a cached item or its cached show structure."""
+        show = _full_series_show(num_seasons=1, episodes_per_season=1)
+        plex = CountingFakePlex(items=[show], libraries=["TV Shows"])
+        proc = _processor(plex)
+
+        proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+        plex.state_generation += 1
+        proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+
+        assert plex.find_in_library_calls == 2
+        assert show.seasons_calls == 2
         assert len(capture_kometa_saves) == 2
 
     def test_new_run_requeries_plex(self, configured, capture_kometa_saves):
