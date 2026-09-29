@@ -55,15 +55,8 @@ class UploadProcessor:
         self._recompute_options_dependent_state()
 
     def _get_show_structure(self, tv_show) -> dict:
-        """
-        Lazily caches a show's season list and per-season episode lists, keyed by the
-        resolved Show object's identity. A MediUX full-series set produces one artwork
-        entry per season/episode for a single show; without this cache, every entry
-        re-runs tv_show.seasons() and Season.episodes() for checks that only need to
-        reflect Plex's state once per run. Object identity is stable across entries
-        because _find_in_library_cached returns the same cached Show instance for
-        repeat lookups of the same show within a run.
-        """
+        """Lazily caches a show's seasons/episodes by object identity, since one MediUX
+        full-series set produces many artwork entries for the same show."""
         key = id(tv_show)
         structure = self._show_structure_cache.get(key)
         if structure is None:
@@ -102,14 +95,9 @@ class UploadProcessor:
             f"Episode {episode_number} of season {season_number} not found for show '{tv_show.title}'")
 
     def _find_in_library_cached(self, item_type: str, artwork: Union[MovieArtwork, TVArtwork]):
-        """
-        Looks up (and memoizes, including misses) the Plex library item(s) for this
-        artwork's tmdb_id/title/year. A MediUX full-series set re-runs this lookup once
-        per season/episode entry for what is really a single show; PlexConnector's
-        getGuid() call is especially costly here since a tmdb:// GUID takes plexapi's
-        slow path that has Plex query its remote metadata service. Mirrors
-        _sonarr_series_cache.
-        """
+        """Looks up (and memoizes, including misses) the Plex item for this artwork's
+        tmdb_id/title/year; a tmdb:// GUID lookup has Plex query its remote metadata
+        service, so repeating it per season/episode entry is especially costly."""
         cache_key = (item_type, artwork.get("tmdb_id"), artwork.get("title"), artwork.get("year"))
         if cache_key not in self._plex_item_cache:
             self._plex_item_cache[cache_key] = self.plex.find_in_library(item_type, artwork)
