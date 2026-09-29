@@ -1,3 +1,10 @@
+## [1.1.11](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.10...v1.1.11) (2026-09-29)
+
+
+### Performance Improvements
+
+* **plex:** memoize Plex show/season/episode lookups in UploadProcessor ([#146](https://github.com/jabrown93/artwork-uploader-plex/issues/146)) ([0ed947f](https://github.com/jabrown93/artwork-uploader-plex/commit/0ed947fa05c20d95aea29daaf7b14af73ea5c2be)), closes [#132](https://github.com/jabrown93/artwork-uploader-plex/issues/132)
+
 ## [1.1.10](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.9...v1.1.10) (2026-09-26)
 
 
