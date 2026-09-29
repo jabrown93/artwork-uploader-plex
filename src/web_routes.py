@@ -25,7 +25,7 @@ from core.constants import (
 )
 from core.config import Config
 from core.enums import FilterType
-from core.exceptions import InvalidUrl, InvalidFlag, ConfigurationError
+from core.exceptions import InvalidUrl, InvalidFlag, ConfigurationError, PlexLookupError
 from core import globals
 import base64
 import os
@@ -1337,15 +1337,48 @@ def _resolve_plex_title(
     Returns (media_type, tmdb_id, found_title, found_year, resolved_title),
     where resolved_title is the last candidate string actually tried
     (i.e. the one that matched, once media_type is not None).
+
+    Raises:
+        PlexLookupError: a variant hit only after an earlier library raised
+            (partial_result carries that hit and stops the cascade early,
+            since it isn't a fully-trustworthy definitive match), or every
+            variant missed or errored with at least one erroring (partial_result
+            is the all-None 5-tuple). Either way the result must not be cached.
     """
-    media_type, tmdb_id, title, year = globals.plex.movie_or_show(original_title, lookup_year)
+    errored = False
+
+    def _try(candidate: str) -> tuple[Optional[str], Optional[int], Optional[str], Optional[int]]:
+        """Run one movie_or_show attempt, tracking whether it errored.
+
+        A transient error with no hit shouldn't stop the remaining variants
+        from being tried, so it's swallowed here and remembered. A hit that
+        arrived only after some other library already raised isn't
+        cacheable either -- movie_or_show already refused to return it as
+        definitive -- so that case is re-raised immediately, short-circuiting
+        the rest of the cascade instead of trying looser variants.
+        """
+        nonlocal errored
+        try:
+            return globals.plex.movie_or_show(candidate, lookup_year)
+        except PlexLookupError as e:
+            errored = True
+            hit_media_type, hit_tmdb_id, hit_title, hit_year = e.partial_result
+            if hit_media_type is not None:
+                raise PlexLookupError(
+                    f"'{original_title} ({lookup_year})' resolution incomplete: a hit for "
+                    f"'{candidate}' followed an earlier library error",
+                    partial_result=(hit_media_type, hit_tmdb_id, hit_title, hit_year, candidate),
+                ) from None
+            return None, None, None, None
+
+    media_type, tmdb_id, title, year = _try(original_title)
     candidate_title = original_title
 
     if media_type is None:
         # ZIP filenames replace colons with underscores or hyphens, and drop apostrophes/ellipses
         candidate_title = re.sub(r'_(?=\s)', ':', original_title)
         candidate_title = re.sub(r'\s-\s', ': ', candidate_title).replace('...', '').strip()
-        media_type, tmdb_id, title, year = globals.plex.movie_or_show(candidate_title, lookup_year)
+        media_type, tmdb_id, title, year = _try(candidate_title)
 
     if media_type is None:
         # ZIP filenames may strip accented chars (e.g. "Pokémon" → "Pokemon" or "Pokmon")
@@ -1356,7 +1389,7 @@ def _resolve_plex_title(
         )
         if folded != candidate_title:
             candidate_title = folded
-            media_type, tmdb_id, title, year = globals.plex.movie_or_show(candidate_title, lookup_year)
+            media_type, tmdb_id, title, year = _try(candidate_title)
 
     if media_type is None and lookup_year is not None:
         # Fallback: try progressively shorter titles for any remaining mismatch
@@ -1366,10 +1399,16 @@ def _resolve_plex_title(
         min_words = max(2, len(words) - max_strip)
         for end in range(len(words) - 1, min_words - 1, -1):
             short_title = ' '.join(words[:end])
-            media_type, tmdb_id, title, year = globals.plex.movie_or_show(short_title, lookup_year)
+            media_type, tmdb_id, title, year = _try(short_title)
             if media_type is not None:
                 candidate_title = short_title
                 break
+
+    if errored:
+        raise PlexLookupError(
+            f"'{original_title} ({lookup_year})' resolution incomplete: at least one variant errored",
+            partial_result=(media_type, tmdb_id, title, year, candidate_title),
+        )
 
     return media_type, tmdb_id, title, year, candidate_title
 
@@ -1460,6 +1499,11 @@ def extract_and_list_zip(
         ]
         total_files_in_zip = len(zip_infos)
 
+        # One ZIP usually repeats a single (title, year); a miss can cost
+        # several Plex library scans. Function-scoped so it can't go stale
+        # across imports.
+        resolve_cache: dict[tuple[str, Optional[int]], tuple] = {}
+
         update_status(instance, "Extracting ZIP file...", "info", sticky=True, spinner=True)
         for n, zip_info in enumerate(zip_infos, 1):
             filename = os.path.basename(zip_info.filename)
@@ -1501,8 +1545,19 @@ def extract_and_list_zip(
                         artwork["tmdb_id"] = None
                     else:
                         lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
-                        media_type, tmdb_id, title, year, candidate_title = _resolve_plex_title(
-                            original_title, lookup_year)
+                        cache_key = (original_title, lookup_year)
+                        if cache_key in resolve_cache:
+                            media_type, tmdb_id, title, year, candidate_title = resolve_cache[cache_key]
+                        else:
+                            try:
+                                result = _resolve_plex_title(original_title, lookup_year)
+                            except PlexLookupError as e:
+                                # Transient failure: don't cache it, so the next
+                                # matching file in the ZIP retries from scratch.
+                                media_type, tmdb_id, title, year, candidate_title = e.partial_result
+                            else:
+                                resolve_cache[cache_key] = result
+                                media_type, tmdb_id, title, year, candidate_title = result
                         artwork["media"] = media_type if media_type else "unavailable"
                         artwork["title"] = title if title and title != candidate_title else candidate_title
                         artwork["tmdb_id"] = tmdb_id

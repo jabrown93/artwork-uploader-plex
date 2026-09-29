@@ -7,6 +7,7 @@ disk, injected orientation/sort callables, and a stub Plex connector.
 
 import os
 import re
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -14,7 +15,9 @@ import pytest
 import web_routes
 from core import globals
 from core.config import Config
+from core.exceptions import PlexLookupError
 from models.instance import Instance
+from plex.plex_connector import PlexConnector
 
 pytestmark = pytest.mark.unit
 
@@ -22,15 +25,28 @@ FILENAME_PATTERN = re.compile(r'^[^/]+(?:\.jpg|\.jpeg|\.png)$', re.IGNORECASE)
 
 
 class StubPlexConnector:
-    """Stub for globals.plex; movie_or_show responses are queued per-call."""
+    """Stub for globals.plex; movie_or_show responses are queued per-call.
 
-    def __init__(self, responses_by_title=None, default=(None, None, None, None)):
+    `error_calls_by_title` raises a miss-shaped `PlexLookupError` for the
+    first N calls made for a given title (simulating every library either
+    missing or raising), before falling back to the normal queued response.
+    """
+
+    def __init__(self, responses_by_title=None, default=(None, None, None, None),
+                 error_calls_by_title=None):
         self.responses_by_title = responses_by_title or {}
         self.default = default
         self.calls = []
+        self._errors_remaining_by_title = dict(error_calls_by_title or {})
 
     def movie_or_show(self, title, year=None):
         self.calls.append((title, year))
+        remaining = self._errors_remaining_by_title.get(title, 0)
+        if remaining > 0:
+            self._errors_remaining_by_title[title] = remaining - 1
+            raise PlexLookupError(
+                f"transient failure for '{title}'", partial_result=(None, None, None, None)
+            )
         return self.responses_by_title.get(title, self.default)
 
 
@@ -168,6 +184,147 @@ class TestPlexTitleResolutionCascade:
         )
         assert file_list[0]["media"] == "Collection"
         assert plex_stub.calls == []
+
+
+class TestResolvePlexTitleMemoization:
+    """A ZIP entry per episode repeats the same (title, year); resolution should run once."""
+
+    def test_repeated_title_year_resolved_once_on_hit(self, tmp_path):
+        plex_stub = StubPlexConnector(default=("TV Show", 1, "Some Show", 2020))
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Some Show (2020) - S01 E01.jpg": b"fake",
+                "Some Show (2020) - S01 E02.jpg": b"fake",
+                "Some Show (2020) - S01 E03.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert len(file_list) == 3
+        assert all(item["media"] == "TV Show" for item in file_list)
+        assert plex_stub.calls == [("Some Show", 2020)]
+
+    def test_repeated_title_year_resolved_once_on_miss(self, tmp_path):
+        # The miss path is the expensive one (full cascade through every
+        # fallback), so it must be cached too, not just successful hits.
+        plex_stub = StubPlexConnector(default=(None, None, None, None))
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Unknown Show (2020) - S01 E01.jpg": b"fake",
+                "Unknown Show (2020) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert len(file_list) == 2
+        assert all(item["media"] == "unavailable" for item in file_list)
+        # Direct lookup and the colon-substitution fallback each fire once per
+        # distinct (title, year) despite two entries sharing it (accent-folding
+        # is skipped here since "Unknown Show" has no accented chars to fold).
+        assert plex_stub.calls == [("Unknown Show", 2020)] * 2
+
+    def test_second_import_run_re_resolves(self, tmp_path):
+        # The cache is scoped to a single extract_and_list_zip call; a fresh
+        # import run must not reuse stale results from a previous one.
+        plex_stub = StubPlexConnector(default=("TV Show", 1, "Some Show", 2020))
+        files = {"Some Show (2020) - S01 E01.jpg": b"fake"}
+        _extract(tmp_path, "export1.zip", files, plex_stub=plex_stub)
+        _extract(tmp_path, "export2.zip", files, plex_stub=plex_stub)
+        assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020)]
+
+    def test_transient_error_not_cached_next_entry_retries_and_can_succeed(self, tmp_path):
+        # "Some Show" is a 2-word title, so the word-stripping fallback never
+        # fires (min_words == len(words)); the direct lookup and the (no-op)
+        # colon-substitution retry are the only 2 attempts _resolve_plex_title
+        # makes. Both raise a transient PlexLookupError for the first entry,
+        # so nothing definitive was found and the miss must not be cached.
+        # The second entry with the same (title, year) must retry from
+        # scratch and can still succeed once Plex has recovered.
+        plex_stub = StubPlexConnector(
+            default=("TV Show", 1, "Some Show", 2020),
+            error_calls_by_title={"Some Show": 2},
+        )
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Some Show (2020) - S01 E01.jpg": b"fake",
+                "Some Show (2020) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert len(file_list) == 2
+        assert file_list[0]["media"] == "unavailable"
+        assert file_list[1]["media"] == "TV Show"
+        assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020), ("Some Show", 2020)]
+
+    def test_fallback_hit_after_variant_error_not_cached_and_retries(self, tmp_path):
+        # The exact filename-derived title errors, then the colon-restored
+        # variant hits. Keep that hit for the first entry, but do not cache it:
+        # a retry after Plex recovers may resolve the exact title differently.
+        plex_stub = StubPlexConnector(
+            responses_by_title={
+                "Show: Subtitle": ("TV Show", 7, "Show: Subtitle", 2019),
+            },
+            error_calls_by_title={"Show_ Subtitle": 1},
+        )
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Show_ Subtitle (2019) - S01 E01.jpg": b"fake",
+                "Show_ Subtitle (2019) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert [item["media"] for item in file_list] == ["TV Show", "TV Show"]
+        assert plex_stub.calls == [
+            ("Show_ Subtitle", 2019),
+            ("Show: Subtitle", 2019),
+            ("Show_ Subtitle", 2019),
+            ("Show: Subtitle", 2019),
+        ]
+
+    def test_hit_after_library_error_not_cached_and_next_entry_requeries(self, tmp_path):
+        class ErrorThenMissLibrary:
+            title = "Movies"
+
+            def __init__(self):
+                self.calls = 0
+
+            def search(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("transient library error")
+                return []
+
+        class HitLibrary:
+            title = "Shows"
+
+            def __init__(self):
+                self.calls = 0
+
+            def search(self, **_kwargs):
+                self.calls += 1
+                return [SimpleNamespace(title="Some Show", year=2020, guids=[])]
+
+        movie_library = ErrorThenMissLibrary()
+        show_library = HitLibrary()
+        plex_connector = PlexConnector()
+        plex_connector.plex = object()
+        plex_connector.movie_libraries = [movie_library]
+        plex_connector.tv_libraries = [show_library]
+        plex_connector._refresh_missing_libraries = lambda: None
+
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Some Show (2020) - S01 E01.jpg": b"fake",
+                "Some Show (2020) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_connector,
+        )
+        assert [item["media"] for item in file_list] == ["TV Show", "TV Show"]
+        assert [item["tmdb_id"] for item in file_list] == [None, None]
+        assert show_library.calls == 2
 
 
 class TestOrientationReclassification:
