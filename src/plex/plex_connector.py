@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 import plexapi.exceptions
 import requests
 from core.config import Config
-from core.exceptions import PlexConnectorException, LibraryNotFound
+from core.exceptions import PlexConnectorException, LibraryNotFound, PlexLookupError
 from models.artwork_types import AnyArtwork
 from models.options import Options
 from plexapi.library import MovieSection, ShowSection
@@ -29,6 +29,12 @@ class PlexConnector:
         self._state_generation = 0
         self._state_lock = Lock()
         self.options: Options = Options()
+
+    @property
+    def state_generation(self) -> int:
+        """Return the connection generation for consumers caching Plex objects."""
+        with self._state_lock:
+            return self._state_generation
 
     def set_options(self, options: Options) -> None:
         self.options = options
@@ -335,6 +341,11 @@ class PlexConnector:
             A tuple containing:
             - A list of found Movie or Show objects, or None if not found.
             - A list of library names where the items were found, or None if not found.
+
+        Raises:
+            PlexLookupError: At least one library raised something other than a
+                genuine "not found" miss, so the tuple below isn't a confirmed
+                result. ``partial_result`` carries what would have been returned.
         """
         if not self.plex:
             self.connect()
@@ -342,6 +353,9 @@ class PlexConnector:
 
         items = []
         libs = []
+        # True once any library raises something other than a genuine miss, so the
+        # eventual result can't be trusted as "confirmed absent" and must not be cached.
+        errored = False
 
         libraries = self.tv_libraries if item_type == "tv" else self.movie_libraries
         for i, library in enumerate(libraries):
@@ -356,13 +370,22 @@ class PlexConnector:
                 if library_item:
                     items.append(library_item)
                     libs.append(library_name)
-            except Exception as e:
-                # Continue checking other libraries if one fails
+            except plexapi.exceptions.NotFound as e:
+                # A genuine miss for this library; keep checking the others.
                 debug_me(
                     f"Unable to find '{artwork.get('title')} ({artwork.get('year')})' as TMDb ID '{artwork.get('tmdb_id')}' in '{libraries[i].title}': {e}",
                     "PlexConnector/find_in_library")
-                pass
+            except Exception as e:
+                # Continue checking other libraries if one fails, but remember the result is now unconfirmed.
+                errored = True
+                debug_me(
+                    f"Unable to find '{artwork.get('title')} ({artwork.get('year')})' as TMDb ID '{artwork.get('tmdb_id')}' in '{libraries[i].title}': {e}",
+                    "PlexConnector/find_in_library")
         if items:
+            if errored:
+                raise PlexLookupError(
+                    f"Partial TMDb GUID lookup for '{artwork.get('title')}' ({artwork.get('year')}): at least one library errored",
+                    partial_result=(items, libs))
             return items, libs
 
         # Fallback to title/year search when TMDb GUID lookup fails
@@ -393,12 +416,21 @@ class PlexConnector:
                             f"Found '{title} ({year})' as '{library_item.title} ({library_item.year})' in '{library.title}' via title search",
                             "PlexConnector/find_in_library")
                 except Exception as e:
+                    # An empty search() result is a genuine miss; any exception here is not.
+                    errored = True
                     debug_me(
                         f"Title search failed in '{libraries[i].title}': {e}",
                         "PlexConnector/find_in_library")
-                    pass
         if items:
+            if errored:
+                raise PlexLookupError(
+                    f"Partial title/year search for '{artwork.get('title')}' ({artwork.get('year')}): at least one library errored",
+                    partial_result=(items, libs))
             return items, libs
+        if errored:
+            raise PlexLookupError(
+                f"Lookup for '{artwork.get('title')}' ({artwork.get('year')}) is inconclusive: at least one library errored",
+                partial_result=(None, None))
         return None, None
 
     def movie_or_show(self, title: str, year: Optional[int] = None) -> Tuple[
