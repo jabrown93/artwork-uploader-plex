@@ -9,7 +9,7 @@ from core.constants import (
 )
 from core.enums import FilterType, ScraperSource
 from core.exceptions import CollectionNotFound, MovieNotFound, NotProcessedByFilter, ShowNotFound, \
-    NotProcessedByExclusion
+    NotProcessedByExclusion, PlexLookupError
 from kometa.kometa_saver import KometaSaver
 from models.artwork_types import AnyArtwork, MovieArtwork, TVArtwork, CollectionArtwork
 from models.options import Options
@@ -95,12 +95,17 @@ class UploadProcessor:
             f"Episode {episode_number} of season {season_number} not found for show '{tv_show.title}'")
 
     def _find_in_library_cached(self, item_type: str, artwork: Union[MovieArtwork, TVArtwork]):
-        """Looks up (and memoizes, including misses) the Plex item for this artwork's
-        tmdb_id/title/year; a tmdb:// GUID lookup has Plex query its remote metadata
-        service, so repeating it per season/episode entry is especially costly."""
+        """Looks up (and memoizes, including confirmed misses) the Plex item for this
+        artwork's tmdb_id/title/year; a tmdb:// GUID lookup has Plex query its remote
+        metadata service, so repeating it per season/episode entry is especially costly.
+        A PlexLookupError means at least one library errored transiently rather than
+        confirming a miss, so its partial result is returned but never cached."""
         cache_key = (item_type, artwork.get("tmdb_id"), artwork.get("title"), artwork.get("year"))
         if cache_key not in self._plex_item_cache:
-            self._plex_item_cache[cache_key] = self.plex.find_in_library(item_type, artwork)
+            try:
+                self._plex_item_cache[cache_key] = self.plex.find_in_library(item_type, artwork)
+            except PlexLookupError as e:
+                return e.partial_result
         return self._plex_item_cache[cache_key]
 
     def _season_exists_in_plex(self, tv_show, season_number: int) -> bool:

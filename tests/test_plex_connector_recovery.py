@@ -3,8 +3,9 @@ from threading import Barrier, Event
 from unittest.mock import Mock
 
 import pytest
+from plexapi.exceptions import NotFound as PlexAPINotFound
 
-from core.exceptions import PlexConnectorException
+from core.exceptions import PlexConnectorException, PlexLookupError
 from models.artwork_types import MovieArtwork
 from plex.plex_connector import PlexConnector
 
@@ -257,3 +258,38 @@ def test_healthy_lookup_does_not_reconnect_or_rediscover_libraries(monkeypatch):
 
     connect.assert_not_called()
     server.library.section.assert_called_once_with("Movies")
+
+
+def test_find_in_library_raises_lookup_error_on_transient_guid_error():
+    """A non-NotFound exception from one library's getGuid is a transient failure,
+    not a confirmed miss: it must surface as PlexLookupError carrying the partial
+    result another library already found, not a plain tuple a cache could store."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    library_a = Mock(title="Movies A")
+    library_a.getGuid.side_effect = RuntimeError("connection reset")
+    movie = Mock(title="The Matrix", year=1999)
+    library_b = Mock(title="Movies B")
+    library_b.getGuid.return_value = movie
+    connector.movie_libraries = [library_a, library_b]
+
+    with pytest.raises(PlexLookupError) as exc_info:
+        connector.find_in_library("movie", _artwork())
+
+    assert exc_info.value.partial_result == ([movie], ["Movies B"])
+
+
+def test_find_in_library_treats_guid_not_found_as_genuine_miss():
+    """plexapi's NotFound from getGuid means that library confirmed the item isn't
+    there, so it must not be treated as an error and must not raise PlexLookupError."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    library = Mock(title="Movies A")
+    library.getGuid.side_effect = PlexAPINotFound("not found")
+    library.search.return_value = []
+    connector.movie_libraries = [library]
+
+    items, libs = connector.find_in_library("movie", _artwork())
+
+    assert items is None
+    assert libs is None

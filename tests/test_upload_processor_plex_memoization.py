@@ -17,7 +17,7 @@ from plexapi.exceptions import NotFound
 
 from core import globals
 from core.config import Config
-from core.exceptions import ShowNotFound
+from core.exceptions import PlexLookupError, ShowNotFound
 from kometa.kometa_saver import KometaSaver
 from models.options import Options
 from processors.upload_processor import UploadProcessor
@@ -36,6 +36,22 @@ class CountingFakePlex:
     def find_in_library(self, item_type, artwork):
         self.find_in_library_calls += 1
         return self._items, self._libraries
+
+
+class ScriptedFakePlex:
+    """Plays back one scripted find_in_library outcome per call, in order, to
+    exercise transient-error-vs-confirmed-miss caching without touching real Plex."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.find_in_library_calls = 0
+
+    def find_in_library(self, item_type, artwork):
+        self.find_in_library_calls += 1
+        outcome = self._script.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
 
 
 class FakeArr:
@@ -185,6 +201,41 @@ class TestFindInLibraryMemoization:
                 proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
 
         assert plex.find_in_library_calls == 1
+
+    def test_transient_lookup_error_is_not_cached_and_next_entry_can_succeed(self, configured, capture_kometa_saves):
+        """A PlexLookupError (e.g. a Plex timeout) must not poison the cache like a
+        confirmed miss: the next entry for the same show has to re-query and can
+        still find it."""
+        show = _full_series_show(num_seasons=1, episodes_per_season=1)
+        plex = ScriptedFakePlex([
+            PlexLookupError("transient Plex timeout", partial_result=(None, None)),
+            ([show], ["TV Shows"]),
+        ])
+        proc = _processor(plex)
+
+        with pytest.raises(ShowNotFound):
+            proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+        proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+
+        assert plex.find_in_library_calls == 2
+        assert len(capture_kometa_saves) == 1
+
+    def test_partial_result_from_errored_library_is_not_cached(self, configured, capture_kometa_saves):
+        """When one library errors but another hits, the hit's items must still be
+        usable immediately, but the result stays uncached because it isn't confirmed
+        complete: the next entry re-queries rather than trusting the partial result."""
+        show = _full_series_show(num_seasons=1, episodes_per_season=1)
+        plex = ScriptedFakePlex([
+            PlexLookupError("library A timed out", partial_result=([show], ["TV Shows B"])),
+            ([show], ["TV Shows B"]),
+        ])
+        proc = _processor(plex)
+
+        proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+        proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+
+        assert plex.find_in_library_calls == 2
+        assert len(capture_kometa_saves) == 2
 
     def test_new_run_requeries_plex(self, configured, capture_kometa_saves):
         show = _full_series_show(num_seasons=1, episodes_per_season=1)
