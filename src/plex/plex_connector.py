@@ -418,9 +418,12 @@ class PlexConnector:
             - found_year (int | None): The year of the title found in Plex, else None
 
         Raises:
-            PlexLookupError: no library produced a hit and at least one library
-                raised, so the miss is not definitive and must not be cached
-                as a genuine "not found".
+            PlexLookupError: an earlier library raised before a hit was found
+                (partial_result carries the hit, since other libraries beyond
+                the failed one may hold a better match that was never
+                checked), or every library missed or raised (partial_result
+                is the all-None tuple). Either way the result is not
+                definitive and must not be cached as-is.
         """
 
         if not self.plex:
@@ -466,7 +469,18 @@ class PlexConnector:
                     else:
                         debug_me(f"Item '{title} ({year})' identified as {media_type} but TMDb ID not found",
                                  "PlexConnector/movie_or_show")
+                    if errored:
+                        raise PlexLookupError(
+                            f"'{title} ({year})' lookup incomplete: matched in '{library.title}' "
+                            f"after an earlier library raised an error",
+                            partial_result=(media_type, tmdb_id, found_title, found_year),
+                        )
                     return media_type, tmdb_id, found_title, found_year
+            except PlexLookupError:
+                # Raised above (a hit found after an earlier library
+                # errored); propagate as-is, don't let it be re-caught as
+                # another library error below.
+                raise
             except Exception as e:
                 errored = True
                 debug_me(

@@ -1334,21 +1334,36 @@ def _resolve_plex_title(
     (i.e. the one that matched, once media_type is not None).
 
     Raises:
-        PlexLookupError: every variant either missed or errored, and at
-            least one attempt errored, so the combined miss is not
-            definitive and must not be cached.
+        PlexLookupError: a variant hit only after an earlier library raised
+            (partial_result carries that hit and stops the cascade early,
+            since it isn't a fully-trustworthy definitive match), or every
+            variant missed or errored with at least one erroring (partial_result
+            is the all-None 5-tuple). Either way the result must not be cached.
     """
     errored = False
 
     def _try(candidate: str) -> tuple[Optional[str], Optional[int], Optional[str], Optional[int]]:
-        # A transient error on one variant shouldn't stop the remaining
-        # variants from being tried; remember it so an eventual miss isn't
-        # mistaken for a definitive one.
+        """Run one movie_or_show attempt, tracking whether it errored.
+
+        A transient error with no hit shouldn't stop the remaining variants
+        from being tried, so it's swallowed here and remembered. A hit that
+        arrived only after some other library already raised isn't
+        cacheable either -- movie_or_show already refused to return it as
+        definitive -- so that case is re-raised immediately, short-circuiting
+        the rest of the cascade instead of trying looser variants.
+        """
         nonlocal errored
         try:
             return globals.plex.movie_or_show(candidate, lookup_year)
-        except PlexLookupError:
+        except PlexLookupError as e:
             errored = True
+            hit_media_type, hit_tmdb_id, hit_title, hit_year = e.partial_result
+            if hit_media_type is not None:
+                raise PlexLookupError(
+                    f"'{original_title} ({lookup_year})' resolution incomplete: a hit for "
+                    f"'{candidate}' followed an earlier library error",
+                    partial_result=(hit_media_type, hit_tmdb_id, hit_title, hit_year, candidate),
+                ) from None
             return None, None, None, None
 
     media_type, tmdb_id, title, year = _try(original_title)

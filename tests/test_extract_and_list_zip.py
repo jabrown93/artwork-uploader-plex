@@ -7,6 +7,7 @@ disk, injected orientation/sort callables, and a stub Plex connector.
 
 import os
 import re
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -16,6 +17,7 @@ from core import globals
 from core.config import Config
 from core.exceptions import PlexLookupError
 from models.instance import Instance
+from plex.plex_connector import PlexConnector
 
 pytestmark = pytest.mark.unit
 
@@ -25,12 +27,13 @@ FILENAME_PATTERN = re.compile(r'^[^/]+(?:\.jpg|\.jpeg|\.png)$', re.IGNORECASE)
 class StubPlexConnector:
     """Stub for globals.plex; movie_or_show responses are queued per-call.
 
-    `error_calls_by_title` raises `PlexLookupError` for the first N calls
-    made for a given title (simulating a transient `library.search` failure)
-    before falling back to the normal queued response.
+    `error_calls_by_title` raises a miss-shaped `PlexLookupError` for the
+    first N calls made for a given title (simulating every library either
+    missing or raising), before falling back to the normal queued response.
     """
 
-    def __init__(self, responses_by_title=None, default=(None, None, None, None), error_calls_by_title=None):
+    def __init__(self, responses_by_title=None, default=(None, None, None, None),
+                 error_calls_by_title=None):
         self.responses_by_title = responses_by_title or {}
         self.default = default
         self.calls = []
@@ -253,6 +256,49 @@ class TestResolvePlexTitleMemoization:
         assert file_list[0]["media"] == "unavailable"
         assert file_list[1]["media"] == "TV Show"
         assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020), ("Some Show", 2020)]
+
+    def test_hit_after_library_error_not_cached_and_next_entry_requeries(self, tmp_path):
+        class ErrorThenMissLibrary:
+            title = "Movies"
+
+            def __init__(self):
+                self.calls = 0
+
+            def search(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("transient library error")
+                return []
+
+        class HitLibrary:
+            title = "Shows"
+
+            def __init__(self):
+                self.calls = 0
+
+            def search(self, **_kwargs):
+                self.calls += 1
+                return [SimpleNamespace(title="Some Show", year=2020, guids=[])]
+
+        movie_library = ErrorThenMissLibrary()
+        show_library = HitLibrary()
+        plex_connector = PlexConnector()
+        plex_connector.plex = object()
+        plex_connector.movie_libraries = [movie_library]
+        plex_connector.tv_libraries = [show_library]
+        plex_connector._refresh_missing_libraries = lambda: None
+
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Some Show (2020) - S01 E01.jpg": b"fake",
+                "Some Show (2020) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_connector,
+        )
+        assert [item["media"] for item in file_list] == ["TV Show", "TV Show"]
+        assert [item["tmdb_id"] for item in file_list] == [None, None]
+        assert show_library.calls == 2
 
 
 class TestOrientationReclassification:
