@@ -170,6 +170,53 @@ class TestPlexTitleResolutionCascade:
         assert plex_stub.calls == []
 
 
+class TestResolvePlexTitleMemoization:
+    """A ZIP entry per episode repeats the same (title, year); resolution should run once."""
+
+    def test_repeated_title_year_resolved_once_on_hit(self, tmp_path):
+        plex_stub = StubPlexConnector(default=("TV Show", 1, "Some Show", 2020))
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Some Show (2020) - S01 E01.jpg": b"fake",
+                "Some Show (2020) - S01 E02.jpg": b"fake",
+                "Some Show (2020) - S01 E03.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert len(file_list) == 3
+        assert all(item["media"] == "TV Show" for item in file_list)
+        assert plex_stub.calls == [("Some Show", 2020)]
+
+    def test_repeated_title_year_resolved_once_on_miss(self, tmp_path):
+        # The miss path is the expensive one (full cascade through every
+        # fallback), so it must be cached too, not just successful hits.
+        plex_stub = StubPlexConnector(default=(None, None, None, None))
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Unknown Show (2020) - S01 E01.jpg": b"fake",
+                "Unknown Show (2020) - S01 E02.jpg": b"fake",
+            },
+            plex_stub=plex_stub,
+        )
+        assert len(file_list) == 2
+        assert all(item["media"] == "unavailable" for item in file_list)
+        # Direct lookup and the colon-substitution fallback each fire once per
+        # distinct (title, year) despite two entries sharing it (accent-folding
+        # is skipped here since "Unknown Show" has no accented chars to fold).
+        assert plex_stub.calls == [("Unknown Show", 2020)] * 2
+
+    def test_second_import_run_re_resolves(self, tmp_path):
+        # The cache is scoped to a single extract_and_list_zip call; a fresh
+        # import run must not reuse stale results from a previous one.
+        plex_stub = StubPlexConnector(default=("TV Show", 1, "Some Show", 2020))
+        files = {"Some Show (2020) - S01 E01.jpg": b"fake"}
+        _extract(tmp_path, "export1.zip", files, plex_stub=plex_stub)
+        _extract(tmp_path, "export2.zip", files, plex_stub=plex_stub)
+        assert plex_stub.calls == [("Some Show", 2020), ("Some Show", 2020)]
+
+
 class TestOrientationReclassification:
     def test_tv_show_cover_flips_to_backdrop_on_landscape(self, tmp_path):
         plex_stub = StubPlexConnector(default=("TV Show", 1, "Some Show", 2020))

@@ -1455,6 +1455,14 @@ def extract_and_list_zip(
         ]
         total_files_in_zip = len(zip_infos)
 
+        # Per-import cache: a ZIP archive commonly repeats the same
+        # (title, year) across many entries (e.g. one show's episodes), and
+        # each miss resolution can issue several Plex library scans. Keying
+        # on the call args and scoping the dict to this function call avoids
+        # cross-request staleness and any locking concerns from Socket.IO
+        # handlers running concurrently, unlike a module-level lru_cache.
+        resolve_cache: dict[tuple[str, Optional[int]], tuple] = {}
+
         update_status(instance, "Extracting ZIP file...", "info", sticky=True, spinner=True)
         for n, zip_info in enumerate(zip_infos, 1):
             filename = os.path.basename(zip_info.filename)
@@ -1496,8 +1504,10 @@ def extract_and_list_zip(
                         artwork["tmdb_id"] = None
                     else:
                         lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
-                        media_type, tmdb_id, title, year, candidate_title = _resolve_plex_title(
-                            original_title, lookup_year)
+                        cache_key = (original_title, lookup_year)
+                        if cache_key not in resolve_cache:
+                            resolve_cache[cache_key] = _resolve_plex_title(original_title, lookup_year)
+                        media_type, tmdb_id, title, year, candidate_title = resolve_cache[cache_key]
                         artwork["media"] = media_type if media_type else "unavailable"
                         artwork["title"] = title if title and title != candidate_title else candidate_title
                         artwork["tmdb_id"] = tmdb_id
