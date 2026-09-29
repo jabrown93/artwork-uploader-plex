@@ -585,7 +585,8 @@ source .venv/bin/activate  # macOS/Linux
 .venv\Scripts\activate     # Windows
 
 # Start the application
-./run.sh
+./run.sh                        # macOS/Linux
+python src\artwork_uploader.py  # Windows
 
 # Verify web UI loads at http://localhost:4567
 ```
