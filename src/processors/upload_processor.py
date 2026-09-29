@@ -35,6 +35,8 @@ class UploadProcessor:
         self.stage_collections: bool = globals.config.stage_collections
         self.arr: Optional["ArrService"] = arr if arr is not None else globals.arr
         self._sonarr_series_cache: dict = {}
+        self._plex_item_cache: dict = {}
+        self._show_structure_cache: dict = {}
         self._recompute_options_dependent_state()
 
     def _recompute_options_dependent_state(self) -> None:
@@ -52,14 +54,75 @@ class UploadProcessor:
         self.options = options
         self._recompute_options_dependent_state()
 
+    def _get_show_structure(self, tv_show) -> dict:
+        """
+        Lazily caches a show's season list and per-season episode lists, keyed by the
+        resolved Show object's identity. A MediUX full-series set produces one artwork
+        entry per season/episode for a single show; without this cache, every entry
+        re-runs tv_show.seasons() and Season.episodes() for checks that only need to
+        reflect Plex's state once per run. Object identity is stable across entries
+        because _find_in_library_cached returns the same cached Show instance for
+        repeat lookups of the same show within a run.
+        """
+        key = id(tv_show)
+        structure = self._show_structure_cache.get(key)
+        if structure is None:
+            seasons = tv_show.seasons()
+            structure = {
+                "seasons": seasons,
+                "season_by_index": {s.index: s for s in seasons},
+                "episodes_by_season": {},
+            }
+            self._show_structure_cache[key] = structure
+        return structure
+
+    def _get_season_episodes(self, tv_show, season_number: int) -> Optional[list]:
+        """Lazily caches and returns a season's episode list, or None if the season isn't in Plex."""
+        structure = self._get_show_structure(tv_show)
+        season = structure["season_by_index"].get(season_number)
+        if season is None:
+            return None
+        if season_number not in structure["episodes_by_season"]:
+            structure["episodes_by_season"][season_number] = season.episodes()
+        return structure["episodes_by_season"][season_number]
+
+    def _get_season(self, tv_show, season_number: int):
+        """Returns the cached Plex Season, raising NotFound like plexapi's Show.season() when missing."""
+        season = self._get_show_structure(tv_show)["season_by_index"].get(season_number)
+        if season is None:
+            raise NotFound(f"Season {season_number} not found for show '{tv_show.title}'")
+        return season
+
+    def _get_episode(self, tv_show, season_number: int, episode_number: int):
+        """Returns the cached Plex Episode, raising NotFound like plexapi's Season.episode() when missing."""
+        for episode in self._get_season_episodes(tv_show, season_number) or []:
+            if episode.index == episode_number:
+                return episode
+        raise NotFound(
+            f"Episode {episode_number} of season {season_number} not found for show '{tv_show.title}'")
+
+    def _find_in_library_cached(self, item_type: str, artwork: Union[MovieArtwork, TVArtwork]):
+        """
+        Looks up (and memoizes, including misses) the Plex library item(s) for this
+        artwork's tmdb_id/title/year. A MediUX full-series set re-runs this lookup once
+        per season/episode entry for what is really a single show; PlexConnector's
+        getGuid() call is especially costly here since a tmdb:// GUID takes plexapi's
+        slow path that has Plex query its remote metadata service. Mirrors
+        _sonarr_series_cache.
+        """
+        cache_key = (item_type, artwork.get("tmdb_id"), artwork.get("title"), artwork.get("year"))
+        if cache_key not in self._plex_item_cache:
+            self._plex_item_cache[cache_key] = self.plex.find_in_library(item_type, artwork)
+        return self._plex_item_cache[cache_key]
+
     def _season_exists_in_plex(self, tv_show, season_number: int) -> bool:
         """Check if a season exists in the Plex library."""
-        return any(S.index == season_number for S in tv_show.seasons())
+        return season_number in self._get_show_structure(tv_show)["season_by_index"]
 
     def _episode_exists_in_plex(self, tv_show, season_number: int, episode_number: int) -> bool:
         """Check if an episode exists in the Plex library."""
-        return (self._season_exists_in_plex(tv_show, season_number) and
-                any(E.index == episode_number for E in tv_show.season(season_number).episodes()))
+        episodes = self._get_season_episodes(tv_show, season_number)
+        return episodes is not None and any(E.index == episode_number for E in episodes)
 
     def _should_process_season(
             self, tv_show, season_number: int, season_name: str,
@@ -247,7 +310,7 @@ class UploadProcessor:
 
         self._fetch_tpdb_tmdb_id(artwork, "UploadProcessor/process_movie_artwork")
 
-        movie_items, libraries = self.plex.find_in_library("movie", artwork)
+        movie_items, libraries = self._find_in_library_cached("movie", artwork)
 
         results = []
         artwork_source = artwork["source"]
@@ -355,7 +418,7 @@ class UploadProcessor:
 
         self._fetch_tpdb_tmdb_id(artwork, "UploadProcessor/process_tv_artwork")
 
-        tv_show_items, libraries = self.plex.find_in_library("tv", artwork)
+        tv_show_items, libraries = self._find_in_library_cached("tv", artwork)
 
         if not tv_show_items:
             if self._arr_tv_fallback:
@@ -368,7 +431,8 @@ class UploadProcessor:
             desc = description.replace(artwork["title"], tv_show.title.split(' (')[0]) if tv_show.title.split(' (')[
                 0] != artwork[
                 "title"] else description
-            item_path = tv_show.seasons()[0].episodes()[
+            first_season = self._get_show_structure(tv_show)["seasons"][0]
+            item_path = self._get_season_episodes(tv_show, first_season.index)[
                 0].media[0].parts[0].file
             path_parts = get_path_parts(item_path)
             asset_folder = path_parts[-3] if path_parts[-2].lower().startswith("season") or path_parts[
@@ -452,7 +516,7 @@ class UploadProcessor:
                     return None, f"⚠️ {desc} | {season} not available in {library}"
                 debug_me(f"Staging is {'enabled' if self.staging else 'disabled'}.",
                          "UploadProcessor/process_tv_artwork")
-                upload_target = None if self.kometa else tv_show.season(artwork["season"])
+                upload_target = None if self.kometa else self._get_season(tv_show, artwork["season"])
                 artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
                 if sonarr_seasons is not None and artwork["season"] in sonarr_seasons:
                     desc = f"{desc} • pre-seeded via Sonarr"
@@ -467,7 +531,7 @@ class UploadProcessor:
                 if not (self._episode_exists_in_plex(tv_show, artwork["season"], artwork["episode"])
                         or self.staging or via_sonarr):
                     return None, f"⚠️ {desc} | {season}, Episode {artwork['episode']:02} not available in {library}"
-                upload_target = None if self.kometa else tv_show.season(artwork["season"]).episode(artwork["episode"])
+                upload_target = None if self.kometa else self._get_episode(tv_show, artwork["season"], artwork["episode"])
                 artwork_id, artwork_type, file_name, filter_type = self._tv_artwork_mapping(artwork)
                 if via_sonarr:
                     desc = f"{desc} • pre-seeded via Sonarr"
