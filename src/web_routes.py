@@ -1455,12 +1455,9 @@ def extract_and_list_zip(
         ]
         total_files_in_zip = len(zip_infos)
 
-        # Per-import cache: a ZIP archive commonly repeats the same
-        # (title, year) across many entries (e.g. one show's episodes), and
-        # each miss resolution can issue several Plex library scans. Keying
-        # on the call args and scoping the dict to this function call avoids
-        # cross-request staleness and any locking concerns from Socket.IO
-        # handlers running concurrently, unlike a module-level lru_cache.
+        # One ZIP usually repeats a single (title, year); a miss can cost
+        # several Plex library scans. Function-scoped so it can't go stale
+        # across imports.
         resolve_cache: dict[tuple[str, Optional[int]], tuple] = {}
 
         update_status(instance, "Extracting ZIP file...", "info", sticky=True, spinner=True)
