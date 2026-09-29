@@ -546,7 +546,8 @@ source .venv/bin/activate  # On macOS/Linux
 pip install -r requirements.txt
 
 # Run the application
-./run.sh
+./run.sh                        # macOS/Linux
+python src\artwork_uploader.py  # Windows
 ```
 
 **IMPORTANT: Always activate the virtual environment before running!**
