@@ -17,9 +17,9 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt  # testing, linting
 
 # Run
-python artwork_uploader.py                              # web server on :4567
-python artwork_uploader.py https://mediux.pro/sets/9242 # single URL
-python artwork_uploader.py bulk bulk_import.txt          # bulk import
+./run.sh                              # web server on :4567
+./run.sh https://mediux.pro/sets/9242 # single URL
+./run.sh bulk bulk_import.txt          # bulk import
 
 # Test
 pytest                    # all tests
@@ -29,7 +29,7 @@ pytest -m "not slow"      # skip slow
 
 # Code quality
 black . && isort .        # format
-flake8 . && mypy artwork_uploader.py  # lint + types
+flake8 . && mypy src/artwork_uploader.py  # lint + types
 
 # Docker (Makefile targets)
 make docker-build         # multi-platform build

@@ -585,7 +585,7 @@ source .venv/bin/activate  # macOS/Linux
 .venv\Scripts\activate     # Windows
 
 # Start the application
-python artwork_uploader.py
+./run.sh
 
 # Verify web UI loads at http://localhost:4567
 ```
@@ -594,7 +594,7 @@ python artwork_uploader.py
 
 ```bash
 # Start in background
-.venv/bin/python artwork_uploader.py &
+PYTHONPATH=src .venv/bin/python src/artwork_uploader.py &
 
 # Wait a few seconds
 sleep 3
@@ -810,7 +810,7 @@ Here are some areas where contributions would be particularly valuable:
 
 5. **Run the application**:
    ```bash
-   python artwork_uploader.py
+   ./run.sh
    ```
 
 6. **Access the web UI**:
