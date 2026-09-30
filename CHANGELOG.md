@@ -1,3 +1,10 @@
+## [1.1.13](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.12...v1.1.13) (2026-09-30)
+
+
+### Bug Fixes
+
+* **security:** update dependency oauthlib to v4 [security] ([#148](https://github.com/jabrown93/artwork-uploader-plex/issues/148)) ([d339c4a](https://github.com/jabrown93/artwork-uploader-plex/commit/d339c4aff4fb89d92308b639593e90d14cd8bd22))
+
 ## [1.1.12](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.11...v1.1.12) (2026-09-29)
 
 
