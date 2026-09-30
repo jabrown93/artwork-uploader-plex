@@ -1,3 +1,10 @@
+## [1.1.12](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.11...v1.1.12) (2026-09-29)
+
+
+### Performance Improvements
+
+* **zip:** memoize Plex title resolution per import run ([#145](https://github.com/jabrown93/artwork-uploader-plex/issues/145)) ([2dd8c15](https://github.com/jabrown93/artwork-uploader-plex/commit/2dd8c15d6e9f5ef6c3aaeda0be883b293616bfad)), closes [#133](https://github.com/jabrown93/artwork-uploader-plex/issues/133)
+
 ## [1.1.11](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.10...v1.1.11) (2026-09-29)
 
 
