@@ -33,7 +33,7 @@ click==8.5.0
     #   flask-socketio
 coverage==7.16.2
     # via pytest-cov
-cryptography==50.0.1
+cryptography==50.0.2
     # via
     #   authlib
     #   joserfc
