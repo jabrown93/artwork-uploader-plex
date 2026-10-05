@@ -11,7 +11,7 @@ on:
   push:
     branches:
       - main
-  # Weekly roll-up of the fix(deps) commits that .releaserc.js suppresses on
+  # Weekly roll-up of the chore(deps) commits that .releaserc.js suppresses on
   # push, promoted into a single patch release. GitHub only fires schedule
   # from the default branch, so this sweeps main only; use the manual trigger
   # below to sweep beta.
@@ -19,7 +19,7 @@ on:
     - cron: '0 9 * * 1' # Mondays 09:00 UTC — weekly dependency roll-up
   # Run against the beta ref to cut a prerelease; this is now beta's only
   # release path. Also sets RELEASE_DEPS, so such a run doubles as an
-  # on-demand dependency sweep (the only way to promote suppressed fix(deps)).
+  # on-demand dependency sweep (the only way to promote suppressed chore(deps)).
   workflow_dispatch: {}
 
 concurrency:
