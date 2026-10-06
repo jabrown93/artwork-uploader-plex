@@ -62,7 +62,7 @@ joserfc==1.7.5
     # via authlib
 markdown==3.11
     # via apprise
-markupsafe==3.0.3
+markupsafe==3.0.4
     # via
     #   flask
     #   jinja2
