@@ -131,7 +131,7 @@ simple-websocket==1.1.0
     # via python-engineio
 soupsieve==2.10
     # via beautifulsoup4
-types-requests==2.33.0.20260906
+types-requests==2.33.0.20261006
     # via -r requirements-dev.in
 typing-extensions==4.16.0
     # via
