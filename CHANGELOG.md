@@ -1,3 +1,5 @@
+## [1.1.16](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.15...v1.1.16) (2026-10-19)
+
 ## [1.1.15](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.14...v1.1.15) (2026-10-12)
 
 ## [1.1.14](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.13...v1.1.14) (2026-10-05)
