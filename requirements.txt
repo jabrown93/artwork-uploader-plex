@@ -71,7 +71,7 @@ oauthlib==4.0.0
     # via requests-oauthlib
 packaging==26.3
     # via -r requirements.in
-pillow==12.3.0
+pillow==13.0.0
     # via -r requirements.in
 plexapi==4.18.3
     # via -r requirements.in
