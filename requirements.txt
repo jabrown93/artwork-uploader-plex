@@ -93,11 +93,11 @@ requests-oauthlib==2.0.0
     # via apprise
 simple-websocket==1.1.0
     # via python-engineio
-soupsieve==3.0.3
+soupsieve==3.0.4
     # via beautifulsoup4
 typing-extensions==4.16.0
     # via beautifulsoup4
-tzlocal==5.4.4
+tzlocal==5.4.5
     # via apscheduler
 urllib3==2.8.0
     # via requests
