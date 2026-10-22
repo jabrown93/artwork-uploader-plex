@@ -129,7 +129,7 @@ ruff==0.17.1
     # via -r requirements-dev.in
 simple-websocket==1.1.0
     # via python-engineio
-soupsieve==3.0.3
+soupsieve==3.0.4
     # via beautifulsoup4
 types-requests==2.33.0.20261006
     # via -r requirements-dev.in
