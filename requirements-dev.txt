@@ -75,7 +75,7 @@ markupsafe==3.0.4
     #   flask
     #   jinja2
     #   werkzeug
-mypy==2.4.0
+mypy==2.4.1
     # via -r requirements-dev.in
 mypy-extensions==1.1.0
     # via mypy
