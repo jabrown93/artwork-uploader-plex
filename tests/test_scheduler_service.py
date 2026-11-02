@@ -431,6 +431,23 @@ def test_missed_run_outside_the_catch_up_window():
 
 
 @pytest.mark.unit
+def test_interval_catch_up_evaluates_the_most_recent_missed_occurrence():
+    """Fork: six-hour schedule last run at midnight, back at 18:30 with a 60-minute window:
+    18:00 is the occurrence that matters, not 06:00."""
+    mock_now = datetime(2026, 8, 9, 18, 30)
+    sched = BulkSchedule(interval_value=6, interval_unit="hours", last_run=datetime(2026, 8, 9, 0, 0).isoformat())
+
+    with patch("services.scheduler_service.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.fromisoformat = datetime.fromisoformat
+
+        due, within_window = SchedulerService.get_missed_run(sched, window=60)
+
+    assert due == datetime(2026, 8, 9, 18, 0)
+    assert within_window is True
+
+
+@pytest.mark.unit
 def test_zero_window_never_catches_up():
     mock_now = datetime(2026, 8, 9, 2, 5)
     last_run = datetime(2026, 8, 8, 2, 0).isoformat()

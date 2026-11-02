@@ -21,7 +21,8 @@ from core.constants import ASSET_INDEX_PATH
 def normalize_title(title: str) -> str:
     """Lowercase, strip accents and punctuation so titles compare equal regardless of styling,
        e.g. 'Mission: Impossible' vs 'Mission - Impossible', 'Léon' vs 'Leon'."""
-    title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    # Fork: drop combining marks only; forcing ASCII erases titles in non-Latin scripts.
+    title = "".join(c for c in unicodedata.normalize("NFKD", title) if not unicodedata.combining(c))
     title = title.casefold().replace("&", " and ")
     title = re.sub(r"[^\w\s]", " ", title)
     return re.sub(r"\s+", " ", title).strip()

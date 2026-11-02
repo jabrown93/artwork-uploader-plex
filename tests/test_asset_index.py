@@ -137,3 +137,13 @@ def test_corrupt_file_self_heal(tmp_path):
     assert glob.glob(path + ".corrupt-*")
     index.record("user", [_asset(1)])
     assert index.known_ids("user") == {1}
+
+
+@pytest.mark.unit
+def test_a_non_latin_title_can_be_looked_up(index):
+    """Fork: folding to ASCII produced an empty key for titles in non-Latin scripts, so the
+    poster was indexed but never found."""
+    index.record("user", [_asset(3, title="千と千尋の神隠し", year=2001)])
+
+    assert index.lookup(["user"], "千と千尋の神隠し", 2001, ["movie_poster"])["asset_id"] == 3
+    assert index.lookup(["user"], "Léon", 1994, ["movie_poster"]) is None

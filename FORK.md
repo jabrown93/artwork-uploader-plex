@@ -102,7 +102,8 @@ Dated so a later sync can revisit them.
     as untested, then restored with a test once review showed a forced PNG over a JPG left both.
   - Scheduler: upstream restores a persisted interval `next_run` verbatim, so a stale one fires
     on the first tick after restart and bypasses `catch_up_window_minutes`. Patched to advance it
-    to the next future occurrence (`# Fork:` in `scheduler_service.py`); worth offering upstream.
+    to the next future occurrence; `get_missed_run` likewise judges the most recent missed
+    interval, not the first (`# Fork:` in `scheduler_service.py`); both worth offering upstream.
   - `local_library_matching` (upstream) treats a local index miss as terminal; with the arr
     pre-seed enabled for that kind it falls through to the TPDb lookup instead, so the later Plex
     miss reaches the Radarr/Sonarr branch.
@@ -110,6 +111,6 @@ Dated so a later sync can revisit them.
     carry no `tmdb_id`), with the same partial-result semantics.
   - An item whose processing raises counts as a failure (`callbacks.failed(1)`), so the summary,
     notifications and run history don't report a clean run.
-  - `PlexLibraryIndex.normalize_title` keeps non-Latin letters (upstream folds to ASCII, which
-    erases e.g. Japanese titles and makes them unmatchable); the ZIP resolver treats upstream's
+  - `PlexLibraryIndex.normalize_title` and `AssetIndex`'s key normalizer keep non-Latin letters
+    (upstream folds to ASCII, which erases e.g. Japanese titles and makes them unmatchable); the ZIP resolver treats upstream's
     `"unavailable"` miss sentinel as a miss so the title-variant cascade still runs.

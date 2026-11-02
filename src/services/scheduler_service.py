@@ -297,6 +297,10 @@ class SchedulerService:
             try:
                 delta = timedelta(**{sched.interval_unit: sched.interval_value})
                 due = last_run_at + delta
+                # Fork: downtime can span several intervals; the window applies to the most
+                # recent occurrence, not the first one missed.
+                if due <= now:
+                    due += delta * int((now - due) // delta)
             except (ValueError, TypeError):
                 return None, False
 
