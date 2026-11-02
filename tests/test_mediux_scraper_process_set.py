@@ -44,3 +44,28 @@ def test_collection_poster_tagged_as_movie_poster_filetype_is_detected():
     assert len(scraper.collection_artwork) == 1
     assert scraper.collection_artwork[0]["title"] == "Some Saga"
     assert scraper.collection_artwork[0]["file_type"] == "collection_poster"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("episode_key", ["episode_id", "tvdb_episode_id"])
+@pytest.mark.parametrize("seasons", [[], [{"id": 10, "season_number": 1}]])
+def test_title_card_uses_file_metadata_when_show_omits_episodes(episode_key, seasons):
+    scraper = _make_scraper()
+    scraper.config.mediux_filters = ["title_card"]
+    set_data = {
+        "show": {
+            "id": 42, "name": "Some Show", "first_air_date": "2020-01-01",
+            "seasons": seasons,
+        },
+        "files": [{
+            "id": "card1", "title": "Some Show S01 E05",
+            episode_key: {"id": 123, "season_id": {"season_number": 1}},
+        }],
+    }
+
+    scraper._process_set(set_data)
+
+    assert [(item["season"], item["episode"], item["file_type"]) for item in scraper.tv_artwork] == [
+        (1, 5, "title_card"),
+    ]
+    assert scraper.errored == 0

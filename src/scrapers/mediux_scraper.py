@@ -193,12 +193,9 @@ class MediuxScraper:
         # so that show_data.get(season_id) returns the season number
         # and show_data.get(episode_id) returns a tuple with the season and episode number
         if show_data:
-            show_map = {}
-            show_map["tmdb_id"] = show_data.get("id", 0)
+            show_map = {"tmdb_id": show_data.get("id", 0), "seasons": {}, "episodes": {}}
             show_seasons = show_data.get("seasons", [])
             if show_seasons:
-                show_map["seasons"] = {}
-                show_map["episodes"] = {}
                 for s in show_seasons:
                     season = s.get("season_number")
                     s_id = s.get("id")
@@ -322,9 +319,9 @@ class MediuxScraper:
                     if episode_id in show_map["episodes"]:
                         (season, episode) = show_map["episodes"][episode_id]
                         self.callbacks.debug(f"Detected title card for S{season:02}E{episode:02}")
-                    elif tvdb_episode_id: # Fallback for MediUX sets that use TVDb metadata
-                        poster_title = poster.get("title", None)
-                        season = int(tvdb_episode_id["season_id"]["season_number"])
+                    elif str((episode_id_data.get("season_id") or {}).get("season_number", "")).isdigit():
+                        poster_title = poster.get("title") or ""
+                        season = int(episode_id_data["season_id"]["season_number"])
                         match = re.search(r'S(\d+)\s*E(\d+)', poster_title, re.IGNORECASE)
                         episode = 0
                         if match:
