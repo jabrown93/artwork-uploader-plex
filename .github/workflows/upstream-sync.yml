@@ -1,0 +1,87 @@
+name: upstream-sync
+
+# Weekly: merge mscodemonkey/artwork-uploader-plex with scripts/sync-upstream.sh.
+# A clean merge becomes a PR for review; conflicts become one tracking issue
+# listing the files, to be resolved locally per FORK.md.
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      # This repo is a fork; without GH_REPO, gh resolves issue/pr commands to
+      # the upstream parent (mscodemonkey/artwork-uploader-plex) and files there.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # App token, not GITHUB_TOKEN: PRs opened with GITHUB_TOKEN do not trigger
+      # CI, so the required `test (3.14)` check would never report.
+      - name: Mint app token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Merge upstream
+        id: merge
+        env:
+          SYNC_BRANCH: upstream-sync/auto
+        run: |
+          git config user.name "artwork-uploader-plex-upstream-sync[bot]"
+          git config user.email "upstream-sync@users.noreply.github.com"
+          set +e
+          scripts/sync-upstream.sh --check > sync.log 2>&1
+          rc=$?
+          set -e
+          cat sync.log
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          case "${rc}" in 0|1|3) ;; *) exit "${rc}" ;; esac
+
+      - name: Open PR for clean merge
+        if: steps.merge.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          scripts/sync-upstream.sh --finish
+          git push --force-with-lease origin HEAD:upstream-sync/auto
+          if [ -z "$(gh pr list --head upstream-sync/auto --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head upstream-sync/auto \
+              --title "chore(sync): merge upstream mscodemonkey/artwork-uploader-plex" \
+              --body-file sync.log
+          fi
+
+      - name: Report conflicts
+        if: steps.merge.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          title="Upstream sync needs manual conflict resolution"
+          {
+            echo "Automated merge of mscodemonkey/artwork-uploader-plex hit conflicts. Run \`scripts/sync-upstream.sh\` locally and resolve per FORK.md."
+            echo
+            echo '```'
+            cat sync.log
+            echo '```'
+          } > body.md
+          num=$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number // empty')
+          if [ -n "${num}" ]; then
+            gh issue edit "${num}" --body-file body.md
+          else
+            gh issue create --title "${title}" --body-file body.md
+          fi
