@@ -140,6 +140,9 @@ def resolve_tls_files(tls_cert_file: str, tls_key_file: str) -> dict:
     """
     Validate the TLS file pair and return the SSL kwargs for SocketIO.run.
 
+    The threading server is werkzeug's run_simple, which takes ssl_context=(cert, key);
+    the eventlet server the fork used to run took certfile/keyfile.
+
     Failing fast beats silently serving plain HTTP when the user asked for
     HTTPS - a half-configured or missing file would otherwise only surface as
     browser connection errors.
@@ -155,7 +158,7 @@ def resolve_tls_files(tls_cert_file: str, tls_key_file: str) -> dict:
         if not os.path.isfile(path):
             raise ConfigurationError(
                 f"TLS {label} file not found: {path}")
-    return {"certfile": tls_cert_file, "keyfile": tls_key_file}
+    return {"ssl_context": (tls_cert_file, tls_key_file)}
 
 
 def authentication_required():

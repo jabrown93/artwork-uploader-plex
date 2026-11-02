@@ -71,8 +71,8 @@ class TestResolveTlsFiles:
         key = tmp_path / "tls.key"
         cert.write_text("cert")
         key.write_text("key")
-        assert resolve_tls_files(str(cert), str(key)) == {
-            "certfile": str(cert), "keyfile": str(key)}
+        # werkzeug's run_simple takes the pair as ssl_context, not certfile/keyfile.
+        assert resolve_tls_files(str(cert), str(key)) == {"ssl_context": (str(cert), str(key))}
 
     def test_rejects_missing_key_path(self, tmp_path):
         cert = tmp_path / "tls.crt"
