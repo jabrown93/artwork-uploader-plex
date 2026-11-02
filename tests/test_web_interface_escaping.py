@@ -118,3 +118,20 @@ def test_every_outside_value_is_written_with_textcontent(script, value):
     pattern = re.compile(r"\.textContent\s*=\s*[^;\n]*\b%s\b" % re.escape(value))
 
     assert pattern.search(script) is not None
+
+
+@pytest.mark.unit
+def test_run_history_label_is_not_interpolated_into_onclick_or_inner_html(script):
+    """The run history table used to build its label and log-button cells as HTML/onclick
+    strings with run.label spliced straight in - a quote broke the delete button, markup
+    became stored HTML. It is built with DOM nodes now; run.label must only reach the page
+    as a JS value (addEventListener closures / textContent), never back inside an HTML or
+    onclick string."""
+    assert "${run.label}" not in script
+    assert "run.html_label" not in script
+
+    offenders = [
+        line for line in script.splitlines()
+        if "run.label" in line and ("onclick" in line or ".innerHTML" in line)
+    ]
+    assert offenders == []

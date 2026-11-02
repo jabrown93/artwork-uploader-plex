@@ -39,6 +39,10 @@ class PlexConnector:
         self.plex = None
         self.base_url = updated_config.base_url
         self.token = updated_config.token
+        # Fork: drop the old handles too. If connect() fails here, ensure_libraries() would
+        # otherwise see the previous server's libraries as resolved and never reload them.
+        self.movie_libraries = []
+        self.tv_libraries = []
         self.state_generation += 1  # Fork: new connection generation; caches built on the old one are stale.
 
         try:

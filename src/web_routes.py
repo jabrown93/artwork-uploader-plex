@@ -991,8 +991,9 @@ def setup_socket_handlers(
             if not run_type or run_type and run.get("run_type") == run_type:
                 runs.append(run)
                 label = run.get("label", "")
-                timestamp = run.get("started_at", "")
-                onclick = f"""onclick="deleteRun('{timestamp}', '{label}')" """
+                # Fork: send plain fields instead of server-built HTML; the frontend turns
+                # these into DOM nodes with textContent/addEventListener (avoids breaking on
+                # labels containing quotes/markup and stored HTML injection via innerHTML).
                 if label and "https" in label:
                     clean_url = label.replace("https://", "").strip()
                     parts = [p for p in clean_url.split("/") if p]
@@ -1000,17 +1001,15 @@ def setup_socket_handlers(
                         domain, asset_type, id = parts[0], parts[1], parts[2]
                         source = URL_SOURCE_MAP.get(domain, "Unknown")
                         type = URL_TYPE_MAP.get(asset_type, { "icon": "question-circle", "label": "Unknown URL type" })
-                        run["html_label"] = (
-                            f"<a href='{label}' target='_blank' rel='noopener noreferrer' "
-                            f"class='text-decoration-none text-reset' title='{label}'>{source} "
-                            f"<i class='bi bi-{type.get('icon', 'question-circle')}' title='{type.get('label', 'Unknown URL type')}'></i> "
-                            f"<span class='input-monospace' style='font-size: 0.8rem;'>{id}</span></a> "
-                            f"<i class='bi bi-trash3 inline-run-btn text-danger cursor-pointer' style='cursor: pointer; font-size: 0.8rem;' title='Delete run' {onclick}></i>"
-                        )
+                        run["label_kind"] = "url"
+                        run["label_source"] = source
+                        run["label_icon"] = type.get("icon", "question-circle")
+                        run["label_type_title"] = type.get("label", "Unknown URL type")
+                        run["label_id"] = id
                     else:
-                        run["html_label"] = f"<i class='bi bi-x-octagon text-danger' title='{label}'>&nbsp;Error parsing URL</i>"
+                        run["label_kind"] = "url_error"
                 elif label:
-                    run["html_label"] = f"<span class='text-nowrap'>{label} <i class='bi bi-trash3 inline-run-btn text-danger cursor-pointer' style='cursor: pointer; font-size: 0.8rem;' title='Delete run' {onclick}></i></span>"
+                    run["label_kind"] = "text"
 
         notify_web(
             instance=instance,

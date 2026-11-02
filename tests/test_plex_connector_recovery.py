@@ -16,7 +16,7 @@ import pytest
 from plexapi.exceptions import NotFound as PlexAPINotFound
 
 from core.enums import MediaType
-from core.exceptions import PlexLookupError
+from core.exceptions import PlexConnectorException, PlexLookupError
 from models.artwork_types import MovieArtwork
 from plex.plex_connector import PlexConnector
 
@@ -171,6 +171,27 @@ def test_reconnect_bumps_state_generation():
     connector.reconnect(updated_config)
 
     assert connector.state_generation == before + 1
+
+
+def test_a_failed_reconnect_drops_the_previous_libraries():
+    """Fork: with the old handles still held, ensure_libraries() would treat the new server's
+    libraries as already resolved and keep querying the old one once it recovered."""
+    connector = PlexConnector("http://old-plex:32400", "old-token")
+    connector.plex = object()
+    connector.movie_libraries = [Mock(title="Old Movies")]
+    connector.tv_libraries = [Mock(title="Old TV")]
+
+    def _down():
+        raise PlexConnectorException("down")
+
+    connector.connect = _down
+    updated_config = Mock(base_url="http://new-plex:32400", token="t", tv_library=["TV"], movie_library=["Movies"])
+
+    with pytest.raises(PlexConnectorException):
+        connector.reconnect(updated_config)
+
+    assert connector.movie_libraries == [] and connector.tv_libraries == []
+    assert connector.has_libraries() is False
 
 
 def test_state_generation_unchanged_without_a_reconnect():

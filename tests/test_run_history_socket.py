@@ -117,3 +117,26 @@ def test_load_run_history_with_no_runs_emits_an_empty_list(tmp_path, stub_socket
         stub_socket.handlers["load_run_history"]({"instance_id": "abc"})
 
     assert emitted["data"]["runs"] == []
+
+
+@pytest.mark.unit
+def test_a_label_with_markup_and_an_apostrophe_is_returned_verbatim(tmp_path, stub_socket, monkeypatch):
+    """The label used to be interpolated into server-built HTML/onclick strings; a quote broke
+    the delete button and markup became stored HTML. The frontend now builds the cell itself,
+    so the raw label must travel unmodified and there must be no html_label key to render."""
+    label = "<b>x</b> Schindler's List (1993)"
+    history = RunHistory(str(tmp_path / "run_history.json"))
+    history.add_run(RUN_TYPE_BULK, label, _iso(), _iso(), TRIGGER_MANUAL, OUTCOME_SUCCESS)
+    monkeypatch.setattr(web_routes, "RunHistory", lambda: history)
+
+    emitted = {}
+
+    def fake_notify_web(instance, event, data_to_include=None, silent=False):
+        emitted["data"] = data_to_include
+
+    with patch("web_routes.notify_web", side_effect=fake_notify_web):
+        stub_socket.handlers["load_run_history"]({"instance_id": "abc"})
+
+    run = emitted["data"]["runs"][0]
+    assert run["label"] == label
+    assert "html_label" not in run

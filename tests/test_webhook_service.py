@@ -627,3 +627,18 @@ def test_a_guid_search_that_finds_nothing_still_checks_the_row_getguid_returned(
 
     assert len(edition_library.plain.uploaded) == 1
     assert edition_library.edition.uploaded == []
+
+
+@pytest.mark.unit
+def test_a_webhook_resolves_libraries_plex_failed_to_give_at_startup(edition_library, history, monkeypatch):
+    """Fork: a webhook-only install never scrapes, so nothing else would call ensure_libraries()
+    once Plex comes back after a start-up outage."""
+    from core import globals as app_globals
+    section = app_globals.plex.movie_libraries[0]
+    app_globals.plex.movie_libraries = []
+    monkeypatch.setattr(app_globals.plex, "set_movie_libraries", lambda names: app_globals.plex.movie_libraries.append(section))
+    monkeypatch.setattr(app_globals.plex, "set_tv_libraries", lambda names: None)
+
+    WebhookService()._attempt(_alien_import("Alien (1979)"), WebhookService._dedupe_key(_alien_import("Alien (1979)")), _now(), _tally())
+
+    assert len(edition_library.plain.uploaded) == 1

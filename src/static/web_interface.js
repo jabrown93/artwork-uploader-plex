@@ -2041,6 +2041,75 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 
+// Fork: builds the run history label cell as DOM nodes (not HTML/onclick strings) so a label
+// containing a quote or markup cannot break the delete handler or run as injected HTML.
+function buildRunHistoryLabelCell(run) {
+    const fragment = document.createDocumentFragment();
+    const label = run.label || "";
+
+    if (run.label_kind === "url") {
+        const link = document.createElement("a");
+        link.href = label;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.className = "text-decoration-none text-reset";
+        link.title = label;
+        link.append(`${run.label_source} `);
+
+        const typeIcon = document.createElement("i");
+        typeIcon.className = `bi bi-${run.label_icon || "question-circle"}`;
+        typeIcon.title = run.label_type_title || "Unknown URL type";
+        link.appendChild(typeIcon);
+        link.append(" ");
+
+        const idSpan = document.createElement("span");
+        idSpan.className = "input-monospace";
+        idSpan.style.fontSize = "0.8rem";
+        idSpan.textContent = run.label_id || "";
+        link.appendChild(idSpan);
+
+        fragment.appendChild(link);
+        fragment.append(" ");
+        fragment.appendChild(buildRunHistoryDeleteIcon(run));
+    } else if (run.label_kind === "url_error") {
+        const errorIcon = document.createElement("i");
+        errorIcon.className = "bi bi-x-octagon text-danger";
+        errorIcon.title = label;
+        errorIcon.append("\u00a0Error parsing URL");
+        fragment.appendChild(errorIcon);
+    } else if (label) {
+        const span = document.createElement("span");
+        span.className = "text-nowrap";
+        span.append(`${label} `);
+        span.appendChild(buildRunHistoryDeleteIcon(run));
+        fragment.appendChild(span);
+    }
+
+    return fragment;
+}
+
+// Fork: the inline delete icon shared by every label cell variant above.
+function buildRunHistoryDeleteIcon(run) {
+    const icon = document.createElement("i");
+    icon.className = "bi bi-trash3 inline-run-btn text-danger cursor-pointer";
+    icon.style.cursor = "pointer";
+    icon.style.fontSize = "0.8rem";
+    icon.title = "Delete run";
+    icon.addEventListener("click", () => deleteRun(run.started_at, run.label));
+    return icon;
+}
+
+// Fork: the outcome icon opens the run's log file; built as a node so the run label reaches
+// the handler as a JS value instead of being interpolated into an onclick string.
+function buildRunHistoryOutcomeIcon(run, outcome, logFileName) {
+    const icon = document.createElement("i");
+    icon.className = `bi bi-${outcome.icon} cursor-pointer inline-run-btn`;
+    icon.style.cursor = "pointer";
+    icon.title = outcome.text;
+    icon.addEventListener("click", () => showLogsforRun(logFileName, run.label));
+    return icon;
+}
+
 function loadRunHistory() {
 
     const typeFilter = document.getElementById("run_history_type");
@@ -2087,12 +2156,15 @@ function loadRunHistory() {
             const typeLabel = RUN_HISTORY_TYPE_LABELS[run.run_type] || "unknown";
             const logFileName = run.log_file
 
+            // Fork: the label and outcome cells carry the run label into a click handler, so
+            // they are built as DOM nodes (textContent/addEventListener) instead of HTML/onclick
+            // strings - a label with a quote or markup must not break the handler or run as HTML.
             const cells = [
                 `<span title="${run.started_at}">${formatDateTime(run.started_at)}</span>`, // Started time
                 `<i class="bi bi-${typeIcon}" title="${typeLabel}"></i>`, // Type
-                run.html_label, // Label
+                buildRunHistoryLabelCell(run), // Label
                 `<i class="bi bi-${triggerIcon}" title="${triggerLabel}"></i>`, // Trigger
-                `<i class="bi bi-${outcome.icon} cursor-pointer inline-run-btn" style="cursor: pointer;" title="${outcome.text}" onclick="showLogsforRun('${logFileName}', '${run.label}')"></i>`, // Outcome
+                buildRunHistoryOutcomeIcon(run, outcome, logFileName), // Outcome
                 `<span class="text-monospace">${run.assets_processed}</span>`, // Processed assets
                 `<span class="text-monospace">${run.success_count}</span>`, // Updated assets
                 `<span class="text-monospace">${run.cached_count}</span>`, // Cached assets
@@ -2105,7 +2177,11 @@ function loadRunHistory() {
             const centeredIndexes = [1, 3, 4, 5, 6, 7, 8, 9, 10];
             cells.forEach((value, index) => {
                 const cell = document.createElement("td");
-                cell.innerHTML = value;
+                if (value instanceof Node) {
+                    cell.appendChild(value);
+                } else {
+                    cell.innerHTML = value;
+                }
                 if (index === 4) { cell.className = `text-${outcome.iconColor}`; }
                 if (centeredIndexes.includes(index)) {
                     cell.classList.add("text-center");

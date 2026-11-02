@@ -213,6 +213,9 @@ class WebhookService:
                     return
                 _log(f"📥 Webhook | {event.source.title()} import: {event.label()}")
             globals.plex.connect()
+            # Fork: a Plex that was down at start-up left the library lists empty; connect()
+            # alone does not fill them, and a webhook-only install has no scrape to do it.
+            globals.plex.ensure_libraries()
             processor = UploadProcessor(globals.plex)
             processor.set_options(Options())
             # allow_artist_updates is a scheduled-scrape concern and must never apply here.

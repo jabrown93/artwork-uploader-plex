@@ -111,6 +111,11 @@ Dated so a later sync can revisit them.
     archive-wide counter demoted every show's first asset but one.
   - `ensure_libraries` retries each configured library type independently, so a type that failed
     at start-up recovers while the other is already held.
+    `reconnect` drops the old handles before connecting, and the webhook path calls
+    `ensure_libraries` so a webhook-only install recovers without a scrape.
+  - Run-history labels are rendered with `textContent` and listener closures (upstream built an
+    `html_label` string with the label inside inline `onclick`), closing stored HTML injection
+    and the broken delete button on labels with an apostrophe.
   - `find_in_library` keeps the fork's title/year fallback after a TMDb GUID miss (uploads can
     carry no `tmdb_id`), with the same partial-result semantics.
   - An item whose processing raises counts as a failure (`callbacks.failed(1)`), so the summary,
