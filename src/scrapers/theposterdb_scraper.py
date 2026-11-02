@@ -25,7 +25,7 @@ class ThePosterDBScraper:
         self.url: str = url
         self.title: Optional[str] = None
         self.options: Options = Options()
-        self.config: Config = Config()
+        self.config: Config = Config.at_active_path()  # Fork: follow CONFIG_PATH/--config
         self.callbacks: Optional[ProcessingCallbacks] = callbacks
         self.config.load()
         self.author: Optional[str] = None

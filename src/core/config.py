@@ -146,6 +146,18 @@ class Config:
         ip_binding: IP binding mode for the web server - "auto" (dual-stack), "ipv4", or "ipv6"
     """
 
+    @classmethod
+    def at_active_path(cls) -> "Config":
+        """
+        Fork: a fresh instance pointed at the config the app is running with.
+
+        CONFIG_PATH/--config move the file off the default; code that re-reads the config on
+        its own (scrapers, the upload processor) must follow it or it sees a different file.
+        """
+        from core import globals
+        active = getattr(globals.config, "path", None) if globals.config is not None else None
+        return cls(config_path=active) if active else cls()
+
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH) -> None:
         self.path: str = config_path
         self.base_url: str = ""

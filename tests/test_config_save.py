@@ -101,3 +101,38 @@ def test_a_failed_creation_leaves_no_temporary_file_behind(tmp_path):
 
     assert not os.path.exists(config.path)
     assert not os.path.exists(f"{config.path}.tmp")
+
+
+@pytest.mark.unit
+def test_a_fresh_config_follows_the_active_path(tmp_path, monkeypatch):
+    """Fork: scrapers and the upload processor re-read the config themselves; under
+    CONFIG_PATH/--config they must read the file the app runs with, not the default."""
+    from core import globals
+    active = Config(str(tmp_path / "custom" / "config.json"))
+    monkeypatch.setattr(globals, "config", active)
+
+    assert Config.at_active_path().path == active.path
+
+    monkeypatch.setattr(globals, "config", None)
+    assert Config.at_active_path().path == Config().path
+
+
+@pytest.mark.unit
+def test_scrapers_and_processor_read_the_active_config(tmp_path, monkeypatch):
+    from core import globals
+    from scrapers.theposterdb_scraper import ThePosterDBScraper
+    from scrapers.mediux_scraper import MediuxScraper
+    from processors.upload_processor import UploadProcessor
+    from models.callbacks import ProcessingCallbacks
+
+    path = tmp_path / "custom" / "config.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"tpdb_filters": ["background"], "mediux_filters": ["title_card"]}))
+    active = Config(str(path))
+    active.load()
+    monkeypatch.setattr(globals, "config", active)
+    monkeypatch.setattr(globals, "arr", None)
+
+    assert ThePosterDBScraper("https://theposterdb.com/set/1", ProcessingCallbacks()).config.tpdb_filters == ["background"]
+    assert MediuxScraper("https://mediux.pro/sets/1", ProcessingCallbacks()).config.mediux_filters == ["title_card"]
+    assert UploadProcessor(object()).config.tpdb_filters == ["background"]

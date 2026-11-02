@@ -24,7 +24,7 @@ class UploadProcessor:
     def __init__(self, plex: PlexConnector, arr: Optional["ArrService"] = None) -> None:
         self.plex: PlexConnector = plex
         self.options: Options = Options()
-        self.config: Config = Config()
+        self.config: Config = Config.at_active_path()  # Fork: follow CONFIG_PATH/--config
         self.config.load()
         self._match_confirm_cache: dict = {}
         self.artist_assets: Optional[dict] = None  # {md5(asset url): asset id} for the artist being processed
