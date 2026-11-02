@@ -77,7 +77,7 @@ All application code lives under `src/`:
 
 ### Critical Components
 
-- **PlexConnector** (`src/plex/plex_connector.py`): Plex server connection with 3s timeout, library detection, media item lookup.
+- **PlexConnector** (`src/plex/plex_connector.py`): Plex server connection with a configurable connect timeout (`plex_connect_timeout` config key, default 10s), library detection, media item lookup.
 - **UploadProcessor** (`src/processors/upload_processor.py`): Matches scraped artwork to Plex media, handles artwork ID tracking via labels.
 - **ArtworkProcessor** (`src/services/artwork_processor.py`): Orchestrates scrape-to-upload flow with callback-based progress.
 - **Web Routes** (`src/web_routes.py`): All HTTP routes and Socket.IO handlers.
@@ -107,26 +107,29 @@ All application code lives under `src/`:
 | `kometa_library_paths` | dict | Map library names to custom directory names |
 | `reset_overlay` | bool | Remove Kometa overlay label on upload |
 | `skip_locked_artwork` | bool | Skip artwork whose target field is locked in Plex, unless `--force` |
-| `auth_mode` | string | `none`, `password` or `oidc` (legacy `auth_enabled` is migrated to `password`) |
-| `oidc_issuer`, `oidc_client_id`, `oidc_client_secret` | string | OIDC client settings; env `OIDC_*` wins |
-| `oidc_groups_claim`, `oidc_allowed_groups` | string, array | Group allowlist; dotted claim paths supported |
-| `oidc_allow_password_fallback` | bool | Keep `/login?local=1` password sign-in as break-glass |
-| `external_url`, `trusted_proxy_count` | string, int | Public URL and proxy hops used to build the redirect URI |
-| `session_secret`, `session_cookie_secure` | string | Session signing key (env `SESSION_SECRET` wins) and cookie flag |
-| `cors_allowed_origins` | array | Empty means same-origin only for HTTP and Socket.IO |
+| `auth_enabled` | bool | Enable local username/password auth (configured via web UI) |
+| `oidc_enabled`, `oidc_label` | bool, string | Enable OIDC single sign-on and the login-button label |
+| `oidc_issuer`, `oidc_client_id`, `oidc_client_secret` | string | OIDC client settings |
+| `oidc_scopes` | array | OIDC scopes requested (`openid` is added if missing) |
+| `oidc_groups_claim`, `oidc_allowed_groups` | string, array | Group allowlist |
+| `external_url` | string | Public URL used to build the OIDC redirect URI (`<external_url>/login/oidc/callback`) |
 | `tls_cert_file`, `tls_key_file` | string | PEM cert chain and key paths; both set serves HTTPS directly (env `TLS_CERT_FILE`/`TLS_KEY_FILE` wins) |
+| `ip_binding` | string | `auto` (dual-stack), `ipv4`, or `ipv6` |
 
 Docker: `RUNNING_IN_DOCKER=1` hardcodes Kometa base to `/assets` and temp dir to `/temp`.
 
 ## Authentication
 
-- Modes live in `auth_mode`; `AuthenticationService` handles local passwords, `OidcService` (`src/services/oidc_service.py`) runs the OIDC authorization code flow with PKCE via Authlib.
-- HTTP routes use `@login_required`; **every** Socket.IO handler uses `@socket_login_required` and the `connect` handler refuses unauthenticated clients. All real work happens over Socket.IO, so a new handler without the decorator is an authentication bypass.
-- Secrets (`REDACTED_CONFIG_KEYS`: Plex token, Radarr/Sonarr API keys, OIDC client secret) never leave the server: `Config.to_public_dict()` swaps them for `SECRET_PLACEHOLDER`, and `apply_config_updates()` keeps the stored value when the UI echoes that placeholder back. `session_secret` is dropped entirely, and `PROTECTED_CONFIG_KEYS` blocks the UI from writing derived keys. Adding a new secret config key means adding it to `REDACTED_CONFIG_KEYS`.
+- `auth_enabled` gates local username/password login (`AuthenticationService`, `src/services/authentication_service.py`, bcrypt hash/verify). `oidc_enabled` gates OIDC, built on `requests_oauthlib.OAuth2Session` in `src/web_routes.py`; Fork: the authorization-code flow adds PKCE (`pkce="S256"`).
+- HTTP routes use `@login_required`; **every** Socket.IO handler carries `@socket_login_required`, and the `connect` handler also refuses unauthenticated clients. All real work happens over Socket.IO, so a new handler missing the decorator is an authentication bypass.
+- Secrets never reach the browser: `redact_config()` (`src/web_routes.py`) swaps anything in `REDACTED_CONFIG_KEYS` (Plex token, auth password hash, OIDC client secret, webhook token, Radarr/Sonarr API keys) for `SECRET_PLACEHOLDER`; the settings-save handler keeps the stored value when the UI echoes that placeholder back instead of a new one. Adding a new secret config key means adding it to `REDACTED_CONFIG_KEYS`.
+- Fork: the `SESSION_SECRET` env var pins the Flask session signing key (`session_secret_key()` in `src/web_routes.py`) so restarts don't log users out; unset, a random key is generated per process.
+
+See `FORK.md` for the full fork/upstream auth contract and which fork config keys the upstream merge dropped.
 
 ## Filter Types
 
-Defined in `src/core/constants.py`: `show_cover`, `background`, `season_cover`, `title_card`, `movie_poster`, `collection_poster`, `square_art`.
+Defined in `src/core/enums.py` (`FilterType`): `show_cover`, `background`, `season_cover`, `title_card`, `movie_poster`, `collection_poster`, `square_art`.
 
 Set globally in config or per-URL via `--filters`. Exclude by artwork ID or season/episode (`--exclude s01e05`).
 
@@ -154,13 +157,13 @@ Managed in `src/core/globals.py`. Singletons: `web_socket`, `scheduler_service`,
 4. Add singleton to `src/core/globals.py` only if needed
 
 ### Adding a Socket.IO Event
-1. Add handler in `src/web_routes.py` inside `setup_socket_handlers()`
+1. Add handler in `src/web_routes.py` inside `setup_socket_handlers()`, decorated with `@socket_login_required`
 2. Emit via `globals.web_socket.emit()`
 3. Handle in `src/static/web_interface.js`
 
 ## Constraints
 
-- **Python 3.10+** required. Use 3.11 or 3.12 (eventlet issues with 3.13).
+- **Python 3.12+** required (checked at startup against `MIN_PYTHON_MAJOR`/`MIN_PYTHON_MINOR` in `src/core/constants.py`).
 - **Port 4567** default (configurable via `DEFAULT_WEB_PORT`).
-- **Plex timeout**: 3s connection timeout; web UI starts even if Plex unreachable.
+- **Plex timeout**: `plex_connect_timeout` config key, default 10s (`DEFAULT_PLEX_CONNECT_TIMEOUT`); web UI starts even if Plex unreachable.
 - **Version**: Defined in `src/core/__version__.py`. Use `bump_version.py` for bumps.

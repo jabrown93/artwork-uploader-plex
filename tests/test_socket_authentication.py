@@ -1,7 +1,8 @@
 """The socket does the real work of the web UI, so it must refuse a session that has not logged in.
 
-The gate sits on connect rather than on each handler, so these tests assert on the connection
-rather than on any one event. That is what makes the cover hold for handlers added later.
+The gate sits on connect, and a per-event guard re-checks it on every handler too (Fork:
+socket_login_required in web_routes.py), so a client that connected before auth was turned on -
+or whose session has since logged out - does not keep full access to the handlers below.
 """
 
 import pytest
@@ -45,3 +46,16 @@ def test_a_refused_socket_reaches_no_handler(web_harness):
 
     with pytest.raises(RuntimeError):
         client.emit("load_config", {"instance_id": "abc"})
+
+
+@pytest.mark.unit
+def test_a_session_that_connected_before_auth_turned_on_is_rejected_on_the_next_event(web_harness):
+    """Fork: socket_login_required re-checks on every event, not only at connect, so a client
+    that connected while auth was off does not keep full access once auth is turned on."""
+    client = web_harness.socket_client()
+    assert client.is_connected()
+
+    web_harness.config.auth_enabled = True
+    client.emit("load_config", {"instance_id": "abc"})
+
+    assert not client.is_connected()

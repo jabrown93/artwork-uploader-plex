@@ -233,6 +233,35 @@ class TestSeasonCoverInPlex:
         assert not capture_kometa_saves
 
 
+class TestSpecialsStagingForExistingShow:
+    """Season 0 missing from Plex and not known to Sonarr - the stage_specials config
+       option should still let it be staged in Kometa mode (independent of Sonarr)."""
+
+    def test_specials_staged_when_stage_specials_enabled(self, configured, capture_kometa_saves):
+        configured.stage_specials = True
+        configured.save()
+        show = _show_with_season1_episode1()
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(tv_enabled=False))
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("✅")
+        assert capture_kometa_saves[0]["dest_file_name"] == "Season00"
+
+    def test_specials_skipped_when_stage_specials_disabled(self, configured, capture_kometa_saves):
+        configured.stage_specials = False
+        configured.save()
+        show = _show_with_season1_episode1()
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(tv_enabled=False))
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("⚠️")
+        assert "Specials not available in TV Shows" in results[0]
+        assert not capture_kometa_saves
+
+
+
 class TestEpisodeTitleCardInPlex:
     def test_episode_present_uploads(self, configured, capture_kometa_saves):
         show = _show_with_season1_episode1()

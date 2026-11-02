@@ -30,6 +30,9 @@ class UploadProcessor:
         self.artist_assets: Optional[dict] = None  # {md5(asset url): asset id} for the artist being processed
         # Fork: whether to pre-seed specials (season 0) via Sonarr even though it isn't in Plex.
         self.stage_specials: bool = globals.config.stage_specials
+        # Fork: whether to pre-seed a collection's artwork into every configured movie
+        # library via Kometa when the collection itself doesn't exist in Plex yet.
+        self.stage_collections: bool = globals.config.stage_collections
         # Fork: Radarr/Sonarr pre-seed fallback when an item isn't in Plex yet.
         self.arr: Optional["ArrService"] = arr if arr is not None else globals.arr
         # Fork: per-run memoization. A MediUX full-series set produces one artwork entry per
@@ -277,7 +280,8 @@ class UploadProcessor:
                     saver.retry_backoff = self.config.upload_retry_backoff_seconds
                     saver.set_artwork(artwork)
                     base_dir = ("/temp" if self.options.temp else "/assets") if globals.docker else getattr(globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
-                    saver.dest_dir = os.path.join(base_dir, library, asset_folder)
+                    # Fork: kometa_library_paths maps a Plex library name to a different Kometa directory name.
+                    saver.dest_dir = os.path.join(base_dir, globals.config.resolve_library_directory(library), asset_folder)
                     debug_me(f"Destination directory is {saver.dest_dir}")
                     saver.dest_file_name = ARTWORK_FILENAME_MAP.get(artwork.get('file_type'), 'poster')
                     saver.dest_file_ext = ".jpg"
@@ -299,6 +303,27 @@ class UploadProcessor:
                     uploader.set_options(self.options)
                     result = uploader.upload_to_plex()
                     results.append(result)
+        elif self.kometa and self.stage_collections:
+            # Fork: the collection isn't in Plex yet, but Kometa staging is enabled - save its
+            # artwork into every configured movie library so it's ready once Plex (or Kometa
+            # itself) creates the collection.
+            asset_folder = artwork["title"].replace("/", "").replace(":", "")
+            movie_libraries = self.config.movie_library if isinstance(self.config.movie_library, list) else [self.config.movie_library]
+            for library in movie_libraries:
+                saver = KometaSaver(artwork_type, library)
+                saver.download_timeout = self.config.kometa_download_timeout
+                saver.retry_attempts = self.config.upload_retry_attempts
+                saver.retry_backoff = self.config.upload_retry_backoff_seconds
+                saver.set_artwork(artwork)
+                base_dir = ("/temp" if self.options.temp else "/assets") if globals.docker else getattr(globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
+                saver.dest_dir = os.path.join(base_dir, globals.config.resolve_library_directory(library), asset_folder)
+                debug_me(f"Destination directory is {saver.dest_dir}")
+                saver.dest_file_name = ARTWORK_FILENAME_MAP.get(artwork.get('file_type'), 'poster')
+                saver.dest_file_ext = ".jpg"
+                saver.set_description(description)
+                saver.set_options(self.options)
+                result = saver.save_to_kometa()
+                results.append(result)
         else:
             raise CollectionNotFound(f'{description} | {artwork_type} not processed (Collection not available on Plex)')
         return results
@@ -365,7 +390,8 @@ class UploadProcessor:
                     elif self.kometa:
                         asset_folder = path_parts[-2]
                         base_dir = ("/temp" if self.options.temp else "/assets") if globals.docker else getattr(globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
-                        saver.dest_dir = os.path.join(base_dir, library, asset_folder)
+                        # Fork: kometa_library_paths maps a Plex library name to a different Kometa directory name.
+                        saver.dest_dir = os.path.join(base_dir, globals.config.resolve_library_directory(library), asset_folder)
 
                     debug_me(f"Destination directory is {saver.dest_dir}")
                     saver.dest_file_name = ARTWORK_FILENAME_MAP.get(artwork.get('file_type'), 'poster')
@@ -407,7 +433,8 @@ class UploadProcessor:
             saver.retry_backoff = self.config.upload_retry_backoff_seconds
             saver.set_artwork(artwork)
             base_dir = ("/temp" if self.options.temp else "/assets") if globals.docker else getattr(globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
-            saver.dest_dir = os.path.join(base_dir, arr_library, arr_movie.folder_name)
+            # Fork: kometa_library_paths maps a Plex library name to a different Kometa directory name.
+            saver.dest_dir = os.path.join(base_dir, globals.config.resolve_library_directory(arr_library), arr_movie.folder_name)
             debug_me(f"Destination directory is {saver.dest_dir}")
             saver.dest_file_name = ARTWORK_FILENAME_MAP.get(artwork.get('file_type'), 'poster')
             saver.dest_file_ext = ".jpg"
@@ -522,7 +549,9 @@ class UploadProcessor:
 
                         if artwork['episode'] == "Cover" or artwork['episode'] is None:
                             # This is a season cover
-                            if is_season_available or (self.staging and season != "Specials") or via_sonarr:
+                            # Fork: stage specials (season 0) in Kometa mode even when Sonarr
+                            # hasn't reported them yet.
+                            if is_season_available or (self.staging and season != "Specials") or via_sonarr or (self.kometa and self.stage_specials and season == "Specials"):
                                 debug_me(f"Staging is {'enabled' if self.staging else 'disabled'}")
                                 file_name = f"Season{artwork['season']:02}"
 
@@ -539,7 +568,9 @@ class UploadProcessor:
                                 continue
                         elif is_numeric(artwork['episode']) and artwork['episode'] >= 0:
                             # This is a title card
-                            if is_season_available or (self.staging and season != "Specials") or via_sonarr:
+                            # Fork: season gate mirrors the season-cover check above - stage
+                            # specials (season 0) in Kometa mode even without Sonarr.
+                            if is_season_available or (self.staging and season != "Specials") or via_sonarr or (self.kometa and self.stage_specials and season == "Specials"):
                                 is_episode_available = self._episode_exists_in_plex(tv_show, artwork['season'], artwork['episode'])
 
                                 if (is_season_available and is_episode_available) or self.staging or via_sonarr:
@@ -594,7 +625,8 @@ class UploadProcessor:
 
                     elif self.kometa:
                         base_dir = ("/temp" if self.options.temp else "/assets") if globals.docker else getattr(globals.config, 'temp_dir' if self.options.temp else 'kometa_base', None)
-                        saver.dest_dir = os.path.join(base_dir, library, asset_folder)
+                        # Fork: kometa_library_paths maps a Plex library name to a different Kometa directory name.
+                        saver.dest_dir = os.path.join(base_dir, globals.config.resolve_library_directory(library), asset_folder)
 
                     debug_me(f"Destination directory is {saver.dest_dir}")
                     saver.dest_file_name = file_name
@@ -671,7 +703,8 @@ class UploadProcessor:
         saver.retry_backoff = self.config.upload_retry_backoff_seconds
         saver.set_artwork(artwork)
         base_dir = ("/temp" if self.options.temp else "/assets") if globals.docker else getattr(globals.config, "temp_dir" if self.options.temp else "kometa_base", None)
-        saver.dest_dir = os.path.join(base_dir, library, arr_series.folder_name)
+        # Fork: kometa_library_paths maps a Plex library name to a different Kometa directory name.
+        saver.dest_dir = os.path.join(base_dir, globals.config.resolve_library_directory(library), arr_series.folder_name)
         debug_me(f"Destination directory is {saver.dest_dir}")
         saver.dest_file_name = file_name
         saver.dest_file_ext = ".jpg"

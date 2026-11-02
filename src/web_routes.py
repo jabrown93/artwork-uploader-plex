@@ -18,6 +18,7 @@ from pathlib import Path
 from packaging import version
 from plexapi.server import PlexServer
 from flask import render_template, send_from_directory, request, redirect, url_for, session, jsonify
+from flask_socketio import disconnect
 from requests_oauthlib import OAuth2Session
 from functools import wraps
 from core import globals
@@ -195,6 +196,21 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# Fork: re-check authentication on every Socket.IO event, not only at connect. A client that
+# connected while auth was off (or whose session has since logged out/expired) would otherwise
+# keep using every handler below once auth is turned on, since Socket.IO never revisits the
+# connect handler on a live connection.
+def socket_login_required(f):
+    """Decorator to require authentication for Socket.IO events."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if authentication_required() and not session.get('authenticated'):
+            debug_me(f"Rejected unauthenticated Socket.IO event '{f.__name__}'")
+            disconnect()
+            return None
+        return f(*args, **kwargs)
+    return decorated_function
+
 def get_oidc_redirect_uri(config):
     if config.external_url:
         base_url = config.external_url.rstrip("/")
@@ -207,7 +223,7 @@ def get_oidc_redirect_uri(config):
 # web UI never has to round-trip the real Plex token, OIDC client secret, webhook token or
 # password hash just to save an unrelated setting.
 SECRET_PLACEHOLDER = "UNCHANGED_STORED_SECRET"
-REDACTED_CONFIG_KEYS = ("token", "auth_password_hash", "oidc_client_secret", "webhook_token")
+REDACTED_CONFIG_KEYS = ("token", "auth_password_hash", "oidc_client_secret", "webhook_token", "radarr_api_key", "sonarr_api_key")
 
 
 def redact_config(config_dict: dict) -> dict:
@@ -622,6 +638,7 @@ def setup_socket_handlers(
             return False
 
     @globals.web_socket.on("debug_mode")
+    @socket_login_required
     def debug_mode(data):
         """Report on debug mode status and toggle debug mode."""
         instance = Instance(data.get("instance_id"), "web")
@@ -636,6 +653,7 @@ def setup_socket_handlers(
             globals.debug = not globals.debug
 
     @globals.web_socket.on("check_for_update")
+    @socket_login_required
     def check_for_update(data):
         """Check for updates when requested by the frontend."""
         instance = Instance(data.get("instance_id"), "web")
@@ -651,6 +669,7 @@ def setup_socket_handlers(
             notify_web(instance, "version_check", { "new_version": None, "current_version": current_version, "docker": globals.docker })
 
     @globals.web_socket.on("update_app")
+    @socket_login_required
     def update_app(data):
         """Pull updates from GitHub and restart the app."""
         instance = Instance(data.get("instance_id"), "web")
@@ -703,6 +722,7 @@ def setup_socket_handlers(
             notify_web(instance, "update_failed", {"error": str(e)})
 
     @globals.web_socket.on("start_scrape")
+    @socket_login_required
     def handle_scrape_from_web(data):
         """Handle scraping request from web UI."""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -721,6 +741,7 @@ def setup_socket_handlers(
             process_scrape_url_from_web(instance, url)
 
     @globals.web_socket.on("stop_scrape")
+    @socket_login_required
     def handle_stop_scrape(data):
         """Flag any in-flight scrape to stop cleanly (user pressed Stop in the web UI)."""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -728,6 +749,7 @@ def setup_socket_handlers(
             update_log(instance, "ℹ️ Nothing to stop - no scrape is running")
 
     @globals.web_socket.on("start_bulk_import")
+    @socket_login_required
     def handle_bulk_import_from_web(data):
         """Handle bulk import request from web UI."""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -737,6 +759,7 @@ def setup_socket_handlers(
         run_bulk_import_scrape_in_thread(instance, bulk_list, filename, notify=notify)
 
     @globals.web_socket.on("save_bulk_import")
+    @socket_login_required
     def handle_bulk_import(data):
         """Save bulk import file from web UI."""
         instance = Instance(data.get("instance_id"), "web")
@@ -747,6 +770,7 @@ def setup_socket_handlers(
             save_bulk_import_file(instance, content, filename, now_load)
 
     @globals.web_socket.on("load_config")
+    @socket_login_required
     def load_config_web(data):
         """Load configuration from web UI."""
         instance = Instance(data.get("instance_id"), "web")
@@ -756,6 +780,7 @@ def setup_socket_handlers(
         notify_web(instance, "load_config", {"config": redact_config(vars(config))})
 
     @globals.web_socket.on("load_bulk_filelist")
+    @socket_login_required
     def load_bulk_filelist(data):
         """Load list of bulk import files."""
         instance = Instance(data.get("instance_id"), "web")
@@ -768,6 +793,7 @@ def setup_socket_handlers(
         notify_web(instance, "load_bulk_filelist", {"bulk_files": bulk_files})
 
     @globals.web_socket.on("get_log_file")
+    @socket_login_required
     def get_log_file(data):
         """Get the contents of a log file and send them back to the frontend"""
         instance = Instance(data.get("instance_id"), "web")
@@ -796,6 +822,7 @@ def setup_socket_handlers(
         )
 
     @globals.web_socket.on("clear_history")
+    @socket_login_required
     def clear_run_history(data):
         """Clears the entire Run History"""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -844,6 +871,7 @@ def setup_socket_handlers(
         )
 
     @globals.web_socket.on("delete_run")
+    @socket_login_required
     def delete_run(data):
         """Deletes a single run from the run history"""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -870,6 +898,7 @@ def setup_socket_handlers(
             )
 
     @globals.web_socket.on("load_run_history")
+    @socket_login_required
     def load_run_history(data):
         """Load recent run history, optionally narrowed to one run type."""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -915,12 +944,14 @@ def setup_socket_handlers(
         )
 
     @globals.web_socket.on("load_bulk_import")
+    @socket_login_required
     def load_bulk_import(data):
         """Load a specific bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
         load_bulk_import_file(instance, data.get("filename"))
 
     @globals.web_socket.on("rename_bulk_file")
+    @socket_login_required
     def rename_bulk_file(data):
         """Rename a bulk import file, taking any of its schedules along with it."""
         instance = Instance(data.get("instance_id"), "web")
@@ -940,6 +971,7 @@ def setup_socket_handlers(
             config.save()
 
     @globals.web_socket.on("delete_bulk_file")
+    @socket_login_required
     def delete_bulk_file(data):
         """Delete a bulk import file, and every schedule that points at it."""
         instance = Instance(data.get("instance_id"), "web")
@@ -960,6 +992,7 @@ def setup_socket_handlers(
             update_log(instance, f"🗑️ Removed {removed} schedule(s) for '{filename}'")
 
     @globals.web_socket.on("create_bulk_file")
+    @socket_login_required
     def create_bulk_file(data):
         """Create a new bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
@@ -994,6 +1027,7 @@ def setup_socket_handlers(
             notify_web(instance, "create_bulk_file", {"created": False, "error": str(e)})
 
     @globals.web_socket.on("display_message")
+    @socket_login_required
     def display_message(data):
         """Log a debug message from the frontend."""
         instance = Instance(data.get("instance_id"), "web", broadcast=data.get("broadcast", False))
@@ -1006,6 +1040,7 @@ def setup_socket_handlers(
             update_status(instance, data.get("message"), data.get("color", "primary"), data.get("sticky", False), data.get("spinner", False), data.get("icon", None))
 
     @globals.web_socket.on("get_plex_libraries")
+    @socket_login_required
     def get_plex_libraries(data):
         """Get a list of the available Plex libraries"""
 
@@ -1033,6 +1068,7 @@ def setup_socket_handlers(
             notify_web(instance, f"get_plex_libraries", { "tv_libraries": [], "movie_libraries": [], "message": "Unable to connect to Plex" })
 
     @globals.web_socket.on("test_notifications")
+    @socket_login_required
     def test_notifications(data):
         """Send a test notification."""
         instance = Instance(data.get("instance_id"), "web")
@@ -1077,6 +1113,7 @@ def setup_socket_handlers(
         notify_web(instance, "add_spinner", { "element": "test_notif_btn", "mode": False })
 
     @globals.web_socket.on("get_auth_status")
+    @socket_login_required
     def get_auth_status(data):
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
         auth_enabled = getattr(globals.config, "auth_enabled", False) or getattr(globals.config, "oidc_enabled", False)
@@ -1095,13 +1132,16 @@ def setup_socket_handlers(
         )
 
     @globals.web_socket.on("save_config")
+    @socket_login_required
     def save_config_web(data):
         """Save configuration from web UI."""
         instance = Instance(data.get("instance_id"), "web")
 
         try:
             # Create new config object and load existing config from config.json
-            new_config = Config()
+            # Fork: diff against the active config path (CONFIG_PATH/--config), not the default -
+            # a custom-path deployment would otherwise compare against a fresh, unrelated file.
+            new_config = Config(config_path=config.path)
             new_config.load()
             new_config_dict = vars(new_config)
             current_config_dict = vars(globals.config).copy()
@@ -1115,6 +1155,10 @@ def setup_socket_handlers(
             # comes back as the placeholder leaves the stored value alone - the web UI never
             # receives the real one, so echoing the placeholder back must not overwrite it.
             for key, value in data.get("config").items():
+                if key == "path":
+                    # Fork: the config path is server-controlled (CONFIG_PATH/--config); a client
+                    # must never be able to redirect where the config file gets written.
+                    continue
                 if key in REDACTED_CONFIG_KEYS and value == SECRET_PLACEHOLDER:
                     continue
                 new_config_dict[key] = value
@@ -1190,6 +1234,9 @@ def setup_socket_handlers(
 
             # Also update globals
             globals.config = config
+            # Fork: rebuild the Radarr/Sonarr clients in case their URL/API key changed.
+            if globals.arr is not None:
+                globals.arr.reconfigure(config)
 
             # Reconnect to Plex because the Plex server or token might have changed
             instance.broadcast = True
@@ -1217,6 +1264,7 @@ def setup_socket_handlers(
             update_status(instance, str(config_error), color=StatusColor.WARNING.value)
 
     @globals.web_socket.on("create_directory")
+    @socket_login_required
     def create_directory(data):
         instance = Instance(data.get("instance_id"), "web")
 
@@ -1244,6 +1292,7 @@ def setup_socket_handlers(
 
 
     @globals.web_socket.on("delete_schedule")
+    @socket_login_required
     def delete_task_from_scheduler(data):
         """Delete a scheduled task, addressed by its own id.
 
@@ -1281,6 +1330,7 @@ def setup_socket_handlers(
                     return {"id": schedule_id, "deleted": False}
 
     @globals.web_socket.on("get_schedules")
+    @socket_login_required
     def get_schedules(data):
         """ Gets the list of schedules from the config file and sends it to the frontend """
         instance = Instance(data.get("instance_id"), "web", broadcast=True)
@@ -1310,6 +1360,7 @@ def setup_socket_handlers(
         )
 
     @globals.web_socket.on("add_schedule")
+    @socket_login_required
     def add_tasks_to_scheduler(data):
         """Add a new scheduled task, or update an existing one if an id is given."""
         try:
@@ -1405,6 +1456,7 @@ def setup_socket_handlers(
         return new_id
 
     @globals.web_socket.on("detect_docker")
+    @socket_login_required
     def docker_detection(data):
         """Detects whether app is running in docker and informs frontend"""
         instance = Instance(data.get("instance_id"), "web")
@@ -1420,6 +1472,7 @@ def setup_socket_handlers(
             notify_web(instance, "docker_detected", { "docker": "false" })
 
     @globals.web_socket.on("get_scrape_state")
+    @socket_login_required
     def get_scrape_state(data):
         instance = Instance(data.get("instance_id"), "web")
 
@@ -1481,6 +1534,7 @@ def setup_socket_handlers(
             abort_stale_upload(upload_key)
             
     @globals.web_socket.on("upload_artwork_chunk")
+    @socket_login_required
     def handle_upload_chunk(data):
         """Handle chunked file upload - writes directly to temp file for memory efficiency.
 
@@ -1654,6 +1708,7 @@ def setup_socket_handlers(
             return "error"
 
     @globals.web_socket.on("upload_complete")
+    @socket_login_required
     def handle_upload_complete(data):
         """Finalize the upload once all chunks are received."""
         instance = Instance(data.get("instance_id"), "web", broadcast=True)

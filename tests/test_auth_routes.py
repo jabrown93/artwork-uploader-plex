@@ -10,6 +10,7 @@ coverage from those files is kept here.
 
 import base64
 import hashlib
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from flask_socketio import SocketIO
 import core.globals as app_globals
 import web_routes
 from core.config import Config
+from core.constants import DEFAULT_CONFIG_PATH
 from services.authentication_service import AuthenticationService
 
 pytestmark = pytest.mark.unit
@@ -224,8 +226,8 @@ def save_config_harness(tmp_path, monkeypatch):
     monkeypatch.setattr(app_globals, "config", config)
     monkeypatch.setattr(app_globals, "web_socket", socket)
     monkeypatch.setattr(app_globals, "plex", SimpleNamespace(reconnect=lambda cfg: None))
-    # save_config_web builds its own Config() to diff against; point it at the same file.
-    monkeypatch.setattr(web_routes, "Config", lambda: Config(config_path=config_path))
+    # Fork: save_config_web now diffs against the active config.path (config_path=config.path),
+    # so the real Config class needs no monkeypatching here any more.
 
     web_routes.setup_routes(app, config)
     web_routes.setup_socket_handlers(config=config, filename_pattern=re.compile(r".*"))
@@ -255,6 +257,31 @@ class TestConfigRedaction:
         assert redacted["webhook_token"] == web_routes.SECRET_PLACEHOLDER
         # Unrelated settings pass through untouched
         assert redacted["base_url"] == "http://plex:32400"
+
+    def test_radarr_and_sonarr_api_keys_are_redacted_and_kept_unless_changed(self, save_config_harness):
+        """Fork: radarr_api_key/sonarr_api_key are sent to a third-party service, not just
+        stored locally, so they get the same redact-and-keep treatment as the Plex token."""
+        redacted = web_routes.redact_config({
+            "radarr_api_key": "real-radarr-key",
+            "sonarr_api_key": "real-sonarr-key",
+        })
+        assert redacted["radarr_api_key"] == web_routes.SECRET_PLACEHOLDER
+        assert redacted["sonarr_api_key"] == web_routes.SECRET_PLACEHOLDER
+
+        harness = save_config_harness
+        harness.config.radarr_api_key = "real-radarr-key"
+        harness.config.sonarr_api_key = "real-sonarr-key"
+        harness.config.save()
+
+        payload = web_routes.redact_config(vars(harness.config))
+        payload["auth_password"] = ""
+        payload["base_url"] = "http://plex:32400"  # unrelated change so save proceeds
+
+        client = harness.socket.test_client(harness.app)
+        client.emit("save_config", {"instance_id": "abc", "config": payload})
+
+        assert app_globals.config.radarr_api_key == "real-radarr-key"
+        assert app_globals.config.sonarr_api_key == "real-sonarr-key"
 
     def test_an_unset_secret_is_left_blank_not_placeholdered(self):
         redacted = web_routes.redact_config({"token": ""})
@@ -341,3 +368,45 @@ class TestSessionSecretKey:
         second = web_routes.session_secret_key()
         assert first != second
         assert len(first) == 64 and len(second) == 64
+
+
+class TestSaveConfigUsesTheActivePath:
+    """Fork: save_config_web diffs against config.path (CONFIG_PATH/--config), not a fresh
+    default-path Config, and the config path itself is never settable by the client."""
+
+    def test_save_writes_to_the_active_path_and_the_path_cannot_be_hijacked(self, save_config_harness):
+        harness = save_config_harness
+        original_path = harness.config.path
+        assert original_path != DEFAULT_CONFIG_PATH  # sanity: this harness uses a custom path
+
+        payload = web_routes.redact_config(vars(harness.config))
+        payload["auth_password"] = ""
+        payload["path"] = "/tmp/hijacked-config.json"
+        payload["base_url"] = "http://plex:32400"  # unrelated change so save proceeds
+
+        client = harness.socket.test_client(harness.app)
+        client.emit("save_config", {"instance_id": "abc", "config": payload})
+
+        assert app_globals.config.path == original_path
+        assert os.path.exists(original_path)
+
+
+class TestSaveConfigReconfiguresArr:
+    """Fork: the Radarr/Sonarr clients (ArrService) are rebuilt after a successful save in case
+    their URL/API key changed, or the pre-seed fallback keeps using stale clients until a
+    restart."""
+
+    def test_arr_is_reconfigured_after_a_successful_save(self, save_config_harness, monkeypatch):
+        harness = save_config_harness
+        reconfigured_with = []
+        monkeypatch.setattr(
+            app_globals, "arr", SimpleNamespace(reconfigure=lambda cfg: reconfigured_with.append(cfg)))
+
+        payload = web_routes.redact_config(vars(harness.config))
+        payload["auth_password"] = ""
+        payload["base_url"] = "http://plex:32400"  # unrelated change so save proceeds
+
+        client = harness.socket.test_client(harness.app)
+        client.emit("save_config", {"instance_id": "abc", "config": payload})
+
+        assert reconfigured_with == [app_globals.config]
