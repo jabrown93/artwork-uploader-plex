@@ -106,6 +106,10 @@ finish() {
   local target base prev tree msg commit
   [[ -s $STATE_FILE ]] || die "no sync in progress"
   target=$(cat "$STATE_FILE")
+  # A `git merge --abort` keeps the state file and grafted HEAD but drops MERGE_HEAD;
+  # finishing then would commit the unmerged tree and advance the marker past it.
+  [[ "$(git rev-parse -q --verify MERGE_HEAD || true)" == "$target" ]] \
+    || die "no merge of $(git rev-parse --short "$target") in progress (aborted?); re-run the sync"
   [[ -z "$(git diff --name-only --diff-filter=U)" ]] || die "unresolved conflicts remain"
   # HEAD is the grafted base; its first parent is the origin/main this sync started
   # from. origin/main may have moved since, and parenting on the newer commit with a
