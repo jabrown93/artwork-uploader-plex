@@ -2,6 +2,7 @@
 
 import json
 import os
+import multiprocessing
 import threading
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from services.run_history import RunHistory
+from core.exceptions import RunDeleteError
 from core.enums import RunType, RunTrigger, RunOutcome
 
 OUTCOME_SUCCESS = RunOutcome.SUCCESS.value
@@ -240,6 +242,66 @@ def test_concurrent_runs_finishing_together_do_not_lose_a_record(tmp_path):
 
     assert len(RunHistory(path).get_runs()) == 20
 
+
+def _mutate_history_in_process(path, operation, loaded, release, started):
+    class PausingHistory(RunHistory):
+        def _load(self):
+            runs = super()._load()
+            loaded.set()
+            if release is not None and not release.wait(10):
+                raise RuntimeError("Timed out waiting to release history transaction")
+            return runs
+
+    history = PausingHistory(path, max_entries=0, max_age_days=0)
+    started.set()
+    if operation == "delete":
+        history.delete_run("delete-me", refresh_frontend=False)
+    else:
+        history.add_run(RUN_TYPE_BULK, operation, operation, operation, TRIGGER_MANUAL, OUTCOME_SUCCESS)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("second_operation", ["second", "delete"])
+def test_cross_process_mutations_are_serialized(tmp_path, second_operation):
+    path = str(tmp_path / "nested" / "run_history.json")
+    history = RunHistory(path, max_entries=0, max_age_days=0)
+    history.add_run(RUN_TYPE_BULK, "original", "delete-me", "delete-me", TRIGGER_MANUAL, OUTCOME_SUCCESS)
+    ctx = multiprocessing.get_context("spawn")
+    first_loaded, first_release, first_started = ctx.Event(), ctx.Event(), ctx.Event()
+    second_loaded, second_started = ctx.Event(), ctx.Event()
+    first = ctx.Process(target=_mutate_history_in_process, args=(path, "first", first_loaded, first_release, first_started))
+    second = ctx.Process(target=_mutate_history_in_process, args=(path, second_operation, second_loaded, None, second_started))
+    first.start()
+    try:
+        assert first_loaded.wait(10)
+        second.start()
+        assert second_started.wait(10)
+        # The second process cannot read until the first has saved its changes.
+        assert not second_loaded.wait(1)
+    finally:
+        first_release.set()
+        first.join(10)
+        if second.pid is not None:
+            second.join(10)
+        for process in (first, second):
+            if process.pid is not None and process.is_alive():
+                process.terminate()
+                process.join()
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+    labels = {run["label"] for run in history.get_runs()}
+    assert labels == ({"original", "first", "second"} if second_operation == "second" else {"first"})
+
+
+
+@pytest.mark.unit
+def test_lock_setup_failure_preserves_mutation_error_behavior(tmp_path):
+    history = RunHistory(str(tmp_path / "nested" / "run_history.json"))
+    with patch("services.run_history.os.makedirs", side_effect=OSError("permission denied")):
+        history.add_run(RUN_TYPE_BULK, "first", _iso(), _iso(), TRIGGER_MANUAL, OUTCOME_SUCCESS)
+        with pytest.raises(RunDeleteError, match="permission denied"):
+            history.delete_run("missing", refresh_frontend=False)
+    assert history.get_runs() == []
 
 @pytest.mark.unit
 def test_saving_leaves_no_temporary_file_behind(tmp_path):

@@ -9,6 +9,9 @@ night's run actually do anything" without needing them.
 """
 
 import json, os, threading
+import errno
+import time
+from contextlib import contextmanager
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -19,11 +22,53 @@ from core import globals
 
 from core.constants import RUN_HISTORY_PATH, RUN_HISTORY_MAX_ENTRIES, RUN_HISTORY_MAX_AGE_DAYS, DEFAULT_LOG_PATH
 
-# A new RunHistory() is created per call rather than shared, so the read-modify-write in
-# add_run needs a lock keyed by file path (not an instance lock) to stop two runs finishing
-# at the same time - e.g. a schedule firing while a webhook applies a new import - from
-# each loading the same list and one overwriting the other's record.
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+# Keep the thread lock as well as the interprocess lock: each RunHistory instance
+# may be used independently, and the lock file must survive atomic replacement of
+# the history file itself. Never unlink the lock file while writers may be running.
 _write_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
+
+@contextmanager
+def _history_write_lock(path: str):
+    path = os.path.normcase(os.path.abspath(path))
+    with _write_locks[path]:
+        lock_file = None
+        try:
+            directory = os.path.dirname(path)
+            os.makedirs(directory, exist_ok=True)
+            lock_file = open(f"{path}.lock", "a+b")
+            if os.name == "nt":
+                while True:
+                    try:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError as e:
+                        if e.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                            raise
+                        time.sleep(0.05)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except OSError as e:
+            if lock_file is not None:
+                lock_file.close()
+            raise HistorySaveError(f"Failed to save run history to '{path}': {e}") from e
+        try:
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
 
 def _debug(message: str) -> None:
     from utils.notifications import debug_me
@@ -72,11 +117,7 @@ class RunHistory:
             return []
 
     def _save(self, runs: List[Dict[str, Any]]) -> None:
-        # Written to a temporary file and moved into place, so a reader never sees a partly
-        # written one. The write lock above only holds within a single process, and a bulk
-        # import run from the command line is a second process alongside the web interface,
-        # so a read landing mid-write is possible: it would come back empty and the next
-        # save would keep only its own record. os.replace is atomic on POSIX and Windows.
+        # Atomic replacement keeps readers from seeing a partially written file.
         temp_path = f"{self.path}.tmp"
         try:
             directory = os.path.dirname(self.path)
@@ -155,7 +196,7 @@ class RunHistory:
         log_file = getattr(globals.run_log, "path", None)
 
         try:
-            with _write_locks[os.path.abspath(self.path)]:
+            with _history_write_lock(self.path):
                 runs = self._load()
                 runs.append({
                     "run_type": run_type,
@@ -196,7 +237,7 @@ class RunHistory:
     def delete_run(self, timestamp: str, refresh_frontend: bool=True) -> None:
         run_label = None
         try:
-            with _write_locks[os.path.abspath(self.path)]:
+            with _history_write_lock(self.path):
                 runs = self._load()
                 remaining_runs = []
                 log_file = None

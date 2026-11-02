@@ -1837,6 +1837,8 @@ def setup_socket_handlers(
                 upload = None
             else:
                 upload_chunks.pop(upload_key)
+                if upload.get("watchdog"):
+                    upload["watchdog"].cancel()
 
         if upload is None:
             debug_me(
@@ -1846,14 +1848,14 @@ def setup_socket_handlers(
             return
 
         temp_path = upload["temp_path"]
-        debug_me(f"Uploaded {file_name} to {temp_path}, processing file...")
         try:
-            upload["temp_file"].close()
-        except Exception as e:
-            debug_me(f"Unable to close temp file: {str(e)}")
+            debug_me(f"Uploaded {file_name} to {temp_path}, processing file...")
+            try:
+                upload["temp_file"].close()
+            except Exception as e:
+                debug_me(f"Unable to close temp file: {str(e)}")
 
-        update_log(instance, f"✔️ {file_name} • Upload completed successfully")
-        try:
+            update_log(instance, f"✔️ {file_name} • Upload completed successfully")
             save_uploaded_file(
                 instance,
                 file_name,
@@ -1876,6 +1878,13 @@ def setup_socket_handlers(
                     os.remove(temp_path)
             except OSError as e:
                 debug_me(f"Error during cleanup: {str(e)}")
+            globals.scrapes_running -= 1
+            if globals.scrapes_running <= 0:
+                globals.scrapes_running = 0
+                globals.cancel_scrape = False
+                globals.main_bar["active"] = False
+                notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
+                globals.scrape_type = "stopped"
 
 
 def save_uploaded_file(
@@ -1918,8 +1927,9 @@ def save_uploaded_file(
     # them. The finally covers the cancel path and any failure, which otherwise left the uploaded
     # archive and every extracted image behind for the life of the container.
     temp_zip_folder = tempfile.mkdtemp()
-    extract_dir = tempfile.mkdtemp()
+    extract_dir = None
     try:
+        extract_dir = tempfile.mkdtemp()
         # Move to a proper file location with correct filename for processing
         temp_zip_path = os.path.join(temp_zip_folder, file_name)
 
@@ -1942,7 +1952,6 @@ def save_uploaded_file(
         )
         if globals.cancel_scrape:
             notify_web(instance, "progress_bar", {"message": "Parsing canceled by user...", "percent": 100})#, "bar_type": bar_type, "bar_speed": bar_speed})
-            globals.main_bar["active"] = False
             update_log(instance, f"🛑 {os.path.basename(temp_zip_path)} • ZIP file parsing canceled by user")
             update_status(instance, f"ZIP file parsing canceled by user", color=StatusColor.WARNING.value)
             RunHistory().add_run(
@@ -1953,12 +1962,6 @@ def save_uploaded_file(
                 trigger=RunTrigger.MANUAL.value,
                 outcome=RunOutcome.STOPPED.value
             )
-            globals.scrapes_running -= 1
-            if globals.scrapes_running <= 0:
-                globals.scrapes_running = 0
-                globals.cancel_scrape = False
-                notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
-                globals.scrape_type = "stopped"
             return
 
         # Delete the ZIP file after extraction, so it is not held while the artwork is processed
@@ -1975,15 +1978,10 @@ def save_uploaded_file(
         else:
             update_status(instance, "Finished processing uploaded file", color=StatusColor.SUCCESS.value)
 
-        globals.scrapes_running -= 1
-        if globals.scrapes_running <= 0:
-            globals.scrapes_running = 0
-            globals.cancel_scrape = False
-            notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
-            globals.scrape_type = "stopped"
     finally:
         shutil.rmtree(temp_zip_folder, ignore_errors=True)
-        shutil.rmtree(extract_dir, ignore_errors=True)
+        if extract_dir is not None:
+            shutil.rmtree(extract_dir, ignore_errors=True)
         debug_me(f"Removed temporary directories {temp_zip_folder} and {extract_dir}")
 
 # Fork: progressive Plex title resolution (FORK.md "Plex lookups" invariant). PlexLookupError

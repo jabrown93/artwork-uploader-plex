@@ -399,3 +399,144 @@ def test_concurrent_uploads_keep_separate_run_metadata(upload_handlers, monkeypa
 
     labels = {entry["file_name"]: entry["run_label"] for entry in captured}
     assert labels == {"first.zip": "first", "second.zip": "second"}
+
+
+@pytest.mark.parametrize("failure_point", ["extract", "process", "setup"])
+def test_processing_exception_releases_only_its_upload(upload_handlers, monkeypatch, failure_point):
+    emit, created_files = upload_handlers
+    events = []
+    monkeypatch.setattr(web_routes, "notify_web", lambda instance, event, data, **kw: events.append((event, data)))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("processing failed")
+
+    if failure_point == "setup":
+        monkeypatch.setattr(web_routes.tempfile, "mkdtemp", fail)
+    else:
+        monkeypatch.setattr(
+            web_routes,
+            "extract_and_list_zip",
+            fail if failure_point == "extract" else lambda *args: ([], 0, "", "", ""),
+        )
+        if failure_point == "process":
+            monkeypatch.setattr(sys.modules["artwork_uploader"], "process_uploaded_artwork", fail)
+
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+    emit("upload_artwork_chunk", "client-b", chunk_payload(b"pending", total_chunks=2))
+
+    with pytest.raises(RuntimeError, match="processing failed"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 1
+    assert globals.scrape_type == "upload"
+    assert not any(event == "scrape_state" and not data["running"] for event, data in events)
+    assert not os.path.exists(created_files[0].name)
+
+    # Completion removed client-a's entry: its disconnect must not release client-b's run.
+    emit("disconnect", "client-a")
+    assert globals.scrapes_running == 1
+    emit("disconnect", "client-b")
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert any(event == "scrape_state" and not data["running"] for event, data in events)
+
+
+@pytest.mark.parametrize("cancel_during", ["extract", "process", None])
+def test_processing_completion_releases_one_run(upload_handlers, monkeypatch, cancel_during):
+    emit, _ = upload_handlers
+    events = []
+    monkeypatch.setattr(web_routes, "notify_web", lambda instance, event, data, **kw: events.append((event, data)))
+
+    def extract(*args):
+        if cancel_during == "extract":
+            globals.cancel_scrape = True
+        return [], 0, "", "", ""
+
+    def process(*args, **kwargs):
+        if cancel_during == "process":
+            globals.cancel_scrape = True
+
+    monkeypatch.setattr(web_routes, "extract_and_list_zip", extract)
+    monkeypatch.setattr(sys.modules["artwork_uploader"], "process_uploaded_artwork", process)
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+    emit("upload_artwork_chunk", "client-b", chunk_payload(b"pending", total_chunks=2))
+    emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 1
+    assert globals.scrape_type == "upload"
+    assert not any(event == "scrape_state" and not data["running"] for event, data in events)
+    emit("disconnect", "client-a")
+    assert globals.scrapes_running == 1
+    emit("disconnect", "client-b")
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert globals.cancel_scrape is False
+
+
+def test_last_processing_failure_clears_run_state_and_progress(upload_handlers, monkeypatch):
+    emit, created_files = upload_handlers
+    events = []
+    monkeypatch.setattr(web_routes, "notify_web", lambda instance, event, data, **kw: events.append((event, data)))
+
+    def fail(*args):
+        raise RuntimeError("invalid archive")
+
+    monkeypatch.setattr(web_routes, "extract_and_list_zip", fail)
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+    globals.cancel_scrape = True
+
+    with pytest.raises(RuntimeError, match="invalid archive"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert globals.cancel_scrape is False
+    assert globals.main_bar["active"] is False
+    assert not os.path.exists(created_files[0].name)
+    assert [data["running"] for event, data in events if event == "scrape_state"] == [True, False]
+
+    emit("upload_complete", "client-a", complete_payload())
+    emit("disconnect", "client-a")
+    assert globals.scrapes_running == 0
+    assert [data["running"] for event, data in events if event == "scrape_state"] == [True, False]
+
+
+def test_second_temp_directory_failure_removes_first_and_releases_run(upload_handlers, monkeypatch, tmp_path):
+    emit, created_files = upload_handlers
+    real_mkdtemp = tempfile.mkdtemp
+    created_dirs = []
+
+    def mkdtemp(*args, **kwargs):
+        if created_dirs:
+            raise OSError("cannot create extraction directory")
+        path = real_mkdtemp(*args, dir=tmp_path, **kwargs)
+        created_dirs.append(path)
+        return path
+
+    monkeypatch.setattr(web_routes.tempfile, "mkdtemp", mkdtemp)
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+
+    with pytest.raises(OSError, match="cannot create extraction directory"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert not os.path.exists(created_files[0].name)
+    assert not os.path.exists(created_dirs[0])
+
+
+def test_completion_log_failure_releases_run(upload_handlers, monkeypatch):
+    emit, created_files = upload_handlers
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("logging failed")
+
+    monkeypatch.setattr(web_routes, "update_log", fail)
+    with pytest.raises(RuntimeError, match="logging failed"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert globals.main_bar["active"] is False
+    assert not os.path.exists(created_files[0].name)
