@@ -1,20 +1,19 @@
-import socket
-import xml.etree.ElementTree
-from threading import Lock
-from typing import Optional, List, Tuple, Union, Any
-from urllib.parse import urlparse
-
-import plexapi.exceptions
-import requests
-from core.config import Config
+import requests, plexapi.exceptions, xml.etree.ElementTree, re
+from typing import Optional, List, Tuple, Union, Literal
+from core import globals
+from core.enums import MediaType
+from core.constants import DEFAULT_PLEX_CONNECT_TIMEOUT
+from plexapi.server import PlexServer
+from plexapi.library import MovieSection, ShowSection
+from plexapi.video import Movie, Show
+from plexapi.collection import Collection
 from core.exceptions import PlexConnectorException, LibraryNotFound, PlexLookupError
 from models.artwork_types import AnyArtwork
 from models.options import Options
-from plexapi.library import MovieSection, ShowSection
-from plexapi.server import PlexServer
-from plexapi.video import Movie, Show
 from utils.notifications import debug_me
-
+from utils.utils import get_path_parts
+from core.config import Config
+from plex.library_index import PlexLibraryIndex, normalize_title
 
 class PlexConnector:
 
@@ -24,318 +23,211 @@ class PlexConnector:
         self.token: Optional[str] = token
         self.tv_libraries: List[ShowSection] = []
         self.movie_libraries: List[MovieSection] = []
-        self._tv_library_names: Optional[List[str]] = None
-        self._movie_library_names: Optional[List[str]] = None
-        self._state_generation = 0
-        self._state_lock = Lock()
         self.options: Options = Options()
-
-    @property
-    def state_generation(self) -> int:
-        """Return the connection generation for consumers caching Plex objects."""
-        with self._state_lock:
-            return self._state_generation
+        # Fork: bumped on reconnect; consumers that cache Plex objects (e.g. UploadProcessor's
+        # show/season/episode caches) invalidate themselves when this changes.
+        self.state_generation: int = 0
+        self._index: PlexLibraryIndex = PlexLibraryIndex(self.movie_libraries, self.tv_libraries)
 
     def set_options(self, options: Options) -> None:
         self.options = options
 
+    def _initialize_index(self):
+        self._index._initialize_index(self.movie_libraries, self.tv_libraries)
+
     def reconnect(self, updated_config: Config) -> None:
-        tv_library_names = (
-            [updated_config.tv_library]
-            if isinstance(updated_config.tv_library, str)
-            else list(updated_config.tv_library)
-        )
-        movie_library_names = (
-            [updated_config.movie_library]
-            if isinstance(updated_config.movie_library, str)
-            else list(updated_config.movie_library)
-        )
-        with self._state_lock:
-            self._state_generation += 1
-            generation = self._state_generation
-            self.plex = None
-            self.base_url = updated_config.base_url
-            self.token = updated_config.token
-            self._tv_library_names = tv_library_names
-            self._movie_library_names = movie_library_names
-            self.tv_libraries = []
-            self.movie_libraries = []
+        self.plex = None
+        self.base_url = updated_config.base_url
+        self.token = updated_config.token
+        self.state_generation += 1  # Fork: new connection generation; caches built on the old one are stale.
 
         try:
             self.connect()
-            self.set_tv_libraries(
-                tv_library_names, _expected_generation=generation)
-            self.set_movie_libraries(
-                movie_library_names, _expected_generation=generation)
+            self.set_tv_libraries(updated_config.tv_library)
+            self.set_movie_libraries(updated_config.movie_library)
         except PlexConnectorException:
             raise
         except Exception:
             raise
 
     def connect(self) -> None:
-        with self._state_lock:
-            if self.plex is not None:
-                return
-            generation = self._state_generation
-            base_url = self.base_url
-            token = self.token
+        if not self.plex:
+            if not self.base_url or not self.token:
+                raise PlexConnectorException("Invalid Plex token or base URL. Please provide valid values in config.json or via the GUI.")
 
-        if not base_url or not token:
-            raise PlexConnectorException(
-                "Invalid Plex token or base URL. Please provide valid values in config.json or via the GUI.")
+            timeout = globals.config.plex_connect_timeout if globals.config else DEFAULT_PLEX_CONNECT_TIMEOUT
 
-        # Quick connectivity check before attempting full connection
-        try:
-            parsed = urlparse(base_url)
-            host = parsed.hostname or 'localhost'
-            port = parsed.port or 32400
+            try:
+                self.plex = PlexServer(self.base_url, self.token, timeout=timeout)  # Also governs the timeout for uploads, which reuse this connection
 
-            # Try to connect with a short timeout using connect_ex (non-blocking check)
-            test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            test_socket.settimeout(3)
-            result = test_socket.connect_ex((host, port))
-            test_socket.close()
-
-            if result != 0:
-                debug_me(f"Connection refused (error code: {result})")
+            except requests.exceptions.Timeout as e:
+                # Handle timeout errors specifically
+                self.plex = None
                 raise PlexConnectorException(
-                    f'Cannot reach Plex server at {base_url}. Please check that the server is running and the address is correct.',
-                    f"Connection refused (error code: {result})")
-        except PlexConnectorException:
-            raise
-        except (socket.timeout, socket.error, OSError) as e:
-            raise PlexConnectorException(
-                f'Cannot reach Plex server at {base_url}. Connection timed out after 3 seconds.',
-                f"Connection failed: {str(e)}")
+                    f'Connection to Plex server at {self.base_url} timed out after {timeout} seconds. Please check that the server is running and accessible.',
+                    f"Plex connection timeout: {str(e)}")
 
-        try:
-            plex = PlexServer(base_url, token,
-                              timeout=10)  # Initialize the Plex server connection with 10 second timeout
+            except requests.exceptions.RequestException as e:
+                # Handle network-related errors (e.g., unable to reach the server)
+                self.plex = None
+                raise PlexConnectorException(
+                    f'Unable to connect to Plex server at {self.base_url}. Please check the "base_url" in config.json and ensure the server is accessible.',
+                    f"Unable to connect to Plex server: {str(e)}")
 
-        except requests.exceptions.Timeout as e:
-            # Handle timeout errors specifically
-            raise PlexConnectorException(
-                f'Connection to Plex server at {base_url} timed out after 10 seconds. Please check that the server is running and accessible.',
-                f"Plex connection timeout: {str(e)}")
+            except plexapi.exceptions.Unauthorized as e:
+                # Handle authentication-related errors (e.g., invalid token)
+                self.plex = None
+                raise PlexConnectorException(f'Invalid Plex token "{self.token}" -  please check the "token" in config.json or provide one.', f"Invalid Plex token: {str(e)}")
 
-        except requests.exceptions.RequestException as e:
-            # Handle network-related errors (e.g., unable to reach the server)
-            raise PlexConnectorException(
-                f'Unable to connect to Plex server at {base_url}. Please check the "base_url" in config.json and ensure the server is accessible.',
-                f"Unable to connect to Plex server: {str(e)}")
+            except xml.etree.ElementTree.ParseError as e:
+                # Handle XML parsing errors (e.g., invalid XML response from Plex)
+                self.plex = None
+                raise PlexConnectorException('Received invalid XML from Plex server. Check server connection.', f"Received invalid XML from Plex server: {str(e)}")
 
-        except plexapi.exceptions.Unauthorized as e:
-            # Handle authentication-related errors (e.g., invalid token)
-            raise PlexConnectorException(
-                f'Invalid Plex token "{token}" -  please check the "token" in config.json or provide one.',
-                f"Invalid Plex token: {str(e)}")
+            except Exception as e:
+                # Handle any other unexpected errors
+                self.plex = None
+                raise PlexConnectorException(f"Unexpected error: {str(e)}", f"Unexpected error: {str(e)}")
 
-        except xml.etree.ElementTree.ParseError as e:
-            # Handle XML parsing errors (e.g., invalid XML response from Plex)
-            raise PlexConnectorException('Received invalid XML from Plex server. Check server connection.',
-                                         f"Received invalid XML from Plex server: {str(e)}")
 
-        except Exception as e:
-            # Handle any other unexpected errors
-            raise PlexConnectorException(
-                f"Unexpected error: {str(e)}", f"Unexpected error: {str(e)}")
+    def set_tv_libraries(self, tv_libraries: Union[str, List[str]]) -> List[ShowSection]:
 
-        with self._state_lock:
-            if (
-                generation == self._state_generation
-                and base_url == self.base_url
-                and token == self.token
-                and self.plex is None
-            ):
-                self.plex = plex
-
-    def set_tv_libraries(
-        self,
-        tv_libraries: Union[str, List[str]],
-        _expected_generation: Optional[int] = None,
-    ) -> List[ShowSection]:
+        if not self.plex:
+            self.connect()
 
         if isinstance(tv_libraries, str):
             tv_libraries = [tv_libraries]
         elif not isinstance(tv_libraries, list):
-            raise PlexConnectorException(
-                "tv_libraries must be either a string or a list")
-        tv_library_names = list(tv_libraries)
+            raise PlexConnectorException("tv_libraries must be either a string or a list")
 
-        with self._state_lock:
-            if (
-                _expected_generation is not None
-                and _expected_generation != self._state_generation
-            ):
-                return self.tv_libraries
-            if (
-                _expected_generation is None
-                and self._tv_library_names != tv_library_names
-            ):
-                self._state_generation += 1
-            generation = self._state_generation
-            self._tv_library_names = tv_library_names
-            self.tv_libraries = []
-            plex = self.plex
-
-        if plex is None:
-            self.connect()
-            with self._state_lock:
-                if (
-                    generation != self._state_generation
-                    or self._tv_library_names != tv_library_names
-                ):
-                    return self.tv_libraries
-                plex = self.plex
-        if plex is None:
-            raise PlexConnectorException(
-                "Plex connection did not initialize a server handle")
-
-        tv_library_handles = []
-        for tv_library in tv_library_names:
+        self.tv_libraries = []
+        for tv_library in tv_libraries:
             try:
-                tv_library_handles.append(plex.library.section(tv_library))
+                plex_tv = self.plex.library.section(tv_library)
+                self.tv_libraries.append(plex_tv)
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'TV library named "{tv_library}" not found. Please check the "tv_library" in config.json or provide one.',
                     f'TV library named "{tv_library}" not found.')
-        with self._state_lock:
-            if (
-                generation == self._state_generation
-                and self._tv_library_names == tv_library_names
-                and self.plex is plex
-            ):
-                self.tv_libraries = tv_library_handles
-            published_libraries = self.tv_libraries
-        debug_me(f"The following TV libraries have been set: {[library.title for library in published_libraries]}",
-                 "PlexConnector/set_tv_libraries")
-        return published_libraries
+        debug_me(f"The following TV libraries have been set: {[library.title for library in self.tv_libraries]}")
+        return self.tv_libraries
 
-    def set_movie_libraries(
-        self,
-        movie_libraries: Union[str, List[str]],
-        _expected_generation: Optional[int] = None,
-    ) -> List[MovieSection]:
+    def set_movie_libraries(self, movie_libraries: Union[str, List[str]]) -> List[MovieSection]:
+
+        if not self.plex:
+            self.connect()
 
         if isinstance(movie_libraries, str):
             movie_libraries = [movie_libraries]
         elif not isinstance(movie_libraries, list):
-            raise PlexConnectorException(
-                "movie_libraries must be either a string or a list")
-        movie_library_names = list(movie_libraries)
+            raise PlexConnectorException("movie_libraries must be either a string or a list")
 
-        with self._state_lock:
-            if (
-                _expected_generation is not None
-                and _expected_generation != self._state_generation
-            ):
-                return self.movie_libraries
-            if (
-                _expected_generation is None
-                and self._movie_library_names != movie_library_names
-            ):
-                self._state_generation += 1
-            generation = self._state_generation
-            self._movie_library_names = movie_library_names
-            self.movie_libraries = []
-            plex = self.plex
-
-        if plex is None:
-            self.connect()
-            with self._state_lock:
-                if (
-                    generation != self._state_generation
-                    or self._movie_library_names != movie_library_names
-                ):
-                    return self.movie_libraries
-                plex = self.plex
-        if plex is None:
-            raise PlexConnectorException(
-                "Plex connection did not initialize a server handle")
-
-        movie_library_handles = []
-        for movie_library in movie_library_names:
+        self.movie_libraries = []
+        for movie_library in movie_libraries:
             try:
-                movie_library_handles.append(plex.library.section(movie_library))
+                plex_movies = self.plex.library.section(movie_library)
+                self.movie_libraries.append(plex_movies)
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'Movie library named "{movie_library}" not found. Please check the "movie_library" in config.json or provide one.',
                     f'Movie library named "{movie_library}" not found')
-        with self._state_lock:
-            if (
-                generation == self._state_generation
-                and self._movie_library_names == movie_library_names
-                and self.plex is plex
-            ):
-                self.movie_libraries = movie_library_handles
-            published_libraries = self.movie_libraries
-        debug_me(f"The following movie libraries have been set: {[library.title for library in published_libraries]}",
-                 "PlexConnector/set_movie_libraries")
-        return published_libraries
+        debug_me(f"The following movie libraries have been set: {[library.title for library in self.movie_libraries]}")
+        return self.movie_libraries
 
-    def _refresh_missing_libraries(self, item_type: Optional[str] = None) -> None:
-        with self._state_lock:
-            generation = self._state_generation
-            tv_library_names = (
-                list(self._tv_library_names)
-                if item_type in (None, "tv")
-                and not self.tv_libraries
-                and self._tv_library_names is not None
-                else None
-            )
-            movie_library_names = (
-                list(self._movie_library_names)
-                if item_type in (None, "movie")
-                and not self.movie_libraries
-                and self._movie_library_names is not None
-                else None
-            )
-        if tv_library_names is not None:
-            self.set_tv_libraries(
-                tv_library_names, _expected_generation=generation)
-        if movie_library_names is not None:
-            self.set_movie_libraries(
-                movie_library_names, _expected_generation=generation)
+
+    def has_libraries(self) -> bool:
+        """
+        Checks whether any Plex library has been resolved.
+
+        Returns:
+            True if at least one movie or TV library is set.
+        """
+        return bool(self.movie_libraries or self.tv_libraries)
+
+
+    def ensure_libraries(self, config: Optional[Config] = None) -> bool:
+        """
+        Resolves the configured libraries if none are held, so that a run recovers from a Plex
+        that was unreachable at start-up instead of needing the app restarted.
+
+        An empty library list matches nothing, and it looks exactly like a library that doesn't
+        hold the title, so a run made on one finds nothing, raises nothing and reports success.
+
+        Args:
+            config: Where to read the library names from. Defaults to the loaded config.
+
+        Returns:
+            True if at least one library is set by the time this returns. Never raises, so the
+            caller decides what an empty result means.
+        """
+        if self.has_libraries():
+            return True
+
+        config = config if config is not None else globals.config
+        if config is None:
+            return False
+
+        try:
+            self.set_tv_libraries(config.tv_library)
+        except Exception as e:
+            debug_me(f"Could not resolve the TV libraries: {e}")
+
+        try:
+            self.set_movie_libraries(config.movie_library)
+        except Exception as e:
+            debug_me(f"Could not resolve the movie libraries: {e}")
+
+        return self.has_libraries()
+
 
     # Find a specific collection in the movies library
-    def find_collection(self, collection_title: str) -> tuple[list[Any], list[Any]] | tuple[None, None]:
+    def find_collection(self, collection_title: str, fuzzy: bool = False) -> Optional[List[Collection]]:
 
         if not self.plex:
             self.connect()
-        self._refresh_missing_libraries("movie")
 
         collections = []
         libraries = []
 
-        for movie_library in self.movie_libraries:
+        for library in self.movie_libraries + self.tv_libraries:
             try:
-                plex_collections = movie_library.collections()
+                plex_collections = library.collections()
                 for collection in plex_collections:
-                    if collection.title == collection_title:
-                        debug_me(f"Found '{collection_title}' in '{movie_library.title}'",
-                                 "PlexConnector/find_collection")
+                    # Removes "Collection" from the title (if present) and anything between parenthesis, 
+                    # like 'Alfred Hitchcock (Directing)' or 'Tom Cruise (Acting)'
+                    fuzzy_match_str = re.sub(r"\s*\(.*?\)", "", collection_title.replace(" Collection", "")).strip()
+                    exact_match = collection_title.lower() == collection.title.lower()
+                    fuzzy_match = fuzzy and collection.title.lower().startswith(fuzzy_match_str.lower())
+
+                    if exact_match or fuzzy_match:
+                        if fuzzy:
+                            debug_me(f"Fuzzy-matched '{collection_title}' to '{collection.title}' in '{library.title}'")
+                        else:
+                            debug_me(f"Found collection '{collection_title} in '{library.title}'")
                         collections.append(collection)
-                        libraries.append(movie_library.title)
+                        libraries.append(library.title)
             except Exception as e:
                 # Continue checking other libraries if one fails
-                debug_me(
-                    f"Error searching collection in library: {e}", "PlexConnector/find_collection")
-                pass
+                debug_me(f"Error searching collection in library: {e}")
+                raise PlexConnectorException(f"Error seraching Plex for {collection_title}")
 
         if collections:
             return collections, libraries
 
+        debug_me(f"Collection '{collection_title}' not found in Plex")
         return None, None
 
     # Find a specific movie or TV show in the given library
-    def find_in_library(self, item_type: str, artwork: AnyArtwork) -> Tuple[
-            Optional[List[Union[Movie, Show]]], Optional[List[str]]]:
+    def find_in_library(self, media_type: Literal[MediaType.MOVIE, MediaType.TV_SHOW], artwork: AnyArtwork) -> Tuple[Optional[List[Union[Movie, Show]]], Optional[List[str]]]:
         """
         Finds a specific movie or TV show in the appropriate library based on the provided artwork information.
 
         Args:
             item_type: The type of item to search for ("movie" or "tv").
             artwork: The artwork information containing title and year.
+                An optional 'media_folder' names the folder the imported file is in, and an optional
+                'media_file' gives the file's path inside it. Together they limit the match to the
+                items holding that file, or with only the folder, to the items with a file in it.
 
         Returns:
             A tuple containing:
@@ -343,98 +235,80 @@ class PlexConnector:
             - A list of library names where the items were found, or None if not found.
 
         Raises:
-            PlexLookupError: At least one library raised something other than a
-                genuine "not found" miss, so the tuple below isn't a confirmed
-                result. ``partial_result`` carries what would have been returned.
+            PlexLookupError: At least one library raised something other than a confirmed
+                "not found" miss, so the tuple above isn't a confirmed result. Fork:
+                ``partial_result`` carries what would otherwise have been returned, so the
+                caller can use it without caching it as a definitive answer.
         """
         if not self.plex:
             self.connect()
-        self._refresh_missing_libraries(item_type)
 
         items = []
-        libs = []
-        # True once any library raises something other than a genuine miss, so the
+        lib_names = []
+        # Fork: True once any library raises something other than a genuine miss, so the
         # eventual result can't be trusted as "confirmed absent" and must not be cached.
         errored = False
 
-        libraries = self.tv_libraries if item_type == "tv" else self.movie_libraries
-        for i, library in enumerate(libraries):
+        libraries = self.tv_libraries if media_type == MediaType.TV_SHOW else self.movie_libraries
+        for library in libraries:
+            library_item = None
             try:
-                library_item = library.getGuid(
-                    f"tmdb://{artwork.get('tmdb_id')}")
+                library_item = library.getGuid(f"tmdb://{artwork.get('tmdb_id')}")
                 library_name = library.title
-                debug_me(
-                    f"Found '{artwork.get('title')} ({artwork.get('year')})' with TMDb ID '{artwork.get('tmdb_id')}' as '{library_item.title} ({library_item.year})' in '{library_name}'",
-                    "PlexConnector/find_in_library")
+                debug_me(f"Found '{artwork.get('title')} ({artwork.get('year')})' with TMDb ID '{artwork.get('tmdb_id')}' as '{library_item.title} ({library_item.year})' in '{library_name}'")
 
+                matches = []
                 if library_item:
-                    items.append(library_item)
-                    libs.append(library_name)
-            except plexapi.exceptions.NotFound as e:
-                # A genuine miss for this library; keep checking the others.
-                debug_me(
-                    f"Unable to find '{artwork.get('title')} ({artwork.get('year')})' as TMDb ID '{artwork.get('tmdb_id')}' in '{libraries[i].title}': {e}",
-                    "PlexConnector/find_in_library")
+                    # getGuid returns only the first item with the guid, and an edition in its own
+                    # folder is another item with the same one. Every copy of the film gets the
+                    # artwork, as a copy in another library does.
+                    matches = library.search(guid=library_item.guid) or [library_item]
+                if matches and artwork.get('media_folder'):
+                    # When the caller knows the imported path (a Radarr import), apply to the items
+                    # holding that file only. On an upgrade the old item stays in the same folder
+                    # until Plex rescans, so no item holding the new file means Plex has not
+                    # scanned it in yet.
+                    matches = self._items_holding(matches, artwork['media_folder'], artwork.get('media_file', ()))
+                for match in matches:
+                    items.append(match)
+                    lib_names.append(library_name)
+            except plexapi.exceptions.NotFound:
+                # Fork: a confirmed miss for this library; keep checking the others, not an error.
+                debug_me(f"'{artwork.get('title')} ({artwork.get('year')})' confirmed absent from '{library.title}'")
             except Exception as e:
-                # Continue checking other libraries if one fails, but remember the result is now unconfirmed.
+                # Fork: a timeout, dropped connection or any other failure here is transient, not
+                # a confirmed miss. Keep checking the other libraries but remember the result is
+                # no longer trustworthy as a definitive answer.
                 errored = True
-                debug_me(
-                    f"Unable to find '{artwork.get('title')} ({artwork.get('year')})' as TMDb ID '{artwork.get('tmdb_id')}' in '{libraries[i].title}': {e}",
-                    "PlexConnector/find_in_library")
+                debug_me(f"Unable to find '{artwork.get('title')} ({artwork.get('year')})' as TMDb ID '{artwork.get('tmdb_id')}' in '{library.title}': {e}")
         if items:
             if errored:
                 raise PlexLookupError(
                     f"Partial TMDb GUID lookup for '{artwork.get('title')}' ({artwork.get('year')}): at least one library errored",
-                    partial_result=(items, libs))
-            return items, libs
-
-        # Fallback to title/year search when TMDb GUID lookup fails
-        title = artwork.get('title')
-        year = artwork.get('year')
-        if title:
-            debug_me(
-                f"TMDb GUID lookup failed, falling back to title/year search for '{title} ({year})'",
-                "PlexConnector/find_in_library")
-            for i, library in enumerate(libraries):
-                try:
-                    search_kwargs: dict[str, Union[str, int]] = {'title': title}
-                    if year is not None:
-                        search_kwargs['year'] = int(year)
-                    search_results = library.search(**search_kwargs)
-                    # Retry with +/-1 year if no results
-                    if not search_results and year is not None:
-                        for adjusted_year in (int(year) - 1, int(year) + 1):
-                            search_kwargs['year'] = adjusted_year
-                            search_results = library.search(**search_kwargs)
-                            if search_results:
-                                break
-                    if search_results:
-                        library_item = search_results[0]
-                        items.append(library_item)
-                        libs.append(library.title)
-                        debug_me(
-                            f"Found '{title} ({year})' as '{library_item.title} ({library_item.year})' in '{library.title}' via title search",
-                            "PlexConnector/find_in_library")
-                except Exception as e:
-                    # An empty search() result is a genuine miss; any exception here is not.
-                    errored = True
-                    debug_me(
-                        f"Title search failed in '{libraries[i].title}': {e}",
-                        "PlexConnector/find_in_library")
-        if items:
-            if errored:
-                raise PlexLookupError(
-                    f"Partial title/year search for '{artwork.get('title')}' ({artwork.get('year')}): at least one library errored",
-                    partial_result=(items, libs))
-            return items, libs
+                    partial_result=(items, lib_names))
+            return items, lib_names
         if errored:
             raise PlexLookupError(
                 f"Lookup for '{artwork.get('title')}' ({artwork.get('year')}) is inconclusive: at least one library errored",
                 partial_result=(None, None))
         return None, None
+    
+    @staticmethod
+    def _items_holding(items: List[Union[Movie, Show]], folder: str, file: Tuple[str, ...] = ()) -> List[Union[Movie, Show]]:
+        """The items with a media file at `file` inside a folder called `folder`, or with no
+           `file`, any media file inside that folder. Paths are compared from the folder down
+           rather than in full, as the *arr app and Plex rarely mount the library at the same
+           root."""
+        def holds(path_parts: Tuple[str, ...]) -> bool:
+            if file:
+                return path_parts[-len(file) - 1:] == (folder, *file)
+            return folder in path_parts[:-1]
 
-    def movie_or_show(self, title: str, year: Optional[int] = None) -> Tuple[
-            Optional[str], Optional[int], Optional[str], Optional[int]]:
+        return [item for item in items
+                if any(holds(tuple(get_path_parts(part.file)))
+                       for media in item.media for part in media.parts if part.file)]
+
+    def movie_or_show(self, title:str, year:Optional[int] = None) -> Tuple[Optional[str], Optional[int], Optional[str], Optional[int]]:
         """
         Looks up a title in the Plex libraries.
 
@@ -450,80 +324,49 @@ class PlexConnector:
             - found_year (int | None): The year of the title found in Plex, else None
 
         Raises:
-            PlexLookupError: an earlier library raised before a hit was found
-                (partial_result carries the hit, since other libraries beyond
-                the failed one may hold a better match that was never
-                checked), or every library missed or raised (partial_result
-                is the all-None tuple). Either way the result is not
-                definitive and must not be cached as-is.
+            PlexLookupError: Fork: a library failed to (re)index during this call, so the
+                index may be missing or stale data for it. ``partial_result`` carries the
+                match found despite that (another library may hold a better one that was
+                never checked), or an all-None tuple when nothing matched.
         """
 
         if not self.plex:
-            self.connect()
-        self._refresh_missing_libraries()
-
-        # First check movie libraries
-        libraries_with_type = (
-            [(lib, "Movie") for lib in self.movie_libraries] +
-            [(lib, "TV Show") for lib in self.tv_libraries]
-        )
-        # Set when a library raises, so a lookup that never got a clean
-        # answer isn't confused with (and cached as) a genuine miss.
-        errored = False
-        for library, media_type in libraries_with_type:
             try:
-                search_kwargs: dict[str, Union[str, int]] = {'title': title}
-                if year is not None:
-                    search_kwargs['year'] = year
-                search_results = library.search(**search_kwargs)
-                if not search_results and year is not None:
-                    # Retry with +1/-1 year if no results found
-                    for adjusted_year in (int(year) - 1, int(year) + 1):
-                        search_kwargs['year'] = adjusted_year
-                        search_results = library.search(**search_kwargs)
-                        if search_results:
-                            break
-                if search_results:
-                    tmdb_id: Optional[int] = None
-                    result = search_results[0]
-                    found_title = result.title
-                    found_year = result.year
-                    for guid in result.guids:
-                        if "tmdb://" in guid.id:
-                            try:
-                                tmdb_id = int(guid.id.split("tmdb://", 1)[-1])
-                            except ValueError:
-                                pass
-                            break
-                    if tmdb_id is not None:
-                        debug_me(f"Item '{title} ({year})' identified as {media_type} with TMDb ID: {tmdb_id}",
-                                 "PlexConnector/movie_or_show")
-                    else:
-                        debug_me(f"Item '{title} ({year})' identified as {media_type} but TMDb ID not found",
-                                 "PlexConnector/movie_or_show")
-                    if errored:
-                        raise PlexLookupError(
-                            f"'{title} ({year})' lookup incomplete: matched in '{library.title}' "
-                            f"after an earlier library raised an error",
-                            partial_result=(media_type, tmdb_id, found_title, found_year),
-                        )
-                    return media_type, tmdb_id, found_title, found_year
-            except PlexLookupError:
-                # Raised above (a hit found after an earlier library
-                # errored); propagate as-is, don't let it be re-caught as
-                # another library error below.
-                raise
-            except Exception as e:
-                errored = True
-                debug_me(
-                    f"Error searching for movie in library '{library.title}': {e}", "PlexConnector/movie_or_show")
-                pass
+                self.connect()
+            except PlexConnectorException as e:
+                debug_me(f"PlexConnectorException raised when connecting to Plex: {str(e)}")
+                return "Error", None, None, None
 
-        debug_me(f"'{title} ({year})' not found in any library",
-                 "PlexConnector/movie_or_show")
+        try:
+            self._initialize_index()
+        except Exception as e:
+            debug_me(f"Error building Plex lookup index: {str(e)}")
+            return "Error", None, None, None
+
+        # Fork: a library that failed to (re)index this pass means the index may be stale or
+        # incomplete for it, so whatever lookup() returns below isn't a confirmed result.
+        errored = self._index.has_errors
+
+        status, match = self._index.lookup(title, year)
+        if status == "matched":
+            media_type = match.get("type")
+            tmdb_id = match.get("tmdb_id")
+            found_title = match.get("title")
+            found_year = match.get("year")
+            library = match.get("library")
+            if tmdb_id is not None:
+                debug_me(f"Item '{title} ({year})' identified as '{found_title} ({found_year})' ({media_type}) in library '{library}' with TMDb ID {tmdb_id}")
+            else:
+                debug_me(f"Item '{title} ({year})' identified as '{found_title} ({found_year})' ({media_type}) in library '{library}', but TMDb ID not found")
+            if errored:
+                raise PlexLookupError(
+                    f"'{title} ({year})' lookup incomplete: matched in '{library}' after another library failed to index",
+                    partial_result=(media_type, tmdb_id, found_title, found_year))
+            return media_type, tmdb_id, found_title, found_year
+
+        debug_me(f"'{title} ({year})' not found in any library")
         if errored:
             raise PlexLookupError(
-                f"'{title} ({year})' lookup incomplete: at least one library raised an error",
-                partial_result=(None, None, None, None),
-            )
-        return None, None, None, None
+                f"'{title} ({year})' lookup incomplete: at least one library failed to index",
+                partial_result=(None, None, None, None))
+        return "unavailable", None, None, None

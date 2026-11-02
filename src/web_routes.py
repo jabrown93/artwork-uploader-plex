@@ -9,57 +9,46 @@ The routes are organized into:
 - Socket.IO event handlers (@socket.on)
 - Helper functions for file uploads and processing
 """
-import shutil
-from typing import Optional
 
-from utils.notifications import update_log, update_status, notify_web, debug_me, send_notification
-from utils import utils
-from services import UtilityService, AuthenticationService
-from services import NotifyService
-from processors.media_metadata import parse_title
-from models.instance import Instance
-from core.constants import (
-    SOURCE_MEDIUX, SOURCE_THEPOSTERDB, SEASON_SQUARE_ART,
-    AUTH_MODE_NONE, AUTH_MODE_OIDC, AUTH_MODE_PASSWORD, AUTH_MODES,
-    SECRET_PLACEHOLDER, REDACTED_CONFIG_KEYS
-)
-from core.config import Config
-from core.enums import FilterType
-from core.exceptions import InvalidUrl, InvalidFlag, ConfigurationError, PlexLookupError
-from core import globals
-import base64
-import os
-import pprint
-import re
-import socket
+import os, logging, flask.cli, sys, re, base64, hmac, shutil, socket, tempfile, zipfile, subprocess, threading, uuid, requests
 import unicodedata
-import subprocess
-import sys
-import tempfile
-import time
-import zipfile
-from functools import wraps
-from threading import Event
-
-from flask import render_template, send_from_directory, request, redirect, url_for, session
-from flask_socketio import ConnectionRefusedError, disconnect
-from eventlet.semaphore import Semaphore
+from typing import Optional
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from packaging import version
 from plexapi.server import PlexServer
+from flask import render_template, send_from_directory, request, redirect, url_for, session, jsonify
+from requests_oauthlib import OAuth2Session
+from functools import wraps
+from core import globals
+from services.notify_service import NotifyService
+from utils.utils import calculate_file_md5, get_host_path
+from models.instance import Instance
+from models.bulk_schedule import BulkSchedule
+from core.config import Config, normalize_notification_channels
+from core.enums import FileType, MediaType, ScraperSource, StatusColor, RunType, RunTrigger, RunOutcome, IntervalUnit, AuthType
+from core.exceptions import RunDeleteError, LogDeleteError, ConfigurationError, PlexLookupError
+from core.__version__ import __version__
+from processors.media_metadata import parse_title
+from utils.notifications import update_log, update_status, notify_web, debug_me, log_to_file, resume_log_file
+from services import UtilityService, AuthenticationService, RunHistory
+from services.webhook_service import parse_event
 from logging_config import get_logger
+from core.constants import (
+    UPLOAD_CHUNK_SIZE,
+    UPLOAD_CHUNK_TIMEOUT,
+    WEBHOOK_TOKEN_HEADER,
+    URL_SOURCE_MAP,
+    URL_TYPE_MAP,
+    DEFAULT_LOG_PATH,
+    OIDC_REQUEST_TIMEOUT
+)
 
 logger = get_logger(__name__)
 
 
-SOURCE_TXT = "source.txt"
-
-# Config keys the web UI must never overwrite directly: secrets, derived values,
-# and the config file path itself
-PROTECTED_CONFIG_KEYS = frozenset({
-    "auth_password_hash", "auth_enabled", "auth_mode", "session_secret", "path"
-})
-
-
+# Fork: TLS and IPv4/IPv6/dual-stack binding (FORK.md "HTTPS / binding"). is_ipv6_available and
+# is_dual_stack_supported back start_web_server's "auto" mode below.
 def is_ipv6_available():
     """
     Check if IPv6 is available on the system.
@@ -147,162 +136,73 @@ def is_dual_stack_supported():
         return False
 
 
-def is_session_authenticated(config: Optional[Config]) -> bool:
+def resolve_tls_files(tls_cert_file: str, tls_key_file: str) -> dict:
     """
-    Whether the current Flask session is a valid, still-live login.
+    Validate the TLS file pair and return the SSL kwargs for SocketIO.run.
 
-    Sessions are invalidated when the identity provider's token has expired, and
-    when a password session survives a switch to OIDC-only authentication.
-    """
-    if not config or not config.auth_required:
-        return True
-
-    if not session.get('authenticated'):
-        return False
-
-    expires_at = session.get('idp_exp')
-    if expires_at:
-        try:
-            if time.time() >= float(expires_at):
-                return False
-        except (TypeError, ValueError):
-            return False
-
-    if (config.auth_mode == AUTH_MODE_OIDC
-            and session.get('auth_via') == 'password'
-            and not config.oidc_allow_password_fallback):
-        return False
-
-    return True
-
-
-def oidc_available(config: Config) -> bool:
-    """Whether an OIDC login can actually be started right now."""
-    return bool(config.auth_mode == AUTH_MODE_OIDC
-                and globals.oidc_service is not None
-                and globals.oidc_service.is_configured)
-
-
-def safe_next(target: Optional[str]) -> str:
-    """Return target if it is a same-site relative path, else the app root."""
-    if not target or not target.startswith("/") or target.startswith("//"):
-        return "/"
-    return target
-
-
-def external_base_url(config: Config) -> str:
-    """
-    Public base URL of this app.
-
-    Prefers the configured external_url; otherwise relies on the request host,
-    which is only correct behind a proxy when trusted_proxy_count is set.
-    """
-    if config.external_url:
-        return config.external_url.rstrip("/")
-    return request.host_url.rstrip("/")
-
-
-def oidc_redirect_uri(config: Config) -> str:
-    """Absolute callback URL that must be registered with the provider."""
-    return f"{external_base_url(config)}{url_for('oidc_callback')}"
-
-
-def apply_config_updates(config: Config, incoming: dict) -> None:
-    """
-    Merge a save_config payload into the config object.
-
-    Protected keys are ignored, and a redacted secret that comes back as the
-    placeholder leaves the stored value alone - the web UI never receives the
-    real one, so echoing the placeholder back must not overwrite it.
-    """
-    for key, value in incoming.items():
-        if key in PROTECTED_CONFIG_KEYS:
-            continue
-        if key in REDACTED_CONFIG_KEYS and value == SECRET_PLACEHOLDER:
-            continue
-        # Only real settings are writable; to_public_dict also carries computed
-        # keys and read-only properties that setattr would reject
-        if key not in vars(config):
-            continue
-        setattr(config, key, value)
-
-
-def apply_auth_mode(config: Config, incoming: dict) -> None:
-    """
-    Apply the auth mode from a save_config payload.
-
-    Clients written before auth_mode existed only send auth_enabled, so that is
-    honoured as a request for password mode.
-    """
-    requested = incoming.get("auth_mode")
-    if requested in AUTH_MODES:
-        config.set_auth_mode(requested)
-    elif "auth_enabled" in incoming:
-        config.set_auth_mode(
-            AUTH_MODE_PASSWORD if incoming["auth_enabled"] else AUTH_MODE_NONE)
-
-
-def validate_auth_config(config: Config) -> None:
-    """
-    Reject auth settings that would lock everyone out.
+    Failing fast beats silently serving plain HTTP when the user asked for
+    HTTPS - a half-configured or missing file would otherwise only surface as
+    browser connection errors.
 
     Raises:
-        ConfigurationError: If the selected mode cannot actually authenticate anyone.
+        ConfigurationError: If only one of the pair is set or a file is missing.
     """
-    if config.auth_mode == AUTH_MODE_PASSWORD and not config.auth_password_hash:
+    if not tls_cert_file or not tls_key_file:
         raise ConfigurationError(
-            "Set a username and password before enabling password protection")
-    if config.auth_mode == AUTH_MODE_OIDC and not config.oidc_is_configured():
-        raise ConfigurationError(
-            "Issuer, client ID and client secret are required before enabling single sign-on")
+            "HTTPS needs both tls_cert_file and tls_key_file (or TLS_CERT_FILE/TLS_KEY_FILE); "
+            f"got cert='{tls_cert_file}', key='{tls_key_file}'")
+    for label, path in (("certificate", tls_cert_file), ("private key", tls_key_file)):
+        if not os.path.isfile(path):
+            raise ConfigurationError(
+                f"TLS {label} file not found: {path}")
+    return {"certfile": tls_cert_file, "keyfile": tls_key_file}
 
 
-def socket_login_required(f):
-    """
-    Decorator to require authentication for Socket.IO events.
-
-    The connect handler already refuses unauthenticated clients; this re-checks on
-    every event so a session that expires mid-connection stops being honoured.
-    """
-
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        config = globals.config if hasattr(
-            globals, 'config') and globals.config else None
-
-        if not is_session_authenticated(config):
-            logger.warning(
-                f"Rejected unauthenticated Socket.IO event '{f.__name__}'")
-            disconnect()
-            return None
-
-        return f(*args, **kwargs)
-
-    return decorated_function
-
+def authentication_required():
+    """Whether the config asks for a login. Read from globals so the HTTP routes and the socket
+       handlers answer from one place, and so a config reload is picked up by both."""
+    config = globals.config if hasattr(globals, 'config') and globals.config else None
+    if not config:
+        return False
+    return config.auth_enabled or config.oidc_enabled
 
 def login_required(f):
     """Decorator to require authentication for routes."""
-
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Get config from globals
-        config = globals.config if hasattr(
-            globals, 'config') and globals.config else None
-
-        # If auth not enabled, allow access
-        if not config or not config.auth_required:
+        if not authentication_required():
             return f(*args, **kwargs)
 
-        if not is_session_authenticated(config):
-            session.clear()
-            if oidc_available(config):
-                return redirect(url_for('oidc_login', next=request.path))
+        # Check if user is logged in
+        if not session.get('authenticated'):
             return redirect(url_for('login'))
 
         return f(*args, **kwargs)
-
     return decorated_function
+
+def get_oidc_redirect_uri(config):
+    if config.external_url:
+        base_url = config.external_url.rstrip("/")
+        return f"{base_url}/login/oidc/callback"
+    
+    return url_for("oidc_callback", _external=True)
+
+# Fork: a placeholder sent back in place of a stored secret. redact_config() substitutes it on
+# the way out; save_config_web treats an echoed placeholder as "keep the stored value" so the
+# web UI never has to round-trip the real Plex token, OIDC client secret, webhook token or
+# password hash just to save an unrelated setting.
+SECRET_PLACEHOLDER = "UNCHANGED_STORED_SECRET"
+REDACTED_CONFIG_KEYS = ("token", "auth_password_hash", "oidc_client_secret", "webhook_token")
+
+
+def redact_config(config_dict: dict) -> dict:
+    """Return a copy of a config dict safe to send to the web UI, with secrets replaced by
+       SECRET_PLACEHOLDER."""
+    redacted = dict(config_dict)
+    for key in REDACTED_CONFIG_KEYS:
+        if redacted.get(key):
+            redacted[key] = SECRET_PLACEHOLDER
+    return redacted
 
 
 def setup_routes(web_app, config: Config):
@@ -314,144 +214,217 @@ def setup_routes(web_app, config: Config):
         config: Configuration object
     """
 
-    def render_login(error: Optional[str] = None, status: int = 200):
-        """Render the login page with the options available for the current mode."""
-        oidc_ready = oidc_available(config)
-        password_allowed = (config.auth_mode == AUTH_MODE_PASSWORD
-                            or (config.auth_mode == AUTH_MODE_OIDC
-                                and config.oidc_allow_password_fallback
-                                and bool(config.auth_password_hash)))
-        return render_template(
-            "login.html",
-            error=error,
-            oidc_enabled=oidc_ready,
-            oidc_provider=config.oidc_provider_name or "SSO",
-            show_password_form=password_allowed and (
-                config.auth_mode == AUTH_MODE_PASSWORD
-                or request.args.get('local') == '1'),
-            password_fallback_available=password_allowed and config.auth_mode == AUTH_MODE_OIDC
-        ), status
+    @web_app.route("/api/health", methods=["GET"])
+    def health_report():
+        """Public healthcheck endpoint"""
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "version": __version__
+        })
+    
+    @web_app.route("/api/auth/status", methods=["GET"])
+    def auth_status():
+        """Public endpoint to check which authentication methods are enabled."""
+        return jsonify({
+            "basic_enabled": getattr(config, "auth_enabled", False),
+            "oidc_enabled": getattr(config, "oidc_enabled", False),
+            "oidc_label": getattr(config, "oidc_label", "OIDC"),
+            "version": __version__
+        })
 
     @web_app.route("/login", methods=["GET", "POST"])
     def login():
-        """Handle local password login and render the sign-in page."""
+        """Handle user login."""
+
         # If auth not enabled, redirect to home
-        if not config.auth_required:
+        if not config.auth_enabled and not config.oidc_enabled:
+            debug_me("Auth is disabled, redirecting to the app")
             return redirect(url_for('home'))
 
         # Already logged in
-        if is_session_authenticated(config):
+        if session.get('authenticated'):
+            debug_me(f"User {session.get('username')} is already authenticated, redirecting to the app")
             return redirect(url_for('home'))
 
-        password_allowed = (config.auth_mode == AUTH_MODE_PASSWORD
-                            or (config.oidc_allow_password_fallback
-                                and bool(config.auth_password_hash)))
+        if request.method == "GET":
+            error = session.pop("oidc_error", None)
+            return render_template("login.html", error=error)
 
-        # In OIDC mode the login page is just a pass-through, unless the user
-        # explicitly asked for the break-glass local form
-        if (request.method == "GET" and oidc_available(config)
-                and request.args.get('local') != '1'):
-            return redirect(url_for('oidc_login', next=safe_next(request.args.get('next'))))
+        error = None
 
         if request.method == "POST":
-            if not password_allowed:
-                logger.warning(
-                    "Rejected password login attempt while password auth is disabled")
-                return render_login("Password sign-in is disabled", 403)
 
-            username = request.form.get('username', '')
-            password = request.form.get('password', '')
-            remember = request.form.get('remember') == 'on'
+            oidc_login = request.form.get("oidc-login", None)
+            basic_Login = request.form.get('username', None)
 
-            # Authenticate
-            if AuthenticationService.authenticate(username, password, config.auth_username, config.auth_password_hash):
-                session.clear()
-                session['authenticated'] = True
-                session['auth_via'] = 'password'
-                session['user'] = username
-                session.permanent = remember  # Set to 7 days if remember is checked
-                return redirect(url_for('home'))
+            if basic_Login:
+                debug_me(f"Logging in with basic authentication")
 
-            logger.warning(f"Failed password login for user '{username}'")
-            return render_login("Invalid username or password", 401)
+                username = request.form.get('username', '')
+                password = request.form.get('password', '')
+                remember = request.form.get('remember') == 'on'
 
-        if config.auth_mode == AUTH_MODE_OIDC and not oidc_available(config):
-            return render_login(
-                "Single sign-on is enabled but not fully configured", 200)
+                # Authenticate
+                if AuthenticationService.authenticate(username, password, config.auth_username, config.auth_password_hash):
+                    session['authenticated'] = True
+                    session['auth_type'] = AuthType.BASIC.value
+                    session['username'] = username
+                    session.permanent = remember  # Set to 7 days if remember is checked
+                    update_log(Instance(broadcast=True), f"👤 User {username} logged in successfully")
+                    return redirect(url_for('home'))
+                else:
+                    error = "Invalid username or password"
+                    update_log(Instance(broadcast=True), f"⛔ Invalid username or password provided")
 
-        return render_login()
+            elif oidc_login:
+                debug_me(f"Logging in with OIDC")
+                scopes = config.oidc_scopes
+                if "openid" not in scopes:
+                    scopes.append("openid")
 
-    @web_app.route("/auth/oidc/login")
-    def oidc_login():
-        """Start the OIDC authorization code flow."""
-        if not config.auth_required:
-            return redirect(url_for('home'))
+                redirect_uri = get_oidc_redirect_uri(config)
 
-        if not oidc_available(config):
-            return render_login("Single sign-on is enabled but not fully configured", 200)
+                oauth = OAuth2Session(
+                    client_id=config.oidc_client_id,
+                    redirect_uri=redirect_uri,
+                    scope=scopes,
+                    # PKCE protects the code exchange even if the redirect is intercepted
+                    pkce="S256"
+                )
 
-        session['oidc_next'] = safe_next(request.args.get('next'))
+                discovery_url = f"{config.oidc_issuer.rstrip('/')}/.well-known/openid-configuration"
+                try:
+                    disc_res = oauth.get(discovery_url, timeout=OIDC_REQUEST_TIMEOUT)
+                    authorization_endpoint = disc_res.json()["authorization_endpoint"]
+                except Exception as e:
+                    debug_me(f"OIDC Discovery Error: {e}")
+                    return render_template("login.html", error="Could not reach OIDC provider.")
 
-        try:
-            return globals.oidc_service.authorize_redirect(oidc_redirect_uri(config))
-        except Exception as e:
-            logger.error(f"Could not start OIDC login: {e}", exc_info=True)
-            return render_login(f"Could not reach the sign-in provider: {e}", 502)
+                authorization_url, state = oauth.authorization_url(authorization_endpoint)
 
-    @web_app.route("/auth/oidc/callback")
+                # Store OAuth state and the PKCE verifier in session for the callback. The
+                # verifier only exists on real OAuth2Session instances once pkce is set.
+                session["oauth_state"] = state
+                session["oidc_code_verifier"] = getattr(oauth, "_code_verifier", None)
+                session["auth_type"] = AuthType.OIDC.value
+                return redirect(authorization_url)
+
+        return render_template("login.html", error=error)
+
+    @web_app.route("/login/oidc/callback", methods=["GET"])
     def oidc_callback():
-        """Complete the OIDC login and establish the session."""
-        if not oidc_available(config):
-            return render_login("Single sign-on is not enabled", 400)
 
-        service = globals.oidc_service
+        state = session.pop("oauth_state", None)
+        if not state or state != request.args.get("state"):
+            return render_template("login.html", error="Invalid OIDC state session parameter.")
+
+        # Only this browser's own login attempt carries the verifier that matches the
+        # code_challenge sent to the provider, so a forged/replayed callback has none.
+        code_verifier = session.pop("oidc_code_verifier", None)
+
+        redirect_uri = get_oidc_redirect_uri(config)
+        debug_me(f"Obtained redirect URI as {redirect_uri}")
+
+        scopes = config.oidc_scopes
+
+        oauth = OAuth2Session(
+            client_id=config.oidc_client_id,
+            state=state,
+            redirect_uri=redirect_uri,
+            scope=scopes
+        )
 
         try:
-            claims = service.handle_callback()
+            discovery_url = f"{config.oidc_issuer.rstrip('/')}/.well-known/openid-configuration"
+            disc_res = oauth.get(discovery_url, timeout=OIDC_REQUEST_TIMEOUT).json()
+            token_endpoint = disc_res["token_endpoint"]
+            userinfo_endpoint = disc_res.get("userinfo_endpoint")
+            end_session_endpoint = disc_res.get("end_session_endpoint")
+
+            query_str = request.query_string.decode("utf-8")
+            auth_response_url = f"{redirect_uri}?{query_str}" if query_str else redirect_uri
+            debug_me(f"Constructing auth response URL as {auth_response_url}")
+            oauth.fetch_token(
+                token_url=token_endpoint,
+                authorization_response=auth_response_url,
+                client_secret=config.oidc_client_secret,
+                timeout=OIDC_REQUEST_TIMEOUT,
+                code_verifier=code_verifier
+            )
+
+            # Retrieve user information
+            user_info = oauth.get(userinfo_endpoint, timeout=OIDC_REQUEST_TIMEOUT).json() if userinfo_endpoint else {}
+
+            username = user_info.get("preferred_username") or user_info.get("sub") or "OIDC User"
+            groups_claim = config.oidc_groups_claim or "groups"
+            user_groups = user_info.get(groups_claim, [])
+
+            token_data = oauth.token
+            if "id_token" in token_data:
+                session["id_token"] = token_data["id_token"]
+            
+            # Validate allowed groups if configured
+            if config.oidc_allowed_groups:
+                allowed_set = set(config.oidc_allowed_groups)
+                user_set = set(user_groups) if isinstance(user_groups, list) else {user_groups}
+                
+                if not allowed_set.intersection(user_set):
+                    update_log(Instance(broadcast=True), f"⛔ OIDC login denied for {username}: Missing required group permissions")
+                    session.clear()
+                    session["oidc_error"] = "Access Denied: Your account does not belong to an allowed group."
+                    if end_session_endpoint:
+                        post_logout_uri = f"{redirect_uri.rsplit('/', 3)[0]}/login"
+                        id_token = token_data.get("id_token")
+                        logout_url = (
+                            f"{end_session_endpoint}?"
+                            f"post_logout_redirect_uri={post_logout_uri}&"
+                            f"client_id={config.oidc_client_id}"
+                        )
+                        if id_token:
+                            logout_url += f"&id_token_hint={id_token}"
+                        return redirect(logout_url)                        
+
+                    return render_template("login.html", error="Access Denied: You do not belong to an allowed group.")
+
+            # Authenticate session
+            session["authenticated"] = True
+            session["username"] = username
+            update_log(Instance(broadcast=True), f"👤 User {username} logged in successfully via OIDC")
+            return redirect(url_for("home"))
+
         except Exception as e:
-            logger.error(f"OIDC callback failed: {e}", exc_info=True)
-            return render_login(f"Sign-in failed: {e}", 401)
-
-        username = service.get_username(claims)
-        groups = service.get_groups(claims)
-
-        if not service.is_authorized(claims):
-            logger.warning(
-                f"OIDC sign-in denied for '{username}': groups {groups} do not match "
-                f"allowed groups {config.oidc_allowed_groups}")
-            return render_login(
-                "Your account is not a member of a group allowed to use this app", 403)
-
-        target = safe_next(session.get('oidc_next'))
-        session.clear()
-        session['authenticated'] = True
-        session['auth_via'] = 'oidc'
-        session['user'] = username
-        session['groups'] = groups
-        session['id_token'] = claims.get('_id_token', '')
-        if claims.get('exp'):
-            session['idp_exp'] = claims['exp']
-        session.permanent = True
-
-        logger.info(f"OIDC sign-in for '{username}'")
-        return redirect(target)
-
+            debug_me(f"OIDC Callback Error: {e}")
+            return render_template("login.html", error=f"OIDC authentication failed: {e}.")
+        
     @web_app.route("/logout")
     def logout():
-        """Handle user logout, including RP-initiated logout at the provider."""
-        auth_via = session.get('auth_via')
-        id_token = session.get('id_token', '')
+        """Handle user logout."""
+        id_token = session.get("id_token")
+        auth_type = session.pop("auth_type", None)
         session.clear()
+        update_log(Instance(broadcast=True), f"👋🏻 Logout successful")
 
-        if auth_via == 'oidc' and globals.oidc_service is not None:
+        if config.oidc_enabled and config.oidc_issuer and auth_type == AuthType.OIDC.value:
+            post_logout_uri = f"{get_oidc_redirect_uri(config).rsplit('/', 3)[0]}/login"
             try:
-                provider_logout = globals.oidc_service.logout_url(
-                    id_token, f"{external_base_url(config)}{url_for('login')}")
+                discovery_url = f"{config.oidc_issuer.rstrip('/')}/.well-known/openid-configuration"
+
+                disc_res = requests.get(discovery_url, timeout=OIDC_REQUEST_TIMEOUT).json()
+                end_session_endpoint = disc_res.get("end_session_endpoint")
+                
+                if end_session_endpoint:
+                    logout_url = (
+                       f"{end_session_endpoint}?"
+                        f"post_logout_redirect_uri={post_logout_uri}&"
+                        f"client_id={config.oidc_client_id}"
+                    )
+                    if id_token:
+                        logout_url += f"&id_token_hint={id_token}"
+                    return redirect(logout_url)
+                    
             except Exception as e:
-                logger.debug(f"Could not build provider logout URL: {e}")
-                provider_logout = None
-            if provider_logout:
-                return redirect(provider_logout)
+                debug_me(f"Error fetching OIDC end_session_endpoint: {e}")
 
         return redirect(url_for('login'))
 
@@ -465,8 +438,7 @@ def setup_routes(web_app, config: Config):
     @login_required
     def download_file(filename):
         """Serve files from the downloads directory."""
-        downloads_path = os.path.join(
-            UtilityService.get_exe_dir(), 'downloads')
+        downloads_path = os.path.join(UtilityService.get_exe_dir(), 'downloads')
         return send_from_directory(downloads_path, filename, as_attachment=True)
 
     @web_app.route('/uploads/<path:filename>')
@@ -476,10 +448,90 @@ def setup_routes(web_app, config: Config):
         uploads_path = os.path.join(UtilityService.get_exe_dir(), 'uploads')
         return send_from_directory(uploads_path, filename)
 
+    @web_app.route('/api/browse', methods=['GET'])
+    @login_required
+    def browse_directory():
+        req_path = request.args.get('path', '').strip()
+
+        if not req_path and os.name == 'nt':
+            import string, ctypes
+            drives = []
+            try:
+                bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+                for letter in string.ascii_uppercase:
+                    if bitmask & 1:
+                        drives.append({"name": f"Drive {letter}:", "path": f"{letter}:\\"})
+                    bitmask >>= 1
+            except Exception:
+                pass
+            return jsonify({"current_path": req_path, "folders": drives})
+
+        abs_path = os.path.abspath(req_path)
+        
+        if not os.path.exists(abs_path) or not os.path.isdir(abs_path):
+            abs_path = os.path.abspath('.')
+
+        folders = []
+        try:
+            for entry in os.scandir(abs_path):
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    folders.append({
+                        "name": entry.name,
+                        "path": entry.path
+                    })
+            folders.sort(key=lambda x: x['name'].lower())
+        except PermissionError:
+            pass
+
+        return jsonify({
+            "current_path": abs_path,
+            "folders": folders
+        })
+
+    def webhook_token_ok():
+        """A webhook request is authorised when it carries the configured token, sent as the
+           X-Webhook-Token header, the HTTP Basic password, or a ?token= query parameter."""
+        token = globals.config.webhook_token
+        if not token:
+            return False
+        provided = (request.headers.get(WEBHOOK_TOKEN_HEADER)
+                    or (request.authorization.password if request.authorization else None)
+                    or request.args.get("token") or "")
+        return hmac.compare_digest(provided, token)
+
+    @web_app.route("/webhook/radarr", methods=["POST"])
+    @web_app.route("/webhook/sonarr", methods=["POST"])
+    def arr_webhook():
+        """Receive a Sonarr/Radarr import event and apply the cached artwork for it. Disabled
+           by default (404), so the endpoint is indistinguishable from upstream when off."""
+        if not globals.config.enable_webhooks:
+            return {"status": "not found"}, 404
+        if not webhook_token_ok():
+            update_log(Instance(broadcast=True), "⛔ Webhook request rejected (missing or invalid token)")
+            return {"status": "unauthorized"}, 401
+        payload = request.get_json(silent=True)
+        if payload is None:
+            return {"status": "invalid json"}, 400
+        event = parse_event(payload)
+        if event == "test":
+            update_log(Instance(broadcast=True), "🧪 Webhook test received")
+            return {"status": "test ok"}, 200
+        if event is None:
+            return {"status": "ignored"}, 200
+        if globals.plex is None or not globals.plex.has_libraries():
+            update_log(Instance(broadcast=True), "⛔ Webhook received but Plex libraries are not configured")
+            return {"status": "plex not configured"}, 503
+        if not globals.config.webhook_tpdb_users:
+            update_log(Instance(broadcast=True), "📥 Webhook received but no ThePosterDB users are configured (webhook_tpdb_users)")
+            return {"status": "no users configured"}, 200
+        update_log(Instance(broadcast=True), "📥 Webhook received and queued for processing")
+        globals.webhook_service.enqueue(event)
+        return {"status": "queued"}, 200
+
 
 def setup_socket_handlers(
-        config: Config,
-        filename_pattern: re.Pattern
+    config: Config,
+    filename_pattern: re.Pattern
 ):
     """
     Set up Socket.IO event handlers.
@@ -495,6 +547,7 @@ def setup_socket_handlers(
     # Import functions from artwork_uploader (to avoid circular imports at module level)
     from artwork_uploader import (
         process_scrape_url_from_web,
+        request_scrape_stop,
         run_bulk_import_scrape_in_thread,
         save_bulk_import_file,
         load_bulk_import_file,
@@ -502,41 +555,39 @@ def setup_socket_handlers(
         delete_bulk_import_file,
         add_file_to_schedule_thread,
         update_scheduled_jobs,
+        get_latest_version,
         current_version,
         check_image_orientation,
         sort_key
     )
 
-    # Temporary storage for chunked uploads, isolated by Socket.IO connection.
+    # Temporary storage for chunked uploads, isolated per Socket.IO connection so two clients
+    # uploading a file with the same name never share one temp file. Keyed by (sid, file_name).
     upload_chunks = {}
-    upload_chunks_lock = Semaphore()
+    upload_chunks_lock = threading.Lock()
 
     def cleanup_upload_file(upload, file_name):
         """Close and remove one upload's temporary file."""
         try:
             upload["temp_file"].close()
-        except Exception as close_err:
-            logger.warning(
-                f"Error closing temp file for {file_name}: {close_err}",
-                exc_info=True,
-            )
+        except Exception as e:
+            debug_me(f"Error closing temp file for {file_name}: {str(e)}")
 
         temp_path = upload.get("temp_path")
         if temp_path:
             try:
-                os.remove(temp_path)
-            except FileNotFoundError:
-                pass
-            except OSError as remove_err:
-                logger.warning(
-                    f"Error removing temp file {temp_path} for {file_name}: {remove_err}",
-                    exc_info=True,
-                )
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError as e:
+                debug_me(f"Error removing temp file {temp_path} for {file_name}: {str(e)}")
 
     def cleanup_upload(upload_key):
         """Discard one pending upload. Caller must hold upload_chunks_lock."""
         upload = upload_chunks.pop(upload_key, None)
         if upload is not None:
+            watchdog = upload.get("watchdog")
+            if watchdog is not None:
+                watchdog.cancel()
             chunks_complete = upload.get("chunks_complete")
             if chunks_complete is not None:
                 chunks_complete.set()
@@ -544,46 +595,47 @@ def setup_socket_handlers(
         return upload
 
     @globals.web_socket.on("connect")
-    def handle_connect(auth=None):
-        """
-        Refuse Socket.IO connections from unauthenticated clients.
+    def handle_connect():
+        """Refuse the connection when a login is configured and this session has not logged in.
 
-        Every meaningful action in this app is a Socket.IO event, so without this
-        check the HTTP login only protects the page shell, not the API.
-        """
-        if not is_session_authenticated(config):
-            logger.warning("Refused unauthenticated Socket.IO connection")
-            raise ConnectionRefusedError("Authentication required")
-
-    # Cleanup must run even if authentication expired before disconnect.
-    @globals.web_socket.on("disconnect")
-    def handle_disconnect(reason=None):
-        """Discard uploads owned by the disconnecting Socket.IO client."""
-        sid = request.sid
-        with upload_chunks_lock:
-            for upload_key in [key for key in upload_chunks if key[0] == sid]:
-                cleanup_upload(upload_key)
+           The web UI does its real work over the socket, so guarding the HTTP routes alone
+           leaves every handler below reachable without a session. Rejecting at connect covers
+           all of them, including any added later. The login page loads no socket, so nothing
+           needs a connection before a session exists."""
+        if authentication_required() and not session.get('authenticated'):
+            debug_me("Refused a Socket.IO connection from a session that has not logged in")
+            return False
 
     @globals.web_socket.on("debug_mode")
-    @socket_login_required
     def debug_mode(data):
         """Report on debug mode status and toggle debug mode."""
         instance = Instance(data.get("instance_id"), "web")
         if data.get("action") == "get":
-            logger.info(f"Reporting current debug mode: {'On' if globals.debug else 'Off'}")
-            debug_me(f"Reporting current debug mode: {'On' if globals.debug else 'Off'}", "debug_mode")
-            notify_web(instance, "debug_mode", {"debug": globals.debug})
+            update_log(instance, f"🐞 Debug mode is {'On' if globals.debug else 'Off'}")
+            debug_me(f"Reporting current debug mode: {'On' if globals.debug else 'Off'}")
+            notify_web(instance, "debug_mode", { "debug": globals.debug })
         elif data.get("action") == "toggle":
-            logger.info(f"Turning debug mode {'Off' if globals.debug else 'On'}")
-            debug_me(f"Turning debug mode {'Off' if globals.debug else 'On'}", "debug_mode")
-            notify_web(instance, "debug_mode", {"debug": not globals.debug})
-            if globals.debug:
-                globals.debug = False
-            else:
-                globals.debug = True
+            update_log(instance, f"🐞 Debug mode is {'Off' if globals.debug else 'On'}")
+            debug_me(f"Turning debug mode {'Off' if globals.debug else 'On'}")
+            notify_web(instance, "debug_mode", { "debug": not globals.debug })
+            globals.debug = not globals.debug
+
+    @globals.web_socket.on("check_for_update")
+    def check_for_update(data):
+        """Check for updates when requested by the frontend."""
+        instance = Instance(data.get("instance_id"), "web")
+        debug_me(f"Checking for update by request from the frontend")
+        latest_version = get_latest_version()
+        if latest_version and version.parse(latest_version.lstrip('v')) > version.parse(current_version.lstrip('v')):
+            update_log(instance, f"🚨 Update available: {latest_version} (current: {current_version})")
+            instance.broadcast = True
+            notify_web(instance, "version_check", { "new_version": latest_version, "current_version": current_version, "docker": globals.docker })
+        else:
+            update_log(instance, f"🏷️ You are running the latest version: {current_version}")
+            instance.broadcast = True
+            notify_web(instance, "version_check", { "new_version": None, "current_version": current_version, "docker": globals.docker })
 
     @globals.web_socket.on("update_app")
-    @socket_login_required
     def update_app(data):
         """Pull updates from GitHub and restart the app."""
         instance = Instance(data.get("instance_id"), "web")
@@ -596,16 +648,26 @@ def setup_socket_handlers(
                 sticky=True,
                 spinner=True
             )
+            update_log(instance, "🔄 Starting update process...")
 
-            # Detect platform
-            python_cmd = "python3" if sys.platform == "darwin" else "python"
+            # Use the exact same python that is currently running this code:
+            python_cmd = sys.executable
 
-            # Pull latest changes
-            subprocess.run(["git", "pull"], check=True)
+            # Fetch the latest metadata
+            subprocess.run(["git", "fetch", "--all"], check=True)
+
+            # Force move the HEAD to the latest commit on origin/main
+            subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+
+            # Re-attach to the local 'main' branch and update its pointer
+            # This is the step that fixes the "HEAD detached" status
+            subprocess.run(["git", "checkout", "-B", "main", "origin/main"], check=True)
+
+            # Clean up any leftover files
+            subprocess.run(["git", "clean", "-fd"], check=True)
 
             # Install dependencies
-            subprocess.run([python_cmd, "-m", "pip", "install",
-                           "-r", "requirements.txt"], check=True)
+            subprocess.run([python_cmd, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
 
             # Trigger the front-end to restart
             update_status(
@@ -618,23 +680,17 @@ def setup_socket_handlers(
             notify_web(Instance(broadcast=True), "backend_restarting", {})
 
             # Restart the app
-            # Absolute path: cwd is not src/ (Docker WORKDIR is /app,
-            # run.sh runs from repo root).
-            entrypoint = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "artwork_uploader.py"
-            )
-            os.execlp(python_cmd, python_cmd, entrypoint)
+            os.execlp(python_cmd, python_cmd, "artwork_uploader.py")
 
         except Exception as e:
-            update_status(Instance(broadcast=True),
-                          "Update failed, restarting the app...", "danger")
+            update_status(Instance(broadcast=True), "Update failed, restarting the app...", "danger")
+            update_log(instance, f"❌ Update failed: {str(e)}")
             notify_web(instance, "update_failed", {"error": str(e)})
 
     @globals.web_socket.on("start_scrape")
-    @socket_login_required
     def handle_scrape_from_web(data):
         """Handle scraping request from web UI."""
-        instance = Instance(data.get("instance_id"), "web")
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
         url = data.get("url").lower()
         options = data.get("options")
         filters = data.get("filters")
@@ -647,26 +703,25 @@ def setup_socket_handlers(
                 url = url + " " + " ".join(options)
             if filters and len(filters) < 6:
                 url = url + " --filters " + " ".join(filters)
-            notify_web(
-                instance,
-                "element_disable",
-                {"element": ["scrape_url", "scrape_button",
-                             "bulk_button"], "mode": True}
-            )
             process_scrape_url_from_web(instance, url)
 
+    @globals.web_socket.on("stop_scrape")
+    def handle_stop_scrape(data):
+        """Flag any in-flight scrape to stop cleanly (user pressed Stop in the web UI)."""
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        if not request_scrape_stop():
+            update_log(instance, "ℹ️ Nothing to stop - no scrape is running")
+
     @globals.web_socket.on("start_bulk_import")
-    @socket_login_required
     def handle_bulk_import_from_web(data):
         """Handle bulk import request from web UI."""
-        instance = Instance(data.get("instance_id"), "web")
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
         bulk_list = data.get("bulk_list").lower()
         filename = data.get("filename", "bulk_import.txt")
-        scheduled = data.get("scheduled", False)
-        run_bulk_import_scrape_in_thread(instance, bulk_list, filename, scheduled=scheduled)
+        notify = data.get("notify", False)
+        run_bulk_import_scrape_in_thread(instance, bulk_list, filename, notify=notify)
 
     @globals.web_socket.on("save_bulk_import")
-    @socket_login_required
     def handle_bulk_import(data):
         """Save bulk import file from web UI."""
         instance = Instance(data.get("instance_id"), "web")
@@ -677,63 +732,223 @@ def setup_socket_handlers(
             save_bulk_import_file(instance, content, filename, now_load)
 
     @globals.web_socket.on("load_config")
-    @socket_login_required
     def load_config_web(data):
         """Load configuration from web UI."""
         instance = Instance(data.get("instance_id"), "web")
         config.load()
         update_scheduled_jobs()
-        globals.oidc_service.reconfigure(config)
-        notify_web(instance, "load_config", {"config": config.to_public_dict()})
+        update_log(instance, "🔄 Configuration loaded")
+        notify_web(instance, "load_config", {"config": redact_config(vars(config))})
 
     @globals.web_socket.on("load_bulk_filelist")
-    @socket_login_required
     def load_bulk_filelist(data):
         """Load list of bulk import files."""
         instance = Instance(data.get("instance_id"), "web")
         bulk_files = None
         try:
-            folder_path = globals.bulk_file_service.get_bulk_imports_directory()
+            folder_path = Path("bulk_imports")
             bulk_files = [f.name for f in folder_path.iterdir() if f.is_file()]
         except (FileNotFoundError, PermissionError) as e:
-            debug_me(
-                f"Error loading bulk file list: {e}", "load_bulk_filelist")
+            debug_me(f"Error loading bulk import file list: {e}")
         notify_web(instance, "load_bulk_filelist", {"bulk_files": bulk_files})
 
+    @globals.web_socket.on("get_log_file")
+    def get_log_file(data):
+        """Get the contents of a log file and send them back to the frontend"""
+        instance = Instance(data.get("instance_id"), "web")
+        log_file_name = data.get("log_file_name")
+        full_path = os.path.join(DEFAULT_LOG_PATH, log_file_name)
+        log_file_contents = ""
+        error = ""
+
+        try:
+            with open(full_path, "r", encoding="utf-8") as log_file:
+                log_file_contents = log_file.read()
+            debug_me(f"Successfully obtained contents of log file '{log_file_name}'")
+        except OSError as e:
+            debug_me(f"Unable to read contents of log file '{log_file_name}': {e.strerror}")
+            error = e.strerror
+
+        notify_web(
+            instance=instance,
+            event="get_log_file",
+            data_to_include={
+                "success": True if log_file_contents else False,
+                "contents": log_file_contents,
+                "error": error
+            },
+            silent=True
+        )
+
+    @globals.web_socket.on("clear_history")
+    def clear_run_history(data):
+        """Clears the entire Run History"""
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        run_type = data.get("run_type")
+        deleted_runs = 0
+        failed_logs = []
+        result = "unknown"
+
+        runs = RunHistory().get_runs(run_type=run_type)
+
+        for run in runs:
+            try:
+                timestamp = run.get("started_at")
+                if timestamp:
+                    RunHistory().delete_run(timestamp, refresh_frontend=False)
+                    deleted_runs += 1
+
+            except RunDeleteError as e:
+                debug_me(f"Unable to delete run '{e.run_label}': {str(e)}")
+            except LogDeleteError as e:
+                deleted_runs += 1
+                failed_logs.append({
+                    "file_name": e.log_file,
+                    "reason": str(e)
+                })
+                debug_me(f"Error deleting log file '{e.log_file}' for run '{e.run_label}': {str(e)}")
+            except Exception as e:
+                debug_me(f"Generic error deleting run: {str(e)}")
+
+        if deleted_runs == len(runs):
+            result = "success"
+        elif deleted_runs == 0:
+            result = "failed"
+        elif deleted_runs < len(runs):
+            result = "partial"
+
+        notify_web(
+            instance=instance,
+            event="history_cleared",
+            data_to_include={
+                "result": result,
+                "deleted": deleted_runs,
+                "total": len(runs),
+                "remaining_logs": failed_logs
+            }
+        )
+
+    @globals.web_socket.on("delete_run")
+    def delete_run(data):
+        """Deletes a single run from the run history"""
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        timestamp = data.get("timestamp", None)
+        result = "success"
+
+        if timestamp:
+            try:
+                RunHistory().delete_run(timestamp)
+                message = "Successfully deleted run"
+
+            except LogDeleteError as e:
+                result = "warning"
+                message = f"Run '{e.run_label}' deleted, but could not delete log file '{e.log_file}' ({str(e)})"
+
+            except RunDeleteError as e:
+                result = "error"
+                message = f"Unable to delete run '{e.run_label}' ({str(e)})"
+
+            notify_web(
+                instance=instance,
+                event="run_deleted",
+                data_to_include={ "result": result, "message": message }
+            )
+
+    @globals.web_socket.on("load_run_history")
+    def load_run_history(data):
+        """Load recent run history, optionally narrowed to one run type."""
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        run_type = data.get("run_type") or None
+        if run_type not in RunType:
+            run_type = None
+        runs = []
+        all_runs = RunHistory().get_runs()
+        for run in all_runs:
+            if not run_type or run_type and run.get("run_type") == run_type:
+                runs.append(run)
+                label = run.get("label", "")
+                timestamp = run.get("started_at", "")
+                onclick = f"""onclick="deleteRun('{timestamp}', '{label}')" """
+                if label and "https" in label:
+                    clean_url = label.replace("https://", "").strip()
+                    parts = [p for p in clean_url.split("/") if p]
+                    if len(parts) >= 3:
+                        domain, asset_type, id = parts[0], parts[1], parts[2]
+                        source = URL_SOURCE_MAP.get(domain, "Unknown")
+                        type = URL_TYPE_MAP.get(asset_type, { "icon": "question-circle", "label": "Unknown URL type" })
+                        run["html_label"] = (
+                            f"<a href='{label}' target='_blank' rel='noopener noreferrer' "
+                            f"class='text-decoration-none text-reset' title='{label}'>{source} "
+                            f"<i class='bi bi-{type.get('icon', 'question-circle')}' title='{type.get('label', 'Unknown URL type')}'></i> "
+                            f"<span class='input-monospace' style='font-size: 0.8rem;'>{id}</span></a> "
+                            f"<i class='bi bi-trash3 inline-run-btn text-danger cursor-pointer' style='cursor: pointer; font-size: 0.8rem;' title='Delete run' {onclick}></i>"
+                        )
+                    else:
+                        run["html_label"] = f"<i class='bi bi-x-octagon text-danger' title='{label}'>&nbsp;Error parsing URL</i>"
+                elif label:
+                    run["html_label"] = f"<span class='text-nowrap'>{label} <i class='bi bi-trash3 inline-run-btn text-danger cursor-pointer' style='cursor: pointer; font-size: 0.8rem;' title='Delete run' {onclick}></i></span>"
+
+        notify_web(
+            instance=instance,
+            event="load_run_history",
+            data_to_include={
+                "runs": runs,
+                "run_type": run_type or "all",
+                "total": len(all_runs)
+            },
+            silent=True
+        )
+
     @globals.web_socket.on("load_bulk_import")
-    @socket_login_required
     def load_bulk_import(data):
         """Load a specific bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
         load_bulk_import_file(instance, data.get("filename"))
 
     @globals.web_socket.on("rename_bulk_file")
-    @socket_login_required
     def rename_bulk_file(data):
-        """Rename a bulk import file."""
+        """Rename a bulk import file, taking any of its schedules along with it."""
         instance = Instance(data.get("instance_id"), "web")
         old_name = data.get("old_filename")
         new_name = data.get("new_filename")
-        time = globals.scheduler_service.run_times_by_file.get(old_name)
-        rename_bulk_import_file(instance, old_name, new_name)
-        if time:
-            delete_task_from_scheduler({"instance_id": instance.id, "file": old_name})
-            add_tasks_to_scheduler({"instance_id": instance.id, "file": new_name, "time": time})
+        if not rename_bulk_import_file(instance, old_name, new_name):
+            # The file on disk still has its old name; repointing the schedules
+            # would leave every one of them targeting a file that does not exist.
+            return
+
+        renamed_ids = globals.scheduler_service.rename_file(old_name, new_name)
+        if renamed_ids:
+            config.load()
+            for each_schedule in config.schedules:
+                if each_schedule.get("id") in renamed_ids:
+                    each_schedule["file"] = new_name
+            config.save()
 
     @globals.web_socket.on("delete_bulk_file")
-    @socket_login_required
     def delete_bulk_file(data):
-        """Delete a bulk import file."""
+        """Delete a bulk import file, and every schedule that points at it."""
         instance = Instance(data.get("instance_id"), "web")
-        delete_bulk_import_file(instance, data.get("filename"))
+        filename = data.get("filename")
+        if not delete_bulk_import_file(instance, filename):
+            return
+
+        # The server owns this cleanup: a client's in-memory schedule list can be
+        # stale, and an orphaned schedule fires forever against a missing file.
+        for job_id in globals.scheduler_service.get_jobs_for_file(filename):
+            globals.scheduler_service.remove_schedule(job_id)
+        config.load()
+        remaining = [s for s in config.schedules if s.get("file") != filename]
+        if len(remaining) != len(config.schedules):
+            removed = len(config.schedules) - len(remaining)
+            config.schedules = remaining
+            config.save()
+            update_log(instance, f"🗑️ Removed {removed} schedule(s) for '{filename}'")
 
     @globals.web_socket.on("create_bulk_file")
-    @socket_login_required
     def create_bulk_file(data):
         """Create a new bulk import file."""
         instance = Instance(data.get("instance_id"), "web")
 
-        from datetime import datetime
         timestamp = datetime.now().strftime("%d %b %Y %H:%M:%S")
 
         # Generate a unique filename
@@ -752,346 +967,517 @@ def setup_socket_handlers(
 
         try:
             globals.bulk_file_service.write_file(content, filename)
-            update_log(instance, f"Created new bulk file: {filename}")
-            notify_web(instance, "create_bulk_file", {
-                       "created": True, "filename": filename})
+            update_log(instance, f"📝 Created new bulk import file: {filename}")
+            notify_web(instance, "create_bulk_file", {"created": True, "filename": filename})
             # Reload the file list
-            folder_path = globals.bulk_file_service.get_bulk_imports_directory()
+            folder_path = Path("bulk_imports")
             bulk_files = [f.name for f in folder_path.iterdir() if f.is_file()]
-            notify_web(instance, "load_bulk_filelist",
-                       {"bulk_files": bulk_files})
+            notify_web(instance, "load_bulk_filelist", {"bulk_files": bulk_files})
         except Exception as e:
+            update_log(instance, f"🔴 Failed to create new bulk import file")
             update_status(instance, f"Error creating file: {str(e)}", "danger")
-            notify_web(instance, "create_bulk_file", {
-                       "created": False, "error": str(e)})
+            notify_web(instance, "create_bulk_file", {"created": False, "error": str(e)})
 
     @globals.web_socket.on("display_message")
-    @socket_login_required
     def display_message(data):
         """Log a debug message from the frontend."""
-        instance = Instance(data.get("instance_id"), "web")
-        debug_me(f"Received message from frontend: '{data.get('message')}' - Log level: '{data.get('level')}'", "display_message")
+        instance = Instance(data.get("instance_id"), "web", broadcast=data.get("broadcast", False))
+        debug_me(f"Received message from fronted: '{data.get('message')}' • Log level: '{data.get('level')}'")
         if data.get("level") == "debug":
             debug_me(data.get("message"), data.get("title", "web_message"))
         elif data.get("level") == "log":
             update_log(instance, data.get("message"))
+        elif data.get("level") == "status":
+            update_status(instance, data.get("message"), data.get("color", "primary"), data.get("sticky", False), data.get("spinner", False), data.get("icon", None))
 
-    @globals.web_socket.on("test_plex_connect")
-    @socket_login_required
-    def test_plex_connect(data):
-        """Test connectivity to Plex server."""
+    @globals.web_socket.on("get_plex_libraries")
+    def get_plex_libraries(data):
+        """Get a list of the available Plex libraries"""
 
-        def fail(status, log):
-            update_log(instance, log)
-            update_status(instance, status, "danger", False, False, "x-circle")
-            notify_web(instance, "test_plex_connect", {"success": False, "status": status, "log": log})
-            notify_web(instance, "element_disable", {"element": ["test_plex_btn"], "mode": False})
+        instance = Instance(data.get("instance_id", "web"))
 
-        instance = Instance(data.get("instance_id"), "web")
-        instance.broadcast = True
-        update_status(instance, "Testing connection to Plex server", "info", False, True)
-
-        # Disable the test button to prevent multiple clicks
-        notify_web(instance, "element_disable", {"element": ["test_plex_btn"], "mode": True})
-
-        # Capture Plex settings form parameters
         url = data.get("url", "")
-        debug_me(f"Obtained Plex URL: {url}", "test_plex_connect")
         token = data.get("token", "")
-        # The UI never receives the stored token, so an untouched field means "use it"
-        if not token or token == SECRET_PLACEHOLDER:
-            token = config.token
-        debug_me(f"Obtained Plex token: {'*' * min(len(token), 8) if token else '(not set)'}", "test_plex_connect")
-        tv_libs = data.get("tv_libs", "")
-        debug_me(f"Obtained {len(tv_libs)} TV libraries: {tv_libs}", "test_plex_connect")
-        movie_libs = data.get("movie_libs", "")
-        debug_me(f"Obtained {len(movie_libs)} Movie libraries: {movie_libs}", "test_plex_connect")
 
-        # Check for a valid Plex server URL and token
-        url_pattern = r"^https?:\/\/((([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})|(\d{1,3}(\.\d{1,3}){3}))(:\d+)?(\/.*)?$"
-        token_pattern = r"^[A-Za-z0-9_-]{20,}$"
-        if not re.fullmatch(url_pattern, url):
-            fail("Invalid Plex URL", f"Invalid Plex URL: {url}")
-            return
-        if not re.fullmatch(token_pattern, token):
-            fail("Invalid Plex token", f"Invalid Plex token: {token}")
-            return
-
-        # Check connectivity to server
         try:
-            plex_server = PlexServer(url, token, timeout=5)
+            plex_server = PlexServer(url, token, timeout=globals.config.plex_connect_timeout)
+            debug_me(f"Successfully connected to Plex server at '{url}'")
         except Exception as e:
-            if "NewConnectionError" in str(e):
-                log = "Error connecting to Plex - Connection refused"
-            elif "ConnectTimeoutError" in str(e) or "timed out" in str(e):
-                log = "Error connecting to Plex - Timed out"
-            elif "unauthorized" in str(e):
-                log = "Error connecting to Plex - Invalid token"
-            elif "NameResolutionError" in str(e):
-                log = "Error connecting to Plex - Cannot resolve server name"
-            elif "SSLError" in str(e):
-                log = "Error connecting to Plex - SSL certificate validation failed"
-            else:
-                log = f"Unknown error connecting to Plex: {str(e)}"
-            fail("Error connecting to Plex, check log for details", log)
+            debug_me(f"Failed to connect to Plex server at '{url}'")
+            notify_web(instance, f"get_plex_libraries", { "tv_libraries": [], "movie_libraries": [], "message": "Unable to connect to Plex" })
             return
 
-        # Check that the provided libraries exist in the server
-        all_libs = list(tv_libs) + list(movie_libs)
-        invalid_libs = []
-        for lib in all_libs:
-            try:
-                plex_server.library.section(lib)
-            except Exception:
-                invalid_libs.append(lib)
-        if invalid_libs:
-            fail("Some libraries not found, check log for details.",
-                 f"The following libraries could not be found: {', '.join(invalid_libs)}")
-            return
-
-        update_log(instance, "Successfully connected to Plex server")
-        update_status(instance, "Successfully connected to Plex server", "success", False, False, "check2-circle")
-        notify_web(instance, "element_disable", {"element": ["test_plex_btn"], "mode": False})
-        notify_web(instance, "test_plex_connect", {"success": True})
+        try:
+            all_libraries = plex_server.library.sections()
+            tv_libs = [lib.title for lib in all_libraries if lib.type == "show"]
+            movie_libs = [lib.title for lib in all_libraries if lib.type == "movie"]
+            debug_me(f"Obtained tv_libraries: {tv_libs}")
+            debug_me(f"Obtained movie_libraries: {movie_libs}")
+            notify_web(instance, "get_plex_libraries", { "tv_libraries": tv_libs, "movie_libraries": movie_libs })
+        except AttributeError as e:
+            notify_web(instance, f"get_plex_libraries", { "tv_libraries": [], "movie_libraries": [], "message": "Unable to connect to Plex" })
 
     @globals.web_socket.on("test_notifications")
-    @socket_login_required
     def test_notifications(data):
         """Send a test notification."""
         instance = Instance(data.get("instance_id"), "web")
-        instance.broadcast = True
         # Disable the test button to prevent multiple clicks
-        notify_web(instance, "element_disable", {"element": ["test_notif_btn"], "mode": True})
+        notify_web(instance, "add_spinner", { "element": "test_notif_btn", "mode": True })
         urls = data.get("urls", [])
         notification_title = "Test Notification from Artwork Uploader"
         notification_message = "This is a test notification to verify your notification settings are working correctly."
         test_notification = NotifyService()
         success = True
         failed = 0
-        for idx, url in enumerate(urls):
+        for url in urls:
             test_notification.add_url(url)
-            debug_me(f"Sending test notification to URL #{idx + 1}", "test_notifications")
+            debug_me(f"Sending test notification to '{url}'")
             url_success = test_notification.send_notification(notification_title, notification_message)
             success = success and url_success
             if url_success:
-                debug_me(f"Test notification sent successfully to URL #{idx + 1}", "test_notifications")
-                update_log(instance, f"Test notification sent successfully to URL #{idx + 1}")
+                debug_me(f"📢 Test notification sent successfully to '{url}'")
+                update_log(instance, f"📢 Test notification sent successfully to '{url}'")
                 if len(urls) == 1:
-                    update_status(instance, "Test notification sent successfully", "success", False, False, "check2-circle")
+                    update_status(instance, f"Test notification sent successfully", "success", False, False, "check2-circle")
             else:
                 failed += 1
-                debug_me(f"Test notification failed to send to URL #{idx + 1}.", "test_notifications")
-                update_log(instance, f"Test notification failed to send to URL #{idx + 1}")
+                debug_me(f"❌ Test notification failed to send to '{url}'.")
+                update_log(instance, f"❌ Test notification failed to send to '{url}'")
                 if len(urls) == 1:
-                    update_status(instance, "Test notification failed to send", "danger", False, False, "x-circle")
+                    update_status(instance, f"Test notification failed to send", "danger", False, False, "x-circle")
             test_notification.clear_urls()
         if len(urls) > 1:
             if success and len(urls) > 1:
-                debug_me("All test notifications sent successfully", "test_notifications")
-                update_log(instance, "All test notifications sent successfully")
+                debug_me("All test notifications sent successfully")
+                update_log(instance, "✅ All test notifications sent successfully")
                 update_status(instance, "All test notifications sent successfully", "success", False, False, "check2-circle")
             elif failed < len(urls):
-                debug_me("Some test notifications failed to send", "test_notifications")
-                update_log(instance, "Some test notifications failed to send")
+                debug_me("Some test notifications failed to send")
+                update_log(instance, "⚠️ Some test notifications failed to send")
                 update_status(instance, "Some test notifications failed to send. Check logs for details.", "warning", False, False, "exclamation-triangle")
             else:
-                debug_me("All test notifications failed to send", "test_notifications")
-                update_log(instance, "All test notifications failed to send")
+                debug_me("All test notifications failed to send")
+                update_log(instance, "❌ All test notifications failed to send")
                 update_status(instance, "All test notifications failed to send", "danger", False, False, "x-circle")
-        notify_web(instance, "element_disable", {"element": ["test_notif_btn"], "mode": False})
+        notify_web(instance, "add_spinner", { "element": "test_notif_btn", "mode": False })
 
-    @globals.web_socket.on("set_password")
-    @socket_login_required
-    def set_password_web(data):
-        """Set a new password for authentication."""
-        instance = Instance(data.get("instance_id"), "web")
+    @globals.web_socket.on("get_auth_status")
+    def get_auth_status(data):
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        auth_enabled = getattr(globals.config, "auth_enabled", False) or getattr(globals.config, "oidc_enabled", False)
+        username = session.get("username", None)
+        auth_type = session.get("auth_type", None)
+        debug_me(session)
 
-        try:
-            username = data.get("username", "")
-            password = data.get("password", "")
-
-            if not username or not password:
-                notify_web(instance, "set_password", {
-                           "success": False, "error": "Username and password required"})
-                return
-
-            # Hash the password
-            password_hash = AuthenticationService.hash_password(password)
-
-            # Update config
-            config.auth_username = username
-            config.auth_password_hash = password_hash
-            # Setting a password must not downgrade an OIDC deployment
-            if config.auth_mode == AUTH_MODE_NONE:
-                config.set_auth_mode(AUTH_MODE_PASSWORD)
-            config.save()
-
-            # Also update globals
-            globals.config = config
-
-            notify_web(instance, "set_password", {"success": True})
-            update_log(
-                instance, f"Authentication enabled for user '{username}'")
-        except Exception as e:
-            notify_web(instance, "set_password", {
-                       "success": False, "error": str(e)})
+        notify_web(
+            instance=instance,
+            event="get_auth_status",
+            data_to_include={
+                "auth_enabled": auth_enabled,
+                "auth_type": auth_type,
+                "username": username
+            }
+        )
 
     @globals.web_socket.on("save_config")
-    @socket_login_required
     def save_config_web(data):
         """Save configuration from web UI."""
         instance = Instance(data.get("instance_id"), "web")
 
-        incoming = data.get("config") or {}
-
         try:
-            apply_config_updates(config, incoming)
-            apply_auth_mode(config, incoming)
-            validate_auth_config(config)
+            # Create new config object and load existing config from config.json
+            new_config = Config()
+            new_config.load()
+            new_config_dict = vars(new_config)
+            current_config_dict = vars(globals.config).copy()
+            password_change = False
+            # Capture the provided password and see if it's different 
+            password = data.get("config").get("auth_password")
+            if password:
+                password_change = not AuthenticationService.verify_password(password, globals.config.auth_password_hash)
+
+            # Unpack the config dictionary into the local config. A redacted secret that
+            # comes back as the placeholder leaves the stored value alone - the web UI never
+            # receives the real one, so echoing the placeholder back must not overwrite it.
+            for key, value in data.get("config").items():
+                if key in REDACTED_CONFIG_KEYS and value == SECRET_PLACEHOLDER:
+                    continue
+                new_config_dict[key] = value
+
+            # Normalize the notification channels sent from the web UI into {"url", "events"} form
+            if "apprise_urls" in new_config_dict:
+                new_config_dict["apprise_urls"] = normalize_notification_channels(new_config_dict["apprise_urls"])
+
+            # Auth status before and after
+            basic_before = current_config_dict["auth_enabled"]
+            oidc_before = current_config_dict["oidc_enabled"]
+
+            basic_after = new_config_dict["auth_enabled"]
+            oidc_after = new_config_dict["oidc_enabled"]
+
+            current_auth_type = session.get("auth_type", "auth_disabled")
+
+            # Prepare configurations to be compared
+            new_config_dict.pop("auth_password")
+            new_config_dict.pop("auth_password_hash")
+            current_config_dict.pop("auth_password_hash")
+
+            # Ensure a simple change in the order of a list isn't detected as a change
+            config_changed = False
+            for key in new_config_dict:
+                if isinstance(new_config_dict[key], list):
+                    if len(new_config_dict[key]) > 0 and len(current_config_dict[key]) > 0 and isinstance(new_config_dict[key][0], str):
+                        new_list_to_compare = new_config_dict[key]
+                        current_list_to_compare = current_config_dict[key]
+                        if key != "webhook_tpdb_users":
+                            new_list_to_compare.sort()
+                            current_list_to_compare.sort()
+                        config_changed = config_changed or new_list_to_compare != current_list_to_compare
+                    elif len(new_config_dict[key]) != len(current_config_dict[key]):
+                        config_changed = True
+                    else:
+                        # Lists of dicts (notification channels since per-event routing)
+                        # fall through the string branch above; compare them by content
+                        # or an edit inside a channel is never detected as a change.
+                        config_changed = config_changed or new_config_dict[key] != current_config_dict[key]
+                else:
+                    config_changed = config_changed or new_config_dict[key] != current_config_dict[key]
+
+            # If the new configuration is the same, return
+            if not config_changed and not password_change:
+                update_status(instance, "No configuration change detected", "info", False, False, "info-circle")
+                notify_web(instance, "toggle_config_buttons")
+                return
+            
+            if basic_after and password:
+                if new_config_dict["auth_username"] == current_config_dict["auth_username"] and password_change:
+                    update_log(instance, f"🔐 Password changed for user {new_config_dict["auth_username"]}")
+                elif new_config_dict["auth_username"] != current_config_dict["auth_username"]:
+                    update_log(instance, f"🔐 Basic authentication disabled for user {current_config_dict["auth_username"]} and enabled for user {new_config_dict["auth_username"]}")
+                password_hash = AuthenticationService.hash_password(password)
+                new_config_dict["auth_password_hash"] = password_hash
+
+            if oidc_after and not oidc_before:
+                update_log(instance, f"🫆 OIDC Authentication enabled")
+            if not oidc_after and oidc_before:
+                update_log(instance, "🫆 OIDC Authentication disabled")
+
+            if not basic_after:
+                if basic_before:
+                    update_log(instance, f"🔓 Basic authentication disabled for user {globals.config.auth_username}")
+                new_config_dict["auth_username"] = ""
+                new_config_dict["auth_password_hash"] = ""
+
+            # Populate the attributes of the config object with the values provided through the frontend
+            for key, value in new_config_dict.items():
+                setattr(config, key, value)
             config.save()
 
             # Also update globals
             globals.config = config
 
-            # Rebuild the Radarr/Sonarr clients in case their URL/API key changed
-            globals.arr.reconfigure(config)
-
-            # Pick up issuer/client changes without a restart
-            globals.oidc_service.reconfigure(config)
-        except Exception as config_error:
-            logger.error(
-                f"Could not save configuration: {config_error}", exc_info=True)
-            # Discard the partially applied in-memory changes
-            config.load()
-            globals.oidc_service.reconfigure(config)
-            notify_web(instance, "save_config", {"saved": False})
-            update_status(instance, str(config_error), color="danger")
-            return
-
-        # Reconnect to Plex because the Plex server or token might have changed.
-        # An unreachable Plex server does not undo the settings we just stored.
-        update_log(
-            instance, "Saving updated configuration and reconnecting to Plex")
-        try:
+            # Reconnect to Plex because the Plex server or token might have changed
+            instance.broadcast = True
+            update_log(instance, "💾 Configuration saved")
             globals.plex.reconnect(config)
-        except Exception as plex_error:
-            logger.warning(
-                f"Configuration saved but reconnecting to Plex failed: {plex_error}")
-            update_status(
-                instance, f"Configuration saved, but connecting to Plex failed: {plex_error}",
-                color="warning")
 
-        notify_web(instance, "save_config", {
-                   "saved": True, "config": config.to_public_dict()})
+            should_log_in_again = (
+                (current_auth_type == "oidc" and not oidc_after and oidc_before) or
+                (current_auth_type == "basic" and not basic_after and basic_before) or
+                (current_auth_type == "auth_disabled" and (basic_after or oidc_after))
+            )
+                                    
+            if should_log_in_again:
+                debug_me("Active authentication method has been disabled or auth has been enabled, logging user out")
+                notify_web(
+                    instance=instance,
+                    event="logout"
+                )
+                return
+            
+            notify_web(instance, "save_config", {"saved": True, "config": redact_config(vars(config))})
+            notify_web(instance, "update_ui", {"config": redact_config(vars(config))})
+
+        except Exception as config_error:
+            update_status(instance, str(config_error), color=StatusColor.WARNING.value)
+
+    @globals.web_socket.on("create_directory")
+    def create_directory(data):
+        instance = Instance(data.get("instance_id"), "web")
+
+        parent_path = data.get("parent_path")
+        folder_name = data.get("folder_name")
+
+        clean_name = os.path.basename(folder_name)
+        target_path = os.path.join(parent_path, clean_name)
+
+        try:
+            os.makedirs(target_path, exist_ok=False)
+            notify_web(instance, "folder_created", {
+                "success": True,
+                "path": target_path
+            })
+            update_status(instance, "Folder created successully", "success", icon="check2-circle", width="modal")
+            update_log(instance, f"✅ Successfully created new folder '{target_path}'")
+        except PermissionError:
+            update_status(instance, "Permission denied", "danger", icon="x-circle", width="modal")
+        except FileExistsError:
+            update_status(instance, "Folder already exists", "warning", icon="exclamation-triangle", width="modal")
+        except Exception as e:
+            update_status(instance, "Failed to create folder, check log for details", "danger", icon="x-circle", width="modal")
+            update_log(f"Faile to create folder: {str(e)}")
+
 
     @globals.web_socket.on("delete_schedule")
-    @socket_login_required
     def delete_task_from_scheduler(data):
-        """Delete a scheduled task."""
+        """Delete a scheduled task, addressed by its own id.
+
+        Returns an ack value as well as broadcasting, so a caller that fires
+        several of these in a row (e.g. deleting a file with more than one
+        schedule) can match each response to its own request instead of all
+        of them racing to consume the same "delete_schedule" event.
+        """
         if data.get("instance_id"):
             instance = Instance(data.get("instance_id"), "web")
-            schedule_file = data.get("file")
+            schedule_id = data.get("id")
 
-            if schedule_file:
-                # Get job ID from scheduler service
-                job_id = globals.scheduler_service.get_job_id_by_file(
-                    schedule_file)
+            if schedule_id:
+                # Remove from scheduler service
+                removed = globals.scheduler_service.remove_schedule(schedule_id)
 
-                if job_id:
-                    # Remove from scheduler service
-                    globals.scheduler_service.remove_schedule(job_id)
-
+                if removed:
                     # Make sure it's also removed from the config file
                     config.load()
                     config.schedules = [
                         each_schedule
                         for each_schedule in config.schedules
-                        if each_schedule["file"] != schedule_file
+                        if each_schedule.get("id") != schedule_id
                     ]
                     config.save()
 
                     # And update the front-end
-                    notify_web(
-                        instance,
-                        "delete_schedule",
-                        {"file": schedule_file,
-                            "job_reference": job_id, "deleted": True}
-                    )
+                    notify_web(instance, "delete_schedule", { "id": schedule_id, "deleted": True })
+                    update_log(instance, f"🗑️ Deleted scheduled task '{schedule_id}'")
+                    debug_me(f"Deleted scheduled task with job ID '{schedule_id}'")
+                    return {"id": schedule_id, "deleted": True}
                 else:
-                    notify_web(instance, "delete_schedule", {
-                               "deleted": False, "job_id": job_id})
+                    debug_me(f"Couldn't find a scheduled job with ID '{schedule_id}'")
+                    notify_web(instance, "delete_schedule", {"deleted": False, "id": schedule_id})
+                    return {"id": schedule_id, "deleted": False}
+
+    @globals.web_socket.on("get_schedules")
+    def get_schedules(data):
+        """ Gets the list of schedules from the config file and sends it to the frontend """
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+
+        schedules = []
+        jobs = globals.scheduler_service.scheduled_jobs
+        for job_id, job in jobs.items():
+            sched = {}
+            meta = globals.scheduler_service.schedule_meta.get(job_id)
+            last_run_at = getattr(job, "last_run", None)
+            next_run_at = getattr(job, "next_run", None)
+            sched["id"] = job_id
+            sched["file"] = meta.get("file")
+            sched["time"] = meta.get("time", None)
+            sched["interval_value"] = meta.get("interval_value", None)
+            sched["interval_unit"] = meta.get("interval_unit", None)
+            sched["last_run"] = last_run_at.isoformat() if last_run_at else ""
+            sched["next_run"] = next_run_at.isoformat() if next_run_at else ""
+            sched["last_run_status"] = meta.get("last_run_status", None)
+            schedules.append(sched)
+            debug_me(f"Job ID: {job_id} ({sched["file"]}) | Last run: {job.last_run}{f' ({sched["last_run_status"]}) ' if sched['last_run_status'] != 'never_run' else ''} | Next run: {job.next_run}")
+
+        notify_web(
+            instance=instance,
+            event="get_schedules",
+            data_to_include={ "schedules": schedules }
+        )
 
     @globals.web_socket.on("add_schedule")
-    @socket_login_required
     def add_tasks_to_scheduler(data):
-        """Add a new scheduled task."""
+        """Add a new scheduled task, or update an existing one if an id is given."""
         try:
             # Schedule bulk import task
-            if data.get("instance_id"):
-                instance = Instance(data.get("instance_id"), "web")
-                schedule_file = data.get("file")
-                schedule_time = data.get("time")
+            instance_id = data.pop("instance_id", None)
+            run_now = data.pop("run_now", False)
+            if instance_id:
+                instance = Instance(instance_id, "web")
+                new_schedule = BulkSchedule(**data)
+                if run_now:
+                    new_schedule.next_run = ((datetime.now() + timedelta(minutes=2)).replace(second=0, microsecond=0)).isoformat()
+                elif data.get("last_run_status") == "never_run":
+                    new_schedule.compute_next_run()
+
+                # Validate the shape before anything is persisted or removed: a bad
+                # payload written to config.json would raise on every startup.
+                if not new_schedule.time and not (new_schedule.interval_value and new_schedule.interval_unit in IntervalUnit):
+                    update_log(instance, f"🔴 Rejected invalid schedule for '{new_schedule.file}': needs a daily time or a valid interval")
+                    notify_web(instance, "add_schedule", {"added": False, "file": new_schedule.file})
+                    return {"added": False, "file": new_schedule.file}
+
+                # Editing an existing schedule replaces its job under the same id
+                if new_schedule.id:
+                    globals.scheduler_service.remove_schedule(new_schedule.id)
 
                 # Make sure the schedule is saved as part of the config
                 config.load()
-                update_or_add_schedule(schedule_file, schedule_time)
+                schedule_id = update_or_add_schedule(new_schedule)
                 config.save()
 
                 try:
                     # Create the callback for this schedule
-                    def schedule_callback(filename=schedule_file):
-                        add_file_to_schedule_thread(instance, filename)
+                    def schedule_callback(filename=new_schedule.file, schedule_id=new_schedule.id):
+                        add_file_to_schedule_thread(instance, filename, schedule_id)
 
-                    # Add to scheduler service
-                    job_id = globals.scheduler_service.add_schedule(
-                        schedule_file,
-                        schedule_time,
-                        schedule_callback
-                    )
+                    # Add to scheduler service, keeping the id from config
+                    globals.scheduler_service.add_schedule(new_schedule, schedule_callback)
 
-                    notify_web(
-                        instance,
-                        "add_schedule",
-                        {
-                            "added": True,
-                            "file": schedule_file,
-                            "time": schedule_time,
-                            "jobReference": job_id
-                        }
-                    )
+                    description = f"every day at {new_schedule.time}" if new_schedule.time else f"every {new_schedule.interval_value} {new_schedule.interval_unit}"
+                    notify_web(instance, "add_schedule", {
+                        "added": True,
+                        "id": schedule_id,
+                        "file": new_schedule.file,
+                        "time": new_schedule.time,
+                        "interval_value": new_schedule.interval_value,
+                        "interval_unit": new_schedule.interval_unit,
+                        "last_run": new_schedule.last_run,
+                        "next_run": new_schedule.next_run,
+                        "last_run_status": new_schedule.last_run_status
+                    })
+                    update_log(instance, f"⏰ Scheduled task '{new_schedule.file}' {description}")
+                    debug_me(f"Scheduled task '{new_schedule.file}' {description} with job ID '{new_schedule.id}'")
                 except Exception as e:
-                    debug_me(
-                        f"Error adding schedule: {e}", "add_tasks_to_scheduler")
+                    update_log(instance, f"🔴 Failed to add scheduled task '{new_schedule.file}'")
+                    debug_me(f"Error adding schedule: {e}")
                     raise
 
                 # Start the scheduler if it's not already started
                 globals.scheduler_service.start()
 
         except Exception as e:
-            if globals.debug:
-                debug_me(
-                    f"Error in scheduler setup: {e}", "add_tasks_to_scheduler")
-                raise
+            debug_me(f"Error in scheduler setup: {e}")
+            raise
 
-    def update_or_add_schedule(file_name, new_time):
-        """Helper function to update or add a schedule in config."""
+    def update_or_add_schedule(sched: BulkSchedule):
+        """Helper function to update or add a schedule in config. Returns the schedule's id."""
+        entry = {"file": sched.file}
+        if sched.time:
+            entry["time"] = sched.time
+        else:
+            entry["interval_value"] = sched.interval_value
+            entry["interval_unit"] = sched.interval_unit
+        if sched.last_run:
+            entry["last_run"] = sched.last_run
+        entry["next_run"] = sched.next_run
+        entry["last_run_status"] = getattr(sched, "last_run_status", None) or "never_run"
+
         for each_schedule in config.schedules:
-            if each_schedule["file"] == file_name:
-                # Update existing schedule
-                each_schedule["time"] = new_time
-                return
+            if each_schedule.get("id") == sched.id:
+                # Update existing schedule in place, clearing out fields from the old type
+                each_schedule.pop("time", None)
+                each_schedule.pop("interval_value", None)
+                each_schedule.pop("interval_unit", None)
+                each_schedule.pop("last_run", None)
+                each_schedule.pop("next_run", None)
+                each_schedule.pop("las_run_status", None)
+                each_schedule.update(entry)
+                return sched.id
 
         # Add new schedule if not found
-        config.schedules.append({"file": file_name, "time": new_time})
+        new_id = sched.id or str(uuid.uuid4())
+        config.schedules.append({"id": new_id, **entry})
+        return new_id
 
-    @globals.web_socket.on("upload_artwork_chunk")
-    @socket_login_required
-    def handle_upload_chunk(data):
-        """Handle chunked file upload - writes directly to temp file for memory efficiency."""
+    @globals.web_socket.on("detect_docker")
+    def docker_detection(data):
+        """Detects whether app is running in docker and informs frontend"""
+        instance = Instance(data.get("instance_id"), "web")
+        if globals.docker:
+            kometa_base = get_host_path("/assets")
+            temp_dir = get_host_path("/temp")
+            update_log(instance, f"🐳 Docker environment detected")
+            debug_me(f"Docker detected, Kometa asset path mapped to '{kometa_base}', temp dir mapped to '{temp_dir}'")
+            if kometa_base == "(not defined)":
+                update_log(instance, "⚠️ Kometa base path is not defined in docker-compose.yml file. Saving assets to Kometa asset directory is not available.")
+            notify_web(instance, "docker_detected", { "docker": "true", "kometa_base": kometa_base, "temp_dir": temp_dir })
+        else:
+            notify_web(instance, "docker_detected", { "docker": "false" })
+
+    @globals.web_socket.on("get_scrape_state")
+    def get_scrape_state(data):
         instance = Instance(data.get("instance_id"), "web")
 
-        # basename: fileName is client-supplied and later used as a path component
-        # in save_uploaded_file, so a ../ sequence would escape the temp directory.
+        scrape_state = {
+            "running": globals.scrapes_running > 0,
+            "type": globals.scrape_type,
+            "main_bar": globals.main_bar,
+            "bulk_bar": globals.bulk_bar
+        }
+        notify_web(instance, "get_scrape_state", scrape_state)
+
+    def abort_stale_upload(upload_key):
+        """Watchdog function that gets executed during a file upload if for some reason the next
+        chunk is not received within the timeout window determined by UPLOAD_CHUNK_TIMEOUT. Also
+        used by the disconnect handler below, since a Socket.IO client that vanishes mid-upload
+        needs exactly the same run-state cleanup."""
+        file_name = upload_key[1]
+        debug_me(f"Upload timed out for {file_name}, cleaning up...")
+
+        with upload_chunks_lock:
+            upload_info = cleanup_upload(upload_key)
+        if upload_info is None:
+            return
+
+        instance = upload_info.get("instance")
+
+        debug_me(f"CLEANING UP SCRAPE STATE. globals.scrapes_running is currently {globals.scrapes_running} | {globals.scrape_type}")
+        globals.scrapes_running -= 1
+        if globals.scrapes_running <= 0:
+            debug_me(f"Cleanup!")
+            globals.scrapes_running = 0
+            globals.cancel_scrape = False
+            globals.scrape_type = "stopped"
+            globals.main_bar["active"] = False
+
+            if instance:
+                resume_log_file(globals.upload_run_metadata.get("log_file"))   # the watchdog fires on its own thread
+                update_log(instance, f"⚠️ {file_name} • Upload timed out after {UPLOAD_CHUNK_TIMEOUT} seconds (connection lost)")
+                update_status(instance, "Upload timed out", color=StatusColor.DANGER.value)
+                notify_web(instance, "scrape_state", {
+                    "running": False,
+                    "type": "upload"
+                })
+                notify_web(instance, "progress_bar", {
+                    "percent": 100,
+                    "message": f"{file_name} • Upload timed out after {UPLOAD_CHUNK_TIMEOUT} seconds",
+                    "bar_speed": "smooth"
+                })
+
+    @globals.web_socket.on("disconnect")
+    def handle_disconnect():
+        """Discard uploads owned by the disconnecting Socket.IO client. Keyed by (sid, file_name),
+        so this only aborts this client's own uploads, not every upload in flight."""
+        sid = request.sid
+        with upload_chunks_lock:
+            stale_keys = [key for key in upload_chunks if key[0] == sid]
+        for upload_key in stale_keys:
+            debug_me(f"Client disconnected during upload of '{upload_key[1]}'. Aborting immediately.")
+            abort_stale_upload(upload_key)
+            
+    @globals.web_socket.on("upload_artwork_chunk")
+    def handle_upload_chunk(data):
+        """Handle chunked file upload - writes directly to temp file for memory efficiency.
+
+        Chunks are tracked under (request.sid, file_name) rather than file_name alone, so two
+        clients uploading a file with the same name never share a temp file. Each chunk is
+        decoded outside upload_chunks_lock so one client's CPU-bound base64 work never blocks
+        another's chunk from being accepted; chunks are still written to disk in order via a
+        per-upload decoded_chunks buffer, since arrival order is not guaranteed under load.
+        """
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        # basename: fileName is client-supplied and later used as a path component in
+        # save_uploaded_file, so a ../ sequence would escape the temp directory.
         file_name = os.path.basename(data["fileName"])
         upload_key = (request.sid, file_name)
         chunk_index = data.get("chunkIndex")
@@ -1101,6 +1487,11 @@ def setup_socket_handlers(
             chunk_data = data["chunkData"]
             chunk_index = int(data["chunkIndex"])
             total_chunks = int(data["totalChunks"])
+            total_size = data.get("totalSize", 0)
+            bar_speed = "fast"
+            progress_MB = ((chunk_index * UPLOAD_CHUNK_SIZE) / 1000000).__round__(2)
+            start_time = data.get("startTime", 0)
+            current_time = data.get("currentTime", 0)
 
             with upload_chunks_lock:
                 # A new first chunk replaces any abandoned upload with the same client/name.
@@ -1108,17 +1499,17 @@ def setup_socket_handlers(
                     cleanup_upload(upload_key)
 
                 if upload_key not in upload_chunks:
-                    temp_file = tempfile.NamedTemporaryFile(
-                        mode='wb', delete=False, suffix='.upload')
+                    temp_file = tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.upload')
                     upload_chunks[upload_key] = {
                         "temp_file": temp_file,
                         "temp_path": temp_file.name,
                         "chunks_received": 0,
                         "total_chunks": total_chunks,
                         "instance": instance,
+                        "watchdog": None,
                         "chunk_indexes": set(),
                         "decoded_chunks": {},
-                        "chunks_complete": Event(),
+                        "chunks_complete": threading.Event(),
                     }
 
                 upload = upload_chunks[upload_key]
@@ -1130,42 +1521,144 @@ def setup_socket_handlers(
                     raise ValueError(f"Duplicate chunk index {chunk_index}")
                 upload["chunk_indexes"].add(chunk_index)
 
+            if chunk_index == 0:
+                globals.cancel_scrape = False
+                globals.scrapes_running += 1
+                globals.scrape_type = "upload"
+
+                globals.upload_run_metadata = {}
+                run_label = file_name.split(".zip")[0].strip()
+                clean_file_name = run_label.replace(" (", "_").replace(")", "").replace(" - ", "_").replace(" • ", "_").replace(" ", "_")
+                log_label = f"upload_{clean_file_name}"
+                run_start = (
+                    datetime.fromtimestamp(start_time / 1000.0, tz=timezone.utc).isoformat()
+                    if start_time else datetime.now(timezone.utc).isoformat()
+                )
+                globals.upload_run_metadata["run_label"] = run_label
+                globals.upload_run_metadata["start_time"] = run_start
+                globals.upload_run_metadata["log_file"] = log_to_file(log_label)
+
+                update_log(instance, f"📤 {file_name} • Upload initiated")
+                debug_me(f"Uploading '{file_name}")
+                notify_web(instance, "scrape_state", { "running": True, "type": globals.scrape_type })
+            else:
+                # Every chunk arrives on its own handler thread, so pick the run's log file back up
+                resume_log_file(globals.upload_run_metadata.get("log_file"))
+
+            if globals.cancel_scrape:
+                debug_me(f"File upload canceled by user")
+                update_log(instance, f"🛑 {file_name} • File upload canceled by user")
+                update_status(instance, f"File upload canceled by user", color=StatusColor.WARNING.value)
+                with upload_chunks_lock:
+                    canceled_upload = cleanup_upload(upload_key)
+
+                if canceled_upload is not None:
+                    RunHistory().add_run(
+                        run_type=RunType.UPLOAD.value,
+                        label=globals.upload_run_metadata.get("run_label", "unknown"),
+                        started_at=globals.upload_run_metadata.get("start_time", datetime.now(timezone.utc).isoformat()),
+                        ended_at=datetime.now(timezone.utc).isoformat(),
+                        trigger=RunTrigger.MANUAL.value,
+                        outcome=RunOutcome.STOPPED.value
+                    )
+
+                globals.scrapes_running -= 1
+                if globals.scrapes_running <= 0:
+                    globals.scrapes_running = 0
+                    globals.cancel_scrape = False
+                    notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
+                    globals.scrape_type = "stopped"
+                    globals.main_bar["active"] = False
+                    notify_web(instance, "progress_bar", { "percent": 100, "message": f"{file_name} • Upload canceled by user", "bar_speed": "smooth" })
+                    globals.last_emit_time = 0
+                return "abort"
+
+            with upload_chunks_lock:
+                current_upload = upload_chunks.get(upload_key)
+                if current_upload is not upload:
+                    # Superseded by a replacement upload (chunk 0 arrived again) or already
+                    # cleaned up; nothing left to decode into.
+                    return
+                # When a chunk is processed, reset the watchdog so the timeout always measures
+                # the gap since the last chunk, not since the upload started.
+                if upload.get("watchdog"):
+                    upload["watchdog"].cancel()
+                timer = threading.Timer(
+                    interval=UPLOAD_CHUNK_TIMEOUT,
+                    function=abort_stale_upload,
+                    args=[upload_key]
+                )
+                timer.daemon = True
+                timer.start()
+                upload["watchdog"] = timer
+
+            # Decode outside the lock so one client's CPU-bound base64 work never blocks
+            # another client's chunk from being accepted.
             decoded_chunk = base64.b64decode(chunk_data)
 
             with upload_chunks_lock:
-                # A replacement upload may have superseded this decode.
+                # A replacement upload may have superseded this decode while it was running.
                 if upload_chunks.get(upload_key) is not upload:
                     return
                 upload["decoded_chunks"][chunk_index] = decoded_chunk
                 while upload["chunks_received"] in upload["decoded_chunks"]:
                     next_chunk = upload["chunks_received"]
-                    upload["temp_file"].write(
-                        upload["decoded_chunks"].pop(next_chunk))
+                    upload["temp_file"].write(upload["decoded_chunks"].pop(next_chunk))
                     upload["chunks_received"] += 1
                 if upload["chunks_received"] == upload["total_chunks"]:
                     upload["chunks_complete"].set()
+
+            percent = (progress_MB * 100 / total_size).__round__(2) if total_size else 0.0
+            # Browsers coarsen performance.now() (Firefox to 1 ms), so the first chunk can carry
+            # identical timestamps; a zero interval must not turn into a swallowed exception
+            # that leaves the chunk unacknowledged.
+            elapsed_ms = current_time - start_time
+            current_rate = ((progress_MB * 1000) / elapsed_ms).__round__(2) if elapsed_ms > 0 else 0.0
+            message = f"{file_name} • {progress_MB} MB of {total_size} MB • {current_rate} MB/s"
+            notify_web(instance, "progress_bar", { "percent": percent, "message": message, "bar_speed": bar_speed}, silent=True )
+
+            globals.main_bar["active"] = True
+            globals.main_bar["percent"] = percent
+            globals.main_bar["speed"] = bar_speed
+            globals.main_bar["message"] = message
+
+            return "ok"
         except Exception as e:
-            logger.error(
-                f"Error decoding/writing chunk {chunk_index}: {e}", exc_info=True)
+            debug_me(f"Error decoding chunk {chunk_index}: {str(e)}")
             with upload_chunks_lock:
                 if upload is None or upload_chunks.get(upload_key) is upload:
                     cleanup_upload(upload_key)
+            globals.scrapes_running -= 1
+            if globals.scrapes_running <= 0:
+                globals.scrapes_running = 0
+                globals.cancel_scrape = False
+                notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
+                globals.scrape_type = "stopped"
+                globals.main_bar["active"] = False
+                notify_web(instance, "progress_bar", { "percent": 100, "message": f"{file_name} • Error uploading file", "bar_speed": "fast"} )
+            return "error"
 
     @globals.web_socket.on("upload_complete")
-    @socket_login_required
     def handle_upload_complete(data):
         """Finalize the upload once all chunks are received."""
+        instance = Instance(data.get("instance_id"), "web", broadcast=True)
+        # Must match the basename key written by handle_upload_chunk.
         file_name = os.path.basename(data.get("fileName") or "")
         upload_key = (request.sid, file_name)
+        # This handler runs on its own thread too, and the processing that follows records the run
+        resume_log_file(globals.upload_run_metadata.get("log_file"))
+
+        notify_web(instance, "progress_bar", { "percent": 100, "message": f"{file_name} • Upload complete!", "bar_speed": "fast"} )
+
         filters = data.get("filters")
         plex_year = data.get("plex_year")
         plex_title = data.get("plex_title")
         options = data.get("options")
-        debug_me(
-            f"Obtained options from web form: {options}", "handle_upload_complete")
+        debug_me(f"Obtained filters from web form: {filters}")
+        debug_me(f"Obtained options from web form: {options}")
 
-        instance = Instance(data.get("instance_id"), "web")
-
+        # The last chunk may still be mid-decode on another thread; wait for it rather than
+        # reporting a short upload.
         with upload_chunks_lock:
             upload = upload_chunks.get(upload_key)
             wait_for_chunks = (
@@ -1194,15 +1687,19 @@ def setup_socket_handlers(
         if upload is None:
             debug_me(
                 f'Upload complete event received for {file_name}, but with '
-                f'{chunks_received} of {expected_chunks}, some chunks are missing.',
-                "handle_upload_complete"
+                f'{chunks_received} of {expected_chunks}, some chunks are missing.'
             )
             return
 
-        debug_me(
-            f"Upload complete for {file_name}, processing file...", "handle_upload_complete")
+        temp_path = upload["temp_path"]
+        debug_me(f"Uploaded {file_name} to {temp_path}, processing file...")
         try:
             upload["temp_file"].close()
+        except Exception as e:
+            debug_me(f"Unable to close temp file: {str(e)}")
+
+        update_log(instance, f"✔️ {file_name} • Upload completed successfully")
+        try:
             save_uploaded_file(
                 instance,
                 file_name,
@@ -1210,26 +1707,32 @@ def setup_socket_handlers(
                 filters,
                 plex_title,
                 plex_year,
-                upload["temp_path"],
+                temp_path,
                 filename_pattern,
                 check_image_orientation,
                 sort_key
             )
         finally:
-            cleanup_upload_file(upload, file_name)
+            # save_uploaded_file moves the temp file into place itself; this only catches the
+            # case where it never got there (an exception before the move).
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError as e:
+                debug_me(f"Error during cleanup: {str(e)}")
 
 
 def save_uploaded_file(
-        instance: Instance,
-        file_name: str,
-        options: list,
-        filters: list,
-        plex_title: str,
-        plex_year: int,
-        temp_upload_path: str,
-        filename_pattern: re.Pattern,
-        check_image_orientation_func,
-        sort_key_func
+    instance: Instance,
+    file_name: str,
+    options: list,
+    filters: list,
+    plex_title: str,
+    plex_year: int,
+    temp_upload_path: str,
+    filename_pattern: re.Pattern,
+    check_image_orientation_func,
+    sort_key_func
 ):
     """
     Process the uploaded file from temp storage.
@@ -1237,31 +1740,38 @@ def save_uploaded_file(
     Args:
         instance: Instance object for web notifications
         file_name: Name of the uploaded file
-        options: List of options to apply
         filters: List of filters to apply
         plex_title: Optional title override
         plex_year: Optional year override
-        temp_upload_path: Path to the completed temporary upload
+        temp_upload_path: Path to the completed temporary upload file
         filename_pattern: Regex pattern for validating filenames
         check_image_orientation_func: Function to check image orientation
         sort_key_func: Function to generate sort keys
     """
     from artwork_uploader import process_uploaded_artwork
 
-    debug_me(
-        f"Processing uploaded file {file_name} from temp path: {temp_upload_path}", "save_uploaded_file")
+    debug_me(f"Processing uploaded file {file_name} from temp path: {temp_upload_path}")
 
-    # Move to a proper temp location with correct filename for processing
+    # Both directories belong to this call. The artwork dictionaries hold paths into extract_dir,
+    # so it has to survive extract_and_list_zip and can only go once the processing below has read
+    # them. The finally covers the cancel path and any failure, which otherwise left the uploaded
+    # archive and every extracted image behind for the life of the container.
     temp_zip_folder = tempfile.mkdtemp()
-    temp_zip_path = os.path.join(temp_zip_folder, file_name)
-
+    extract_dir = tempfile.mkdtemp()
     try:
-        shutil.move(temp_upload_path, temp_zip_path)
-        debug_me(f"Moved uploaded file to: {temp_zip_path}", "save_uploaded_file")
+        # Move to a proper file location with correct filename for processing
+        temp_zip_path = os.path.join(temp_zip_folder, file_name)
 
+        shutil.move(temp_upload_path, temp_zip_path)
+        debug_me(f"Moved {file_name} to temporary path: {temp_zip_folder}")
+
+        debug_me(f"Saved ZIP file: {temp_zip_path}")
+
+        update_log(instance, f"📦 {os.path.basename(temp_zip_path)} • Extracting ZIP file and parsing files...")
         extracted_files, skipped, zip_title, zip_author, zip_source = extract_and_list_zip(
             instance,
             temp_zip_path,
+            extract_dir,
             filename_pattern,
             filters,
             plex_title,
@@ -1269,63 +1779,55 @@ def save_uploaded_file(
             check_image_orientation_func,
             sort_key_func
         )
+        if globals.cancel_scrape:
+            notify_web(instance, "progress_bar", {"message": "Parsing canceled by user...", "percent": 100})#, "bar_type": bar_type, "bar_speed": bar_speed})
+            globals.main_bar["active"] = False
+            update_log(instance, f"🛑 {os.path.basename(temp_zip_path)} • ZIP file parsing canceled by user")
+            update_status(instance, f"ZIP file parsing canceled by user", color=StatusColor.WARNING.value)
+            RunHistory().add_run(
+                run_type=RunType.UPLOAD.value,
+                label=globals.upload_run_metadata.get("run_label", "unknown"),
+                started_at=globals.upload_run_metadata.get("start_time", datetime.now(timezone.utc).isoformat()),
+                ended_at=datetime.now(timezone.utc).isoformat(),
+                trigger=RunTrigger.MANUAL.value,
+                outcome=RunOutcome.STOPPED.value
+            )
+            globals.scrapes_running -= 1
+            if globals.scrapes_running <= 0:
+                globals.scrapes_running = 0
+                globals.cancel_scrape = False
+                notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
+                globals.scrape_type = "stopped"
+            return
+
+        # Delete the ZIP file after extraction, so it is not held while the artwork is processed
+        try:
+            os.remove(temp_zip_path)
+            debug_me(f"Deleted temporary ZIP file: {temp_zip_path}")
+        except OSError as e:
+            debug_me(f"Error deleting temporary ZIP file: {e}")
+
+        process_uploaded_artwork(instance, extracted_files, skipped, zip_title, zip_author, zip_source, options, filters, plex_title, plex_year)
+
+        if globals.cancel_scrape:
+            update_status(instance, "Uploaded file processing canceled by user", color=StatusColor.WARNING.value)
+        else:
+            update_status(instance, "Finished processing uploaded file", color=StatusColor.SUCCESS.value)
+
+        globals.scrapes_running -= 1
+        if globals.scrapes_running <= 0:
+            globals.scrapes_running = 0
+            globals.cancel_scrape = False
+            notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
+            globals.scrape_type = "stopped"
     finally:
         shutil.rmtree(temp_zip_folder, ignore_errors=True)
-        debug_me(
-            f"{'Deleted' if not os.path.exists(temp_zip_folder) else 'Failed to delete'} "
-            f"temporary ZIP file: {temp_zip_path}", "save_uploaded_file")
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        debug_me(f"Removed temporary directories {temp_zip_folder} and {extract_dir}")
 
-    process_uploaded_artwork(instance, extracted_files, skipped, zip_title, zip_author, zip_source,
-                             options, filters, plex_title, plex_year)
-
-    notify_web(instance, "upload_complete", {"files": extracted_files})
-    update_status(instance, "Finished processing uploaded file.",
-                  color="success")
-
-
-def _detect_zip_source_from_filename(zip_path: str) -> tuple[str, Optional[str], Optional[str]]:
-    """
-    Detect a ZIP's source from its filename. ThePosterDB ZIPs encode
-    "<title> set by <author> - ..."; anything else is assumed to be MediUX
-    (confirmed or overridden later if a source.txt entry is found inside).
-    """
-    pattern = r"^(?P<title>.+?)\s+set by\s+(?P<author>.+?)\s*-"
-    match = re.search(pattern, os.path.basename(zip_path), re.IGNORECASE)
-    if not match:
-        return SOURCE_MEDIUX, None, None
-
-    title = match.group("title").strip()
-    author = match.group("author").strip()
-    debug_me(f"Detected ThePosterDB source", "extract_and_list_zip")
-    debug_me(f"Detected ZIP title: {title}", "extract_and_list_zip")
-    debug_me(f"Detected ZIP author: {author}", "extract_and_list_zip")
-    return SOURCE_THEPOSTERDB, title, author
-
-
-def _extract_mediux_source_metadata(
-        zip_ref: zipfile.ZipFile, zip_info: zipfile.ZipInfo, extract_dir: str
-) -> tuple[Optional[str], Optional[str]]:
-    """Extract and parse a MediUX ZIP's source.txt for the set title/author, then remove it."""
-    debug_me("Detected Mediux source", "extract_and_list_zip")
-    source_txt_path = os.path.join(extract_dir, SOURCE_TXT)
-    with zip_ref.open(zip_info) as source, open(source_txt_path, "wb") as target:
-        target.write(source.read())
-
-    zip_title = None
-    zip_author = None
-    with open(source_txt_path, "r", encoding="utf-8") as source_file:
-        for line in source_file:
-            if line.startswith("Title:"):
-                zip_title = line.split("Title:")[1].strip()
-                debug_me(f"Detected ZIP title: {zip_title}", "extract_and_list_zip")
-            if line.startswith("Author:"):
-                zip_author = line.split("Author:")[1].strip()
-                debug_me(f"Detected ZIP author: {zip_author}", "extract_and_list_zip")
-                break
-    os.remove(source_txt_path)
-    return zip_title, zip_author
-
-
+# Fork: progressive Plex title resolution (FORK.md "Plex lookups" invariant). PlexLookupError
+# carries a partial_result so a transient per-library index error during the cascade is never
+# cached as a miss by the caller; see resolve_cache below.
 def _resolve_plex_title(
         original_title: str, lookup_year: Optional[int]
 ) -> tuple[Optional[str], Optional[int], Optional[str], Optional[int], str]:
@@ -1395,7 +1897,7 @@ def _resolve_plex_title(
         # Fallback: try progressively shorter titles for any remaining mismatch
         # (e.g. stripped subtitles or missing apostrophes: "Worlds End" vs "World's End")
         words = re.sub(r'_(?=\s)|\s-\s', ' ', original_title).split()
-        max_strip = globals.config.zip_title_strip_words if globals.config else 3
+        max_strip = getattr(globals.config, "zip_title_strip_words", 3) if globals.config else 3
         min_words = max(2, len(words) - max_strip)
         for end in range(len(words) - 1, min_words - 1, -1):
             short_title = ' '.join(words[:end])
@@ -1413,121 +1915,116 @@ def _resolve_plex_title(
     return media_type, tmdb_id, title, year, candidate_title
 
 
-def _reclassify_artwork_type(artwork: dict, check_image_orientation_func) -> None:
-    """Refine artwork['type']/['season']/['media'] using image orientation, in place."""
-    if artwork['media'] == "TV Show":
-        if artwork['type'] == FilterType.SQUARE_ART.value:
-            # Square art is identified by its filename OST suffix; don't let the
-            # orientation checks below reclassify it as a cover or backdrop
-            artwork['season'] = SEASON_SQUARE_ART
-        else:
-            if artwork['season'] is None:
-                artwork['season'] = "Cover"
-                artwork['type'] = FilterType.SHOW_COVER.value
-            if artwork['season'] == "Cover" and check_image_orientation_func(artwork["path"]) == "landscape":
-                artwork['season'] = "Backdrop"
-                artwork['type'] = FilterType.BACKGROUND.value
-    if artwork['media'] == "Movie" and artwork['type'] != FilterType.SQUARE_ART.value:
-        if check_image_orientation_func(artwork["path"]) == "landscape":
-            artwork['type'] = FilterType.BACKGROUND.value
-        else:
-            artwork['type'] = FilterType.MOVIE_POSTER.value
-    if artwork['media'] == "Collection":
-        if check_image_orientation_func(artwork["path"]) == "landscape":
-            artwork['type'] = FilterType.BACKGROUND.value
-    if artwork['media'] == "unavailable":
-        if check_image_orientation_func(artwork["path"]) == "landscape":
-            artwork['type'] = FilterType.BACKGROUND.value
-        if artwork['type'] == FilterType.SEASON_COVER.value:
-            artwork['media'] = "TV Show"
-        else:
-            # Intentional fallback: "poster" doesn't match any FilterType, so this
-            # unclassifiable artwork won't pass filters and won't be processed further
-            artwork['type'] = "poster"
-
-
-def _artwork_log_label(artwork: dict) -> str:
-    """Build the "'{title} (YYYY)', Season N, Episode M" fragment shared by include/skip log lines."""
-    year_suffix = f" ({artwork['year']})" if artwork['year'] is not None else ""
-    season_suffix = f", Season {artwork['season']}" if isinstance(artwork['season'], int) else ""
-    episode_suffix = f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else ""
-    return f"'{artwork['title']}{year_suffix}'{season_suffix}{episode_suffix}"
-
-
 def extract_and_list_zip(
-        instance: Instance,
-        zip_path: str,
-        filename_pattern: re.Pattern,
-        filters: list,
-        plex_title: str,
-        plex_year: int,
-        check_image_orientation_func,
-        sort_key_func
+    instance: Instance,
+    zip_path: str,
+    extract_dir: str,
+    filename_pattern: re.Pattern,
+    filters: list,
+    plex_title: str,
+    plex_year: int,
+    check_image_orientation_func,
+    sort_key_func
 ) -> tuple[list, int, str, str, str]:
     """
     Extract a ZIP file, flatten directories, and return a list of valid image files.
 
     Args:
-        instance: Instance object for web notifications
         zip_path: Path to the ZIP file
+        extract_dir: Directory to extract into. The returned artwork dictionaries hold paths
+            into it, so the caller creates it and removes it once it has finished reading them
         filename_pattern: Regex pattern for validating filenames
-        filters: List of artwork type filters to apply
-        plex_title: Optional title override
-        plex_year: Optional year override
         check_image_orientation_func: Function to check image orientation
         sort_key_func: Function to generate sort keys
 
     Returns:
-        Tuple of (artwork list, skipped count, zip title, zip author, zip source)
+        List of artwork dictionaries sorted by media type, season, episode
     """
-    extract_dir = tempfile.mkdtemp()
     file_list = []
+    zip_title = ""
+    zip_author = ""
     filtered_files = 0
+    errored_files = 0
 
-    debug_me(
-        f"Extracting ZIP file: {zip_path} to {extract_dir}", "extract_and_list_zip")
+    debug_me(f"Extracting ZIP file: {zip_path} to {extract_dir}")
 
-    zip_source, zip_title, zip_author = _detect_zip_source_from_filename(zip_path)
-
+    # For ThePosterDB, extract title and author from filename
+    pattern = r"^(?P<title>.+?)\s+set by\s+(?P<author>.+?)\s*-"
+    match = re.search(pattern, os.path.basename(zip_path), re.IGNORECASE)
+    if match:
+        zip_source = ScraperSource.THEPOSTERDB.value
+        zip_title = match.group("title").strip()
+        zip_author = match.group("author").strip()
+        debug_me(f"Detected ThePosterDB source")
+        debug_me(f"Detected ZIP title: {zip_title}")
+        debug_me(f"Detected ZIP author: {zip_author}")
+    else:
+        zip_source = ScraperSource.MEDIUX.value
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # Pre-process the file list to determine source and extract valid files
-        zip_infos = [
-            zip_info for zip_info in zip_ref.infolist()
-            if os.path.basename(zip_info.filename)
-            and not os.path.basename(zip_info.filename).startswith(".")
-            and os.path.basename(zip_info.filename).lower() not in {"ds_store", "__macosx"}
-        ]
+        zip_infos = [zip_info for zip_info in zip_ref.infolist() if os.path.basename(zip_info.filename) and not os.path.basename(zip_info.filename).startswith(".") and os.path.basename(zip_info.filename) not in {"ds_store", "__macosx"}]
         total_files_in_zip = len(zip_infos)
+        
+        notify_web(instance, "progress_bar", { "percent": 0, "message": "Parsing...", "bar_type": "main", "bar_speed": "fast" })
+        globals.main_bar["active"] = False
+       
+        identified_media_map = {}
+        # Fork: one ZIP usually repeats a single (title, year) across many entries (e.g. every
+        # episode of a season); a miss can cost several Plex library scans, so cache per call.
+        resolve_cache: dict[tuple[Optional[str], Optional[int]], tuple] = {}
 
-        # One ZIP usually repeats a single (title, year); a miss can cost
-        # several Plex library scans. Function-scoped so it can't go stale
-        # across imports.
-        resolve_cache: dict[tuple[str, Optional[int]], tuple] = {}
-
-        update_status(instance, "Extracting ZIP file...", "info", sticky=True, spinner=True)
         for n, zip_info in enumerate(zip_infos, 1):
-            filename = os.path.basename(zip_info.filename)
-            debug_me(f"{n} / {total_files_in_zip} - Processing '{filename}'", "extract_and_list_zip")
-            percent = (n / total_files_in_zip) * 100 if total_files_in_zip > 0 else 0
-            message = f"{n} / {total_files_in_zip} ({round(percent)}%)"
-            notify_web(instance, "progress_bar", {"percent": percent, "message": message})
+            if globals.cancel_scrape:
+                break
+            filename = os.path.basename(zip_info.filename)  # Get filename only (ignore paths)
+            debug_me(f"{n} / {total_files_in_zip} • Processing '{filename}'")
+            percent = (n/total_files_in_zip)*100 if total_files_in_zip > 0 else 0
+            message = f"Parsing {n} of {total_files_in_zip} • {filename}"
+            notify_web(instance, "progress_bar", { "percent": percent, "message": message, "bar_type": "main", "bar_speed": "fast" })
+            globals.main_bar["active"] = True
+            globals.main_bar["percent"] = percent
+            globals.main_bar["message"] = message
+            globals.main_bar["speed"] = "fast"
 
-            # Mediux ZIP files contain a source.txt file with metadata
-            if filename == SOURCE_TXT:
-                zip_source = SOURCE_MEDIUX
-                zip_title, zip_author = _extract_mediux_source_metadata(zip_ref, zip_info, extract_dir)
-
+            # Mediux ZIP files contain a source.txt file with metadata, we obtain title and author from there
+            if filename == "source.txt":
+                debug_me("Detected Mediux source")
+                zip_source = ScraperSource.MEDIUX.value
+                with zip_ref.open(zip_info) as source, open(os.path.join(extract_dir, "source.txt"), "wb") as target:
+                    target.write(source.read())
+                with open(os.path.join(extract_dir, "source.txt"), "r", encoding="utf-8") as source_file:
+                    for line in source_file:
+                        if line.startswith("Title:"):
+                            zip_title = line.split("Title:")[1].strip()
+                            debug_me(f"Detected ZIP title: {zip_title}")
+                        if line.startswith("Author:"):
+                            zip_author = line.split("Author:")[1].strip()
+                            debug_me(f"Detected ZIP author: {zip_author}")
+                            break
+                os.remove(os.path.join(extract_dir, "source.txt"))  # Clean up source.txt after obtaining author info
+                
             elif filename_pattern.match(filename):
                 full_path = os.path.join(extract_dir, filename)
 
                 with zip_ref.open(zip_info) as source, open(full_path, "wb") as target:
                     target.write(source.read())
 
-                md5 = utils.calculate_file_md5(full_path)
+                md5 = calculate_file_md5(full_path)
 
                 # Obtain artwork title, year, media type, season, episode and artwork type by parsing the filename
-                debug_me(f"Parsing artwork metadata from filename: {filename}", "extract_and_list_zip")
+                debug_me(f"Parsing artwork metadata from filename: {filename}")
                 artwork = parse_title(os.path.splitext(filename)[0])
+
+                if artwork["media"] == "unable_to_parse":
+                    update_log(instance, f"❌ {filename} • {zip_author} | Unable to parse file name, format unrecognized")
+                    errored_files += 1
+                    continue
+                
+                # Fork: identified_media_map is populated from genuine Plex hits only (below),
+                # not from parse_title's filename-based guess - a guess for one file in the ZIP
+                # must not override a definitive "not found in Plex" for another file sharing
+                # its title.
+
                 # Override title and year if provided
                 artwork["title"] = plex_title if plex_title else artwork["title"]
                 artwork["year"] = plex_year if plex_year else artwork.get("year")
@@ -1537,88 +2034,146 @@ def extract_and_list_zip(
                 artwork["checksum"] = md5
                 artwork["id"] = "Upload"
                 artwork["author"] = zip_author
-                # Determine media type via Plex lookup if not a collection
+                # Determine media type via Plex lookup if not a collection, find TMDb ID, title
+                # and year in the process for better matching later when processing artwork items
                 if artwork["media"] != "Collection":
+                    # Fork: _resolve_plex_title tries progressively looser title variants
+                    # (movie_or_show alone only tries the literal one), and PlexLookupError
+                    # keeps a transient per-library index error from being cached as a miss.
                     original_title = artwork.get('title')
-                    if not original_title:
-                        artwork["media"] = "unavailable"
-                        artwork["tmdb_id"] = None
+                    lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
+                    cache_key = (original_title, lookup_year)
+                    if cache_key in resolve_cache:
+                        media_type, tmdb_id, title, year, candidate_title = resolve_cache[cache_key]
                     else:
-                        lookup_year = int(artwork.get('year')) if artwork.get('year') is not None else None
-                        cache_key = (original_title, lookup_year)
-                        if cache_key in resolve_cache:
-                            media_type, tmdb_id, title, year, candidate_title = resolve_cache[cache_key]
+                        try:
+                            result = _resolve_plex_title(original_title, lookup_year)
+                        except PlexLookupError as e:
+                            # Transient failure: don't cache it, so the next matching file in
+                            # the ZIP (often the same title/year) retries from scratch.
+                            media_type, tmdb_id, title, year, candidate_title = e.partial_result
                         else:
-                            try:
-                                result = _resolve_plex_title(original_title, lookup_year)
-                            except PlexLookupError as e:
-                                # Transient failure: don't cache it, so the next
-                                # matching file in the ZIP retries from scratch.
-                                media_type, tmdb_id, title, year, candidate_title = e.partial_result
-                            else:
-                                resolve_cache[cache_key] = result
-                                media_type, tmdb_id, title, year, candidate_title = result
-                        artwork["media"] = media_type if media_type else "unavailable"
-                        artwork["title"] = title if title and title != candidate_title else candidate_title
-                        artwork["tmdb_id"] = tmdb_id
-                        if artwork.get('year') is None and year is not None:
-                            artwork['year'] = year
+                            resolve_cache[cache_key] = result
+                            media_type, tmdb_id, title, year, candidate_title = result
 
-                _reclassify_artwork_type(artwork, check_image_orientation_func)
+                    if media_type == "Error":
+                        update_log(instance, f"❌ {filename} • {zip_author} | Error searching Plex")
+                        errored_files += 1
+                        continue
+
+                    # The Plex lookup is more accurate than the filename parse, so it always
+                    # wins when it has an answer; the identified_media_map cross-reference (one
+                    # title's hit filling in another file's miss) happens once, in the final
+                    # clean-up pass below, after every entry has had its own chance to resolve.
+                    if media_type not in (None, "unavailable"):
+                        artwork["media"] = media_type
+                        identified_media_map[artwork["title"]] = media_type
+                    else:
+                        artwork["media"] = "unavailable"
+
+                    artwork["title"] = title if title and title != candidate_title else candidate_title
+                    artwork["tmdb_id"] = tmdb_id
+                    if artwork.get('year') is None and year is not None:
+                        artwork['year'] = year
+                if artwork['media'] == "TV Show":
+                    if artwork['season'] is None:
+                        artwork['season'] = "Cover"
+                        artwork['file_type'] = "show_cover"
+                    if artwork['season'] == "Cover" and check_image_orientation_func(artwork["path"]) == "landscape":
+                        artwork['season'] = "Backdrop"
+                        artwork['file_type'] = "background"
+                if artwork['media'] == "Movie":
+                    if check_image_orientation_func(artwork["path"]) == "landscape":
+                        artwork['file_type'] = "background"
+                    elif artwork['file_type'] == "square_art" or check_image_orientation_func(artwork["path"]) == "square":
+                        artwork['file_type'] = "square_art"
+                    else:
+                        artwork['file_type'] = "movie_poster"
+                if artwork['media'] == "Collection":
+                    if check_image_orientation_func(artwork["path"]) == "landscape":
+                        artwork['file_type'] = "background"
+                    elif check_image_orientation_func(artwork["path"]) == "square":
+                        artwork['file_type'] = "square_art"
+                if artwork['media'] == "unavailable":
+                    if check_image_orientation_func(artwork["path"]) == "landscape":
+                        artwork['file_type'] = "background"
+                    elif check_image_orientation_func(artwork["path"]) == "square" or "OST" in artwork["path"]:
+                        artwork['file_type'] = "square_art"
+                    elif artwork['file_type'] == "season_cover":
+                        artwork['media'] = "TV Show"
+                    else:
+                        # If we get to this point, there is no way to determine if it's a TV show or Movie, so default to poster
+                        # However this won't pass any filters (becuase it's either "movie_poster" or "show_cover"), so this artwork won't be 
+                        # processed further if any filters are specified. It will only be processed if no filters are set.
+                        artwork['file_type'] = "poster"  
+
+                # Fork: "type" is the externally-visible name for file_type (the caller and the
+                # characterization tests read it); kept as an alias rather than a rename so
+                # nothing upstream that still reads file_type breaks.
+                artwork['type'] = artwork['file_type']
 
                 # Check for filters and exclusions
-                label = _artwork_log_label(artwork)
-                if not filters or artwork["type"] in filters:
+                if not filters or artwork["file_type"] in filters:
                     debug_me(
-                        f"Including {artwork['type'].replace('_', ' ')} for {label}. Type is {artwork['type']}.",
-                        "extract_and_list_zip"
+                        f"✅ Including {artwork["file_type"].replace('_', ' ')} "
+                        f"for '{artwork['title']}"
+                        + (f" ({artwork['year']})'" if artwork['year'] is not None else "")
+                        + (f", Season {artwork['season']}" if isinstance(artwork['season'], int) else "")
+                        + (f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else "")
+                        + f". Type is {artwork['file_type']}."
                     )
+
                     file_list.append(artwork)
                 else:
                     debug_me(
-                        f"Skipping {artwork['type'].replace('_', ' ')} for {label} based on filters. "
-                        f"Type is {artwork['type']} and filters are {filters}.", "extract_and_list_zip"
+                        f"⏩ Skipping {artwork["file_type"].replace('_', ' ')} "
+                        f"for '{artwork['title']}"
+                        + (f" ({artwork['year']})'" if artwork['year'] is not None else "")
+                        + (f", Season {artwork['season']}" if isinstance(artwork['season'], int) else "")
+                        + (f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else "")
+                        + f" based on filters. Type is {artwork['file_type']} and filters are {filters}."
                     )
                     filtered_files += 1
 
+    # Final clean-up in an effort to leave as few assets as possible unidentified
+    final_file_list = []
+    tv_sq_art = 0
+    for artwork in file_list:
+        # Fork: a resolved "unavailable" is left as-is here - resolve_cache already gives every
+        # entry the chance to resolve on its own, and retroactively borrowing a later entry's
+        # hit for an earlier definitive miss would contradict a transient failure never being
+        # cached (the next entry with the same title is the one that gets to retry, not this one).
+        # If the season and espisode are None but we identified it as a TV Show
+        # then this means the asset is a show cover
+        if artwork["season"] is None and artwork["episode"] is None and artwork["media"] == MediaType.TV_SHOW.value:
+            artwork["season"] = "Cover"
+            artwork["file_type"] = FileType.SHOW_COVER.value
+        # We tag the square_art assets sequentially in their "season" field so that
+        # the UploadProcessor can process the first one and decide what to do with the rest
+        if artwork["season"] == "SquareArt":
+            artwork["season"] = f"SquareArt_{tv_sq_art}"
+            tv_sq_art += 1
+        
+        final_file_list.append(artwork)
+
     total_files = len(os.listdir(extract_dir))
 
-    sorted_data = sorted(file_list, key=sort_key_func)
+    sorted_data = sorted(final_file_list, key=sort_key_func)
 
-    debug_me(f"Skipped {filtered_files} asset(s) out of {total_files} based on filters.", "extract_and_list_zip")
-    debug_me(f"Included {len(sorted_data)} assets:", "extract_and_list_zip")
-    if globals.debug:
-        pprint.pprint(sorted_data)
+    debug_me(f"❌ Encountered {errored_files} error(s) parsing filenames")
+    debug_me(f"⏩ Skipped {filtered_files} assets(s) out of {total_files} based on filters).")
+    debug_me(f"✅ Included {len(sorted_data)} assets:")
+    debug_me(sorted_data)
 
     return sorted_data, filtered_files, zip_title, zip_author, zip_source
 
 
-def resolve_tls_files(tls_cert_file: str, tls_key_file: str) -> dict:
-    """
-    Validate the TLS file pair and return the SSL kwargs for SocketIO.run.
-
-    Failing fast beats silently serving plain HTTP when the user asked for
-    HTTPS - a half-configured or missing file would otherwise only surface as
-    browser connection errors.
-
-    Raises:
-        ConfigurationError: If only one of the pair is set or a file is missing.
-    """
-    if not tls_cert_file or not tls_key_file:
-        raise ConfigurationError(
-            "HTTPS needs both tls_cert_file and tls_key_file (or TLS_CERT_FILE/TLS_KEY_FILE); "
-            f"got cert='{tls_cert_file}', key='{tls_key_file}'")
-    for label, path in (("certificate", tls_cert_file), ("private key", tls_key_file)):
-        if not os.path.isfile(path):
-            raise ConfigurationError(
-                f"TLS {label} file not found: {path}")
-    return {"certfile": tls_cert_file, "keyfile": tls_key_file}
-
-
+# Fork: TLS + IPv4/IPv6/dual-stack binding (FORK.md "HTTPS / binding"); computed here instead
+# of by the caller, so artwork_uploader.py only has to pass through config values.
 def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: str = "auto",
                      tls_cert_file: str = "", tls_key_file: str = ""):
     """
-    Start the Flask web server with support for IPv4, IPv6, or dual-stack.
+    Start the Flask web server with support for IPv4, IPv6, or dual-stack, and optional TLS.
 
     Args:
         web_app: Flask application instance
@@ -1628,6 +2183,11 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
         tls_cert_file: PEM certificate (chain) file; with tls_key_file serves HTTPS
         tls_key_file: PEM private key file for tls_cert_file
     """
+    debug_me(f"Initiating web server on port {web_port}")
+    flask.cli.show_server_banner = lambda *args: None
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+
     ssl_kwargs = {}
     scheme = "http"
     if tls_cert_file or tls_key_file:
@@ -1684,5 +2244,11 @@ def start_web_server(web_app, web_port: int, debug: bool = False, ip_binding: st
             f"Starting web server on IPv4 only at port {web_port}\n"
             f"  - IPv4: {scheme}://127.0.0.1:{web_port}")
 
-    globals.web_socket.run(web_app, host=binding_host,
-                           port=web_port, debug=debug, **ssl_kwargs)
+    globals.web_socket.run(
+        web_app,
+        host=binding_host,
+        port=web_port,
+        debug=debug,
+        allow_unsafe_werkzeug=True,
+        **ssl_kwargs
+    )

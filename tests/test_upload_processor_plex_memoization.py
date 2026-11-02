@@ -107,6 +107,7 @@ class CountingFakeShow:
 
     def __init__(self, title, seasons):
         self.title = title
+        self.year = 2008
         self._seasons = seasons
         self.librarySectionTitle = "TV Shows"
         self.labels = []

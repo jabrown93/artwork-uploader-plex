@@ -1,3 +1,4 @@
+
 // ==================================================
 // App initialisation and startup
 // ==================================================
@@ -8,55 +9,689 @@ let schedules = [];             // Scheduled imports
 let currentBulkImport = '';     // Current bulk import file
 let bulkTextAsLoaded = '';      // File contents when loaded, to determine changes
 let barTimer = null;            // Timer for progress bar
-let subBarTimer = null;         // Timer for sub-progress bar
+let docker = false;             // Docker environment detected or not
+let tvPicker, moviePicker, tpdbUserPicker, oidcScopesPicker, oidcAllowedGroupsPicker;
+let validationTimeout;
+let currentBrowseTargetInput = null;
+let currentDirectoryPath = "/";
+let initialConfig = '';
+let pathMappingsCounter = 0;
 
 const socket = io();
 const instanceId = getInstanceId();
 const bootstrapColors = ['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'light', 'dark'];
-const CHUNK_SIZE = 1024 * 64; // 64 KB per chunk for uploads
+const CHUNK_SIZE = 1024 * 512; // 512 KB per chunk for uploads
 
-const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]')
-const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl))
+function initInteractiveTooltip(tooltipTriggerEl) {
+    if (!tooltipTriggerEl || bootstrap.Tooltip.getInstance(tooltipTriggerEl)) return; // Already initialized
+
+    let hideTimeout = null;
+
+    const tooltip = new bootstrap.Tooltip(tooltipTriggerEl, {
+        html: true,
+        sanitize: false,
+        container: 'body',
+        delay: { show: 100, hide: 250 } // 250ms buffer to cross the gap
+    });
+
+    // When the mouse enters the (i) icon, clear any pending hide timers
+    tooltipTriggerEl.addEventListener('mouseenter', () => {
+        if (hideTimeout) clearTimeout(hideTimeout);
+    });
+
+    // Listen for when Bootstrap actually renders the tooltip box in the DOM
+    tooltipTriggerEl.addEventListener('inserted.bs.tooltip', () => {
+        const tooltipElement = document.getElementById(tooltipTriggerEl.getAttribute('aria-describedby'));
+        if (!tooltipElement) return;
+
+        // When mouse enters the tooltip box itself, stop Bootstrap from hiding it
+        tooltipElement.addEventListener('mouseenter', () => {
+            // Intercept Bootstrap's internal hide timer
+            const instance = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+            if (instance && instance._timeout) {
+                clearTimeout(instance._timeout);
+                instance._timeout = 0;
+            }
+        });
+
+        // Hide smoothly when mouse leaves the tooltip box
+        tooltipElement.addEventListener('mouseleave', () => {
+            const instance = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+            if (instance) instance.hide();
+        });
+    });
+};
+
+document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+    initInteractiveTooltip(el);
+});
+
+function configTabProperties() {
+    const wrappers = document.querySelectorAll('.nav-tabs-wrapper');
+
+    wrappers.forEach(wrapper => {
+        const container = wrapper.querySelector('.nav-tabs-scrollable');
+        if (!container) return;
+
+        const updateScrollFades = () => {
+            if (container.clientWidth === 0) return;
+
+            const scrollLeft = Math.ceil(container.scrollLeft);
+            const maxScrollLeft = Math.floor(container.scrollWidth - container.clientWidth);
+
+            wrapper.classList.toggle('can-scroll-left', scrollLeft > 2);
+            wrapper.classList.toggle('no-scroll-right', maxScrollLeft - scrollLeft <= 2);
+        };
+
+        // Attach scroll listener to this container
+        container.addEventListener('scroll', updateScrollFades, { passive: true });
+
+        // Initial fade calculation for this container
+        setTimeout(updateScrollFades, 200);
+    });
+
+    // Attach smooth centering to all main tabs and sub-tabs globally
+    const allTabLinks = document.querySelectorAll('a[data-bs-toggle="tab"], button[data-bs-toggle="pill"]');
+    allTabLinks.forEach(tab => {
+        tab.addEventListener('shown.bs.tab', (event) => {
+            event.target.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+                inline: 'center'
+            });
+
+            // Trigger fade recalculation for the wrapper containing this specific tab
+            const parentWrapper = event.target.closest('.nav-tabs-wrapper');
+            if (parentWrapper) {
+                const parentContainer = parentWrapper.querySelector('.nav-tabs-scrollable');
+                if (parentContainer) {
+                    setTimeout(() => {
+                        const scrollLeft = Math.ceil(parentContainer.scrollLeft);
+                        const maxScrollLeft = Math.floor(parentContainer.scrollWidth - parentContainer.clientWidth);
+                        parentWrapper.classList.toggle('can-scroll-left', scrollLeft > 2);
+                        parentWrapper.classList.toggle('no-scroll-right', maxScrollLeft - scrollLeft <= 2);
+                    }, 150);
+                }
+            }
+        });
+    });
+}
 
 // UI References
 const scrapeUrlInput = document.getElementById("scrape_url");
 const dropArea = document.getElementById("drop-area");
 const scheduleIcon = document.getElementById("schedule_icon");
 const setTimeBtn = document.getElementById("set_time");
-const cancelTimeBtn = document.getElementById("cancel_time");
-const setContainer = document.getElementById("set_container");
-const cancelContainer = document.getElementById("cancel_container");
 const scheduleTimeInput = document.getElementById("schedule_time");
+const scheduleTypeSelect = document.getElementById("schedule_type");
+const scheduleTimeGroup = document.getElementById("schedule_time_group");
+const scheduleIntervalGroup = document.getElementById("schedule_interval_group");
+const scheduleIntervalValueInput = document.getElementById("schedule_interval_value");
+const scheduleIntervalUnitSelect = document.getElementById("schedule_interval_unit");
+const scheduleListEl = document.getElementById("schedule_list");
 const timeSelectBox = document.getElementById("time_select_box");
+const runNowLabel = document.getElementById("run_now_label");
+const runNowCheckbox = document.getElementById("run_now_checkbox");
 const bulkFileSwitcher = document.getElementById("switch_bulk_file");
 
 // Event listeners
 document.addEventListener("DOMContentLoaded", function () {
     updateLog("📍 New session started with ID: " + instanceId)
-    loadConfig()
-    toggleThePosterDBElements();
-    detectEnvironment();
+    console.log("📍 New session started with ID: " + instanceId)
 
-    // Specific event listeners
-    document.getElementById("switch_bulk_file").addEventListener("change", bulkFileSwitched);
-    document.getElementById("bulk_import_text").addEventListener("input", updateBulkSaveButtonState);
-    document.getElementById("scraper-filters-global").addEventListener("change", inheritGlobalFiltersForScraper);
-    document.getElementById("upload-filters-global").addEventListener("change", inheritGlobalFiltersForUploads);
-    document.getElementById("btnUpdate").addEventListener("click", updateApp);
-    document.getElementById("test_notif_btn").addEventListener("click", testNotifications);
-    document.getElementById("test_plex_btn").addEventListener("click", testPlexConnect);
-    document.getElementById("debug-mode").addEventListener("change", function() {
-        socket.emit("debug_mode", { instance_id: instanceId, action: "toggle" });
+    const stickyContainers = document.querySelectorAll(".sticky-bottom");
+
+    stickyContainers.forEach(container => {
+        // Find collapsible FABs inside this specific container
+        const fabBtns = container.querySelectorAll(".fab-collapse");
+        if (!fabBtns.length) return;
+
+        // Create or find a sentinel right above this container
+        let sentinel = container.previousElementSibling;
+        if (!sentinel || !sentinel.classList.contains("fab-sentinel")) {
+            sentinel = document.createElement("div");
+            sentinel.className = "fab-sentinel";
+            sentinel.style.height = "1px";
+            sentinel.style.marginTop = "1rem";
+            container.parentNode.insertBefore(sentinel, container);
+        }
+
+        // Set up observer for this container's sentinel
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                fabBtns.forEach(btn => {
+                    if (entry.isIntersecting) {
+                        btn.classList.remove("collapsed"); // Expand at bottom
+                        btn.classList.add("gap-2");
+                    } else {
+                        btn.classList.add("collapsed");    // Collapse over content
+                        btn.classList.remove("gap-2");
+                    }
+                });
+            });
+        }, {
+            root: null,
+            rootMargin: "0px 0px 20px 0px",
+            threshold: 0
+        });
+
+        observer.observe(sentinel);
     });
+
+    // Initialize the folder browser modal for Kometa asset and temp directory selection (non-docker)
+    const folderModalElement = document.getElementById("folderBrowserModal");
+    if (!folderModalElement) return;
+
+    // Prevent 'aria-hidden on focused element' warning on close (Cancel, X, or Confirm)
+    folderModalElement.addEventListener("hide.bs.modal", () => {
+        // 1. Clear focus from whatever element currently has focus inside the modal
+        if (folderModalElement.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
+
+        // 2. Safely return focus to the input or button that opened the modal
+        if (currentBrowseTargetInput) {
+            currentBrowseTargetInput.focus();
+        }
+        // Clear folder name field
+        document.getElementById("new_folder_name").value = '';
+        toggleConfigButtons();
+    });
+        
+    const folderModal = new bootstrap.Modal(folderModalElement, {
+        focus: false
+    });
+
+    // Attach click event to all browse buttons
+    document.querySelectorAll(".browse-folder-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const targetId = btn.getAttribute("data-target");
+            currentBrowseTargetInput = document.getElementById(targetId);
+
+            // Start browsing at current field value if present, or root
+            const initialPath = currentBrowseTargetInput.value.trim() || "";
+            loadDirectory(initialPath);
+            folderModal.show();
+        });
+    });
+
+    // Up directory navigation button
+    document.getElementById("folder_nav_up").addEventListener("click", () => {
+        if (!currentDirectoryPath) return;
+
+        // Standardize separators to forward slashes for uniform processing
+        let normalized = currentDirectoryPath.replace(/\\/g, "/");
+
+        // Remove trailing slash unless it's a drive root (e.g. "C:/")
+        if (normalized.length > 3 && normalized.endsWith("/")) {
+            normalized = normalized.slice(0, -1);
+        }
+
+        const parts = normalized.split("/").filter(Boolean);
+
+        // Windows Drive Root (e.g., "C:" or "C:/") -> Go up to system root drives
+        if (parts.length === 1 && parts[0].includes(":")) {
+            loadDirectory("");
+            return;
+        }
+
+        // Standard directory pop
+        parts.pop();
+
+        if (parts.length === 0) {
+            // POSIX Root
+            loadDirectory("/");
+        } else {
+            // Preserve Windows drive prefix vs POSIX leading slash
+            let parentPath = parts.join("/");
+            if (normalized.startsWith("/") && !parentPath.startsWith("/")) {
+                parentPath = "/" + parentPath;
+            }
+            // Retain drive trailing slash if popped down to drive root (e.g., "C:")
+            if (parentPath.endsWith(":")) {
+                parentPath += "/";
+            }
+            loadDirectory(parentPath);
+        }
+    });
+
+    // Confirm selection button
+    document.getElementById("select_folder_confirm").addEventListener("click", () => {
+        if (currentBrowseTargetInput) {
+            currentBrowseTargetInput.value = currentDirectoryPath;
+        }
+        document.getElementById("select_folder_confirm").blur(); // Remove focus from the confirm button
+        folderModal.hide();
+    });
+
+    // Enable or disabled add folder button
+    document.getElementById("new_folder_name").addEventListener("input", () => {
+
+        const newFolderField = document.getElementById("new_folder_name");
+        const newFolderName = newFolderField.value;
+        
+        enableNewFolderButton(newFolderName.trim() !== "");
+    });
+
+    // Add folder button listener
+    document.getElementById("add_folder").addEventListener("click", () => {
+        const newFolderField = document.getElementById("new_folder_name");
+        const newFolderName = newFolderField.value;
+        const currentPath = document.getElementById("folder_current_path").textContent;
+        const newFolderButton = document.getElementById("add_folder");
+        
+        socket.once("folder_created", (data) => {
+            if (validResponse(data) && data.success) {
+                newFolderField.value = '';
+                newFolderButton.disabled = true
+                newFolderButton.classList.add("btn-secondary");
+                newFolderButton.classList.remove("btn-success");
+                loadDirectory(data.path)
+            }
+        })
+        
+        socket.emit("create_directory", {
+            instance_id: instanceId,
+            parent_path: currentPath,
+            folder_name: newFolderName
+        });
+    });
+
+
+    // Initialize the 'eye' icons to toggle between masked and non-masked view
+    // for Plex and webhook token input fields
+    document.querySelectorAll(".toggle-password-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const targetId = btn.getAttribute("data-target");
+            const targetInput = document.getElementById(targetId);
+            const icon = btn.querySelector("i");
+
+            if (!targetInput || !icon) return;
+
+            if (targetInput.type === "password") {
+                targetInput.type = "text";
+                icon.className = "bi bi-eye-slash";
+                btn.setAttribute("title", "Hide token");
+            } else {
+                targetInput.type = "password";
+                icon.className = "bi bi-eye";
+                btn.setAttribute("title", "Show token");
+            }
+        });
+    });
+
+    // Initialize TomSelect Pickers
+    oidcScopesPicker = new TomSelect("#oidc_scopes", {
+        inputTypes: [],
+        controlInput: null,
+        options: [
+            { value: "openid", text: "openid"},
+            { value: "profile", text: "profile"},
+            { value: "email", text: "email"},
+            { value: "groups", text: "groups"}
+        ],
+        plugins: {
+            'clear_button': {
+                html: (data) => `<div class="${data.className}" title="${data.title}"><i class="bi bi-x-circle"></i></div>`
+            },
+            'remove_button': {}
+        },
+        onChange: () => updatePickerLabel(oidcScopesPicker)
+    })
+    
+    oidcAllowedGroupsPicker = new TomSelect("#oidc_allowed_groups", {
+        create: true,
+        createOnBlur: true,
+        delimiter: ',',
+        persist: true,
+        plugins: {
+            'clear_button': {
+                html: (data) => `<div class="${data.className}" title="${data.title}"><i class="bi bi-x-circle"></i></div>`
+            },
+            'remove_button': {}
+        },
+        onInitialize: function() {
+            // Apply autocomplete/password manager ignore attributes directly to the input node
+            if (this.control_input) {
+                this.control_input.setAttribute('spellcheck', 'false');
+                this.control_input.setAttribute('autocomplete', 'off');
+                this.control_input.setAttribute('data-1p-ignore', '');
+                this.control_input.setAttribute('data-lpignore', 'true');
+            }
+        },
+        onChange: () => updatePickerLabel(oidcAllowedGroupsPicker),
+    });
+    
+    tpdbUserPicker = new TomSelect('#webhook_tpdb_users', {
+        create: true,
+        createOnBlur: true,
+        delimiter: ',',
+        persist: true,
+        plugins: {
+            'clear_button': {
+                html: (data) => `<div class="${data.className}" title="${data.title}"><i class="bi bi-x-circle"></i></div>`
+            },
+            'remove_button': {}
+        },
+        onChange: () => updatePickerLabel(tpdbUserPicker)
+    });
+    
+    tvPicker = new TomSelect('#tv_library', {
+        inputTypes: [],
+        controlInput: '<input readonly>',
+        plugins: {
+            'clear_button': {
+                html: (data) => `<div class="${data.className}" title="${data.title}"><i class="bi bi-x-circle"></i></div>`
+            },
+            'remove_button': {}
+        },
+        onChange: () => updatePickerLabel(tvPicker)
+    });
+    tvPicker.on('clear', () => {
+        tvPicker.refreshOptions(false); // Refreshes the dropdown list without closing it
+        updatePickerLabel(tvPicker);     // Updates your "(X available)" placeholder label
+    });
+    
+    moviePicker = new TomSelect('#movie_library', {
+        inputTypes: [],
+        controlInput: '<input readonly>',
+        plugins: {
+            'clear_button': {
+                html: (data) => `<div class="${data.className}" title="${data.title}"><i class="bi bi-x-circle"></i></div>`
+            },
+            'remove_button': {}
+        },
+        onChange: () => updatePickerLabel(moviePicker)
+    });
+    moviePicker.on('clear', () => {
+        moviePicker.refreshOptions(false); // Refreshes the dropdown list without closing it
+        updatePickerLabel(moviePicker);     // Updates your "(X available)" placeholder label
+    });
+
+    configLogModalProperties();
+    configTabProperties();
+    loadConfig();
+    toggleThePosterDBElements();
+    toggleWebhookSettings();
+    detectEnvironment();
+    getScrapeState();
 });
 
+// Specific event listeners
+document.getElementById("switch_bulk_file").addEventListener("change", bulkFileSwitched);
+document.getElementById("switch_bulk_file").addEventListener("mousedown", loadBulkFileList);
+document.getElementById("bulk_import_text").addEventListener("input", updateBulkSaveButtonState);
+document.getElementById("scraper-filters-global").addEventListener("change", inheritGlobalFiltersForScraper);
+document.getElementById("upload-filters-global").addEventListener("change", inheritGlobalFiltersForUploads);
+document.getElementById("btnUpdate").addEventListener("click", updateApp);
+document.getElementById("test_notif_btn").addEventListener("click", testNotifications);
+document.getElementById("debug-mode").addEventListener("change", function() {
+    socket.emit("debug_mode", { instance_id: instanceId, action: "toggle" });
+});
+document.getElementById("plex_token").addEventListener("change", updateLibraryPickers);
+document.getElementById("plex_base_url").addEventListener("change", updateLibraryPickers);
+
+
+// Automatically clear sticky hover/focus states on mobile touch devices
+document.addEventListener('touchend', (e) => {
+    // Don't blur if the touch target or active element is part of TomSelect
+    if (e.target.closest('.ts-wrapper, .ts-dropdown')) {
+        return;
+    }
+
+    const activeEl = document.activeElement;
+
+    // Don't blur active text inputs, select dropdowns, or textareas while typing/interacting
+    if (activeEl && activeEl.matches('input, textarea, select')) {
+        return;
+    }
+
+    // For buttons, links, and icons: blur on touch release so :active state resets smoothly
+    if (activeEl && activeEl !== document.body) {
+        activeEl.blur();
+    }
+}, { passive: true });
 // ==================================================
 // General helper functions
 // ==================================================
 
-function detectEnvironment() {
-    socket.emit("debug_mode", { instance_id: instanceId, action: "get" });
+
+function enableNewFolderButton(enabled) {
+    const newFolderButton = document.getElementById("add_folder");
+
+    newFolderButton.classList.toggle("btn-success", enabled);
+    newFolderButton.classList.toggle("btn-secondary", !enabled);
+    newFolderButton.disabled = !enabled;
 }
+
+
+
+// Function to fetch and render directory contents from backend
+async function loadDirectory(path = "/") {
+    const folderList = document.getElementById("folder_list");
+    const currentPathSpan = document.getElementById("folder_current_path");
+    const newFolderField = document.getElementById("new_folder_name");
+
+    if (path === "") {
+        enableNewFolderButton(false);
+    }
+    disableElement(["select_folder_confirm"], path === ""); // Disable confirm if at list of drives in Windows
+    newFolderField.disabled = (path === ""); // Disable if at list of drives in Windows
+    newFolderField.value = (path === "") ? "" : newFolderField.value; // Clear if at list of drives in Windows
+
+    folderList.innerHTML = `<div class="p-3 text-center text-muted"><span class="spinner-border spinner-border-sm"></span> Loading...</div>`;
+
+    try {
+        // Call your backend directory browsing endpoint
+        const response = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
+        const data = await response.json();
+
+        currentDirectoryPath = data.current_path;
+        currentPathSpan.textContent = currentDirectoryPath;
+        folderList.innerHTML = "";
+
+        if (data.folders.length === 0) {
+            folderList.innerHTML = `<div class="p-3 text-center text-muted small">No subdirectories found</div>`;
+            return;
+        }
+
+        data.folders.forEach(folder => {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "list-group-item list-group-item-action d-flex align-items-center gap-2 py-2 input-monospace small";
+            item.innerHTML = `<i class="bi bi-folder text-primary"></i> <span></span>`;
+            item.querySelector("span").textContent = folder.name;
+            
+            item.addEventListener("click", () => {
+                loadDirectory(folder.path);
+            });
+            folderList.appendChild(item);
+        });
+    } catch (err) {
+        folderList.innerHTML = `<div class="p-3 text-center text-danger small">Failed to load directory</div>`;
+    }
+}
+
+// Functions and listeners to query the scrape state from the backend and update the UI to reflect
+// any ongoing process, including disabling buttons, adding scrapers, updating progress bars...
+function getScrapeState() {
+    socket.on("get_scrape_state", (data) => {
+        if (data.type == "stopped") return;
+
+        scrapeState(data.running, data.type)
+        if (data.type == "bulk") {
+            progressBar(data.bulk_bar.percent, data.bulk_bar.message, "bulk", data.bulk_bar.speed);
+        }
+        progressBar(data.main_bar.percent, data.main_bar.message, "main", data.main_bar.speed);
+    });
+    socket.emit("get_scrape_state", { instance_id: instanceId })
+}
+function scrapeState(running, type) {
+
+    let cancelBtnId = ""
+    let tabId = ""
+    let btnId = ""
+    if (type == "bulk") {
+        cancelBtnId = "bulk-import-cancel";
+        tabId = "bulk-import-tab";
+        btnId = "bulk_button";
+    } else if (type == "scrape") {
+        cancelBtnId = "scrape-cancel";
+        tabId = "scraper-tab";
+        btnId = "scrape_button";
+    } else if (type == "upload") {
+        cancelBtnId = "upload-cancel";
+        tabId = "uploader-tab";
+    }
+    const cancelBtnElement = document.getElementById(cancelBtnId);
+    const tabElement = document.getElementById(tabId).querySelector("i");
+    const btnElement = document.getElementById(btnId);
+
+    // Shows or hides the cancel button on the appropriate tab
+    cancelBtnElement.classList.toggle("d-none", !running);
+
+    // Shows or hides the spinner on the appropriate tab
+    // and disables or enables the file drop area
+    if (running) {
+        disableElement(["scrape_url", "scrape_button", "bulk_button"], true);
+        dropArea.classList.add("disabled");
+
+        if (!tabElement.dataset.originalIcon) {
+            tabElement.dataset.originalIcon = tabElement.className;
+        }
+        tabElement.className = "spinner-border spinner-border-sm";
+        if (btnElement) {
+            if (!btnElement.querySelector("i").dataset.originalIcon) {
+                btnElement.querySelector("i").dataset.originalIcon = btnElement.querySelector("i").className;
+            }
+            btnElement.querySelector("i").className = "spinner-border spinner-border-sm";
+        }
+    } else {
+        disableElement(["scrape_url", "scrape_button", "bulk_button"], false);
+        dropArea.classList.remove("disabled");
+
+        tabElement.className = tabElement.dataset.originalIcon || "bi bi-gear";
+        if (btnElement) {
+            btnElement.querySelector("i").className = btnElement.querySelector("i").dataset.originalIcon || "bi bi-gear";
+        }
+
+        // Every run kind lands in the history now, not just bulk imports
+        loadRunHistory();
+    }
+}
+socket.on("scrape_state", (data) => {
+    scrapeState(data.running, data.type)
+});
+
+// A webhook import finishes without a scrape_state change, so it says so itself
+socket.on("run_history_updated", (data) => {
+    if (validResponse(data, true)) {
+        loadRunHistory();
+    }
+});
+
+function updateLibraryPickers() {
+    const baseUrl = document.getElementById("plex_base_url").value;
+    const token = document.getElementById("plex_token").value;
+
+    tvPicker.disable();
+    setPickerPlaceholder(tvPicker, "No libraries available");
+    moviePicker.disable();
+    setPickerPlaceholder(moviePicker, "No libraries available");
+        
+    socket.on("get_plex_libraries", (data) => {
+        if (validResponse(data)) {
+            if (data.tv_libraries && data.tv_libraries.length > 0) {
+                data.tv_libraries.forEach(lib => tvPicker.addOption({ value: lib, text: lib }));
+                tvPicker.enable();
+                tvPicker.wrapper.classList.remove("is-invalid");
+            } else {
+                tvPicker.clear();
+                tvPicker.clearOptions();
+                tvPicker.disable();
+                tvPicker.wrapper.classList.add("is-invalid");
+            }
+            data.message ? updatePickerLabel(tvPicker, data.message) : updatePickerLabel(tvPicker);
+            tvPicker.wrapper.classList.remove("loading");
+            
+            if (data.movie_libraries && data.movie_libraries.length > 0) {
+                data.movie_libraries.forEach(lib => moviePicker.addOption({ value: lib, text: lib }));
+                moviePicker.enable();
+                moviePicker.wrapper.classList.remove("is-invalid");
+            } else {
+                moviePicker.clear();
+                moviePicker.clearOptions();
+                moviePicker.disable();
+                moviePicker.wrapper.classList.add("is-invalid");
+            }
+            data.message ? updatePickerLabel(moviePicker, data.message) : updatePickerLabel(moviePicker);
+            moviePicker.wrapper.classList.remove("loading");
+        }
+    });
+
+    if (baseUrl && token) {
+        tvPicker.disable();
+        moviePicker.disable();
+        tvPicker.wrapper.classList.remove("is-invalid");
+        moviePicker.wrapper.classList.remove("is-invalid");
+        setPickerPlaceholder(tvPicker, "Loading libraries...");
+        setPickerPlaceholder(moviePicker, "Loading libraries...");
+        tvPicker.wrapper.classList.add("loading");
+        moviePicker.wrapper.classList.add("loading");        
+        socket.emit("get_plex_libraries", { instance_id: instanceId, url: baseUrl, token: token });
+    }
+}
+
+function detectEnvironment() {
+    socket.emit("detect_docker", { instance_id: instanceId });
+    socket.emit("debug_mode", { instance_id: instanceId, action: "get" });
+    socket.emit("check_for_update", { instance_id: instanceId });
+    socket.emit("get_auth_status", { instance_id: instanceId });
+}
+
+socket.on("get_auth_status", function(data) {
+    if (validResponse(data)) {
+        warning = document.getElementById("auth-info");
+        if (data.auth_enabled) {
+            warning.innerHTML = `<i class="bi bi-info-circle"></i>&ensp;Signed is as <code></code>${data.auth_type === "oidc" ? ' via OIDC' : ' via basic authentication'}`;
+            warning.querySelector("code").textContent = data.username;
+            warning.classList.toggle("d-none", !data.auth_enabled)
+        } else {
+            warning.classList.toggle("d-none", !data.auth_enabled);
+        }
+    }
+});
+
+// Backend version this page was loaded against, learned from the first version_check
+let knownBackendVersion = null;
+
+socket.on("version_check", function(data) {
+    if(validResponse(data, true)){
+        versionEl = document.getElementById("app-version");
+        if (versionEl) versionEl.textContent = data.current_version;
+        if (knownBackendVersion === null) {
+            knownBackendVersion = data.current_version;
+        } else if (data.current_version !== knownBackendVersion) {
+            // The backend was updated while this page was open, so this JS is stale
+            reload("Backend updated, refreshing frontend too...", "warning", 3000)
+            return;
+        }
+        if (data.new_version) {
+            // Show update notifier
+            document.getElementById("latest_version").innerText = data.new_version;
+            document.getElementById("version_notifier").classList.remove("d-none");
+        }
+        // Display current version in the About tab
+        document.getElementById("app_version").innerText = data.current_version;
+        // If running in Docker, show message about self-update being disabled and hide update button
+        if (data.docker) {
+            document.getElementById("docker_update_message").innerText = "Self-update is disabled in Docker. Please pull the latest image manually.";
+        } else {
+            document.getElementById("docker_update_message").innerText = "";
+            document.getElementById("btnUpdate").classList.remove("d-none");
+        }
+    }
+});
 
 socket.on("debug_mode", function(data) {
     if (validResponse(data)) {
@@ -65,28 +700,69 @@ socket.on("debug_mode", function(data) {
     }
 });
 
-
-// Test connection to Plex server
-function testPlexConnect() {
-    const baseUrl = document.getElementById("plex_base_url").value
-    const token = document.getElementById("plex_token").value
-    const tvLibraries = document.getElementById("tv_library").value
-        .split(",")
-        .map(item => item.trim())
-        .filter(item => item !== ""); // Remove empty values
-    const movieLibraries = document.getElementById("movie_library").value
-        .split(",")
-        .map(item => item.trim())
-        .filter(item => item !== ""); // Remove empty values
-    socket.emit("test_plex_connect", { instance_id: instanceId, url: baseUrl, token: token, tv_libs: tvLibraries, movie_libs: movieLibraries });
+function toggleDockerWarning() {
+    socket.emit("detect_docker", { instance_id: instanceId });
 }
+socket.on("docker_detected", (data) => {
+    const dockerWarning = document.getElementById("docker_warning");
+    const kometaBase = document.getElementById("kometa_base");
+    const tempDir = document.getElementById("temp_dir");
+    const saveToKometaCheckbox = document.getElementById("save_to_kometa");
+    const optionTemp = document.getElementById("option-temp");
+    const uploadOptionTemp = document.getElementById("upload-option-temp");
+    
+    if (validResponse(data)) {
+        if (data.docker == "true") {
+            docker = true;
+            // If no Kometa asset directory has been bind-mounted to the container /asset path, disable the
+            // ability to turn on saving to Kometa asset directory
+            if (data.kometa_base == "(not defined)") {
+                saveToKometaCheckbox.disabled = true;
+                saveToKometaCheckbox.checked = false;
+                toggleKometaSettings();
+                dockerWarning.innerHTML = '<i class="bi bi-exclamation-triangle"></i>&ensp;Kometa base path not defined in <span class="text-nowrap"><code>docker-compose.yml</code></span>. Saving assets to Kometa asset directory is not available.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>';
+                dockerWarning.classList.add("alert-danger");
+                dockerWarning.classList.remove("d-none");
+            }
+            if (saveToKometaCheckbox.checked && !saveToKometaCheckbox.disabled) {
+                dockerWarning.classList.remove("d-none");
+            }
+            
+            // Disables path input fields, sets values to those detected by backend
+            // and removes the in-line browse button
+            const pathInputIds = ["kometa_base", "temp_dir"];
+            pathInputIds.forEach(id => {
+                const input = document.getElementById(id);
+                if (input) {
+                    input.disabled = true;
+                    input.value = id === "kometa_base" ? data.kometa_base : data.temp_dir;
+                    input.classList.remove("has-inline-btn", "pe-5");
+                    const browseBtn = input.parentElement.querySelector(".browse-folder-btn");
+                    if (browseBtn) {
+                        browseBtn.classList.add("d-none");
+                    }
+                }
+            });
+            if (data.temp_dir == "(not defined)") {
+                optionTemp.checked = false;
+                optionTemp.parentElement.classList.add("d-none");
+                uploadOptionTemp.checked = false;
+                uploadOptionTemp.parentElement.classList.add("d-none");
+            }
+        } else {
+            docker = false;
+            dockerWarning.classList.add("d-none");
+        }
+    }
+});
 
 // Send test notification
 function testNotifications() {
-    const urls = document.getElementById("apprise_urls").value
-        .split(",")
-        .map(item => item.trim())
-        .filter(item => item !== ""); // Remove empty values
+
+    const urls = Array.from(document.querySelectorAll(".apprise-url-input"))
+        .map(input => input.value.trim())
+        .filter(url => url !== "");
+
     if (urls.length == 0) {
         updateStatus("Set at least one notification URL", "warning", false, false, "exclamation-triangle")
     } else {
@@ -95,15 +771,15 @@ function testNotifications() {
 }
 
 // Check incoming socket message is for this instance
-function validResponse(data, broadcast = false) {
-    return data.instance_id === instanceId || (broadcast && data.broadcast);
+function validResponse(data, allow_broadcast = false) {
+    return data.instance_id === instanceId || (allow_broadcast && data.broadcast);
 }
 
 
 // Generate a UUID to create an instance ID in local storage
 function getInstanceId() {
     // Fallback for browsers that don't support crypto.randomUUID()
-    const fallbackUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const fallbackUUID = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
         const r = (Math.random() * 16) | 0, v = c === 'x' ? r : (r & 0x3) | 0x8;
         return v.toString(16);
     });
@@ -117,12 +793,53 @@ function getInstanceId() {
 }
 
 
+
 // ==================================================
 // UI-specific helper functions
 // ==================================================
 
+function setPickerPlaceholder(instance, text) {
+    if (!instance) return;
+    instance.settings.placeholder = text;
+    if (instance.control_input) {
+        instance.control_input.placeholder = text;
+    }
+    instance.input.setAttribute('placeholder', text);
+}
+
+function updatePickerLabel(picker, message = '') {
+    if (!picker) return;
+
+    const pickerID = picker.input.id;
+    const totalOptions = Object.keys(picker.options).length;
+    const selectedCount = picker.getValue().length;
+    
+    if (pickerID.includes("oidc") || pickerID.includes("tpdb")) {
+        if (selectedCount == 0) {
+            if (pickerID === "oidc_scopes") {
+                setPickerPlaceholder(picker, "Select OIDC scopes");
+            } else if (pickerID === "oidc_allowed_groups") {
+                setPickerPlaceholder(picker, "plex_admins");
+            } else {
+                setPickerPlaceholder(picker, "Add TPDb users");
+            }
+        } else {
+            setPickerPlaceholder(picker, "");
+        }
+    } else if (totalOptions == 0) {
+        message ? setPickerPlaceholder(picker, message) : setPickerPlaceholder(picker, "No libraries available");
+    } else if (selectedCount === 0) {
+        setPickerPlaceholder(picker, `(${totalOptions} available)`);
+    } else if (selectedCount < totalOptions) {
+        const remaining = totalOptions - selectedCount;
+        setPickerPlaceholder(picker, `(${remaining} left)`);
+    } else {
+        setPickerPlaceholder(picker, "");
+    }
+}
+
 // Disable frontend elements from backend
-function element_disable(element_ids, mode = true) {
+function disableElement(element_ids, mode = true) {
     if (!element_ids) return;  // Exit if no element_ids provided
 
     // Ensure it's always treated as an array
@@ -134,27 +851,72 @@ function element_disable(element_ids, mode = true) {
         if (element) {
             element.disabled = mode;
         } else {
-            console.warn('Element with ID "${id}" not found.');
+            console.warn(`Element with ID "${id}" not found.`);
         }
     });
 }
-
 socket.on("element_disable", (data) => {
     if (validResponse(data)) {
-        element_disable(data.element, data.mode);
+        disableElement(data.element, data.mode);
     }
 });
 
+// Adds a spinner to a button
+function addSpinner(elementId, mode = true) {
+    if (!elementId) return;  // Exit if no element_ids provided
+
+    const element = document.getElementById(elementId);
+
+    if (!element) {
+        console.warn(`Element ID with ${id} not found.`);
+        return;
+    }
+    const icon = element.querySelector("i");
+
+    if (mode === true) {
+        if (icon) {
+            if (!icon.dataset.originalClass) {
+                icon.dataset.originalClass = icon.className;
+            }
+            icon.className = "spinner-border spinner-border-sm";
+            icon.setAttribute("role", "status");
+            icon.setAttribute("aria-hidden", "true");
+        }
+        element.disabled = true;
+    } else {
+        if (icon && icon.dataset.originalClass) {
+            icon.className = icon.dataset.originalClass;
+            icon.removeAttribute("role");
+            icon.removeAttribute("aria-hidden");
+        }
+        element.disabled = false;
+    }
+}
+socket.on("add_spinner", (data) => {
+    if (validResponse(data)) {
+        addSpinner(data.element, data.mode);
+    }
+});
 
 // Update the status bar
-function updateStatus(message, color = "info", sticky = false, spinner = false, icon = '') {
-
+function updateStatus(message, color = "info", sticky = false, spinner = false, icon = false, width=null) {
     const statusEl = document.getElementById("status");
+    const statusContainer = document.getElementById("status_container");
     const spinnerEl = document.getElementById("status_spinner"); // Get the spinner element
     const messageEl = document.getElementById("status_message");
     const iconEl = document.getElementById("status_icon");
 
     if (!statusEl) return;
+
+    if (statusContainer) {
+        if (width === "modal") {
+            statusContainer.style.maxWidth = "500px";
+        } else if (typeof width === "string" && width.endsWith("px")) {
+            statusContainer.style.maxWidth = width;
+        } else {
+            statusContainer.style.maxWidth = "";
+        }
+    }
 
     // Check if message has timestamp with milliseconds [00:00:00.000] to [23:59:59.999]
     const hasTimestamp = /^\[(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}\]/.test(message);
@@ -163,11 +925,12 @@ function updateStatus(message, color = "info", sticky = false, spinner = false, 
     if (hasTimestamp) {
         message = message.replace(/^\[(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}\]\s*/, '');
     }
-
+    
     // Update the message and color
     messageEl.innerHTML = message;
 
     // If the passed color is not valid, default to 'info'
+    const bootstrapColors = ['primary', 'secondary', 'success', 'danger', 'warning', 'info', 'light', 'dark'];
     if (!bootstrapColors.includes(color)) {
         color = 'info';
     }
@@ -218,21 +981,21 @@ function updateStatus(message, color = "info", sticky = false, spinner = false, 
     // Set a new timeout to hide the status element after 3 seconds
     if (!sticky) {
         statusTimeout = setTimeout(() => {
-            statusEl.classList.remove('show'); // Fade out the status after 3 seconds
+            statusEl.classList.remove('show'); // Fade out the status after 5 seconds
+            setTimeout(() => {
+                if (statusContainer) statusContainer.style.maxWidth = "";
+            }, 150); // Reset width
         }, 5000);
     }
-
 }
-
 socket.on("status_update", (data) => {
     if (validResponse(data, true)) {
-        updateStatus(data.message, data.color, data.sticky, data.spinner, data.icon);
+        updateStatus(data.message, data.color, data.sticky, data.spinner, data.icon, data.width);
     }
 });
 
-
 // Update the log page
-function updateLog(message, color = null, artwork_title = null) {
+function updateLog(message, color = null) {
     let statusElement = document.getElementById("scraping_log");
 
     // Match [00:00:00.000] to [23:59:59] at the start
@@ -260,74 +1023,61 @@ function updateLog(message, color = null, artwork_title = null) {
         statusElement.removeChild(statusElement.lastElementChild);
     }
 }
-
 socket.on("log_update", (data) => {
     if (validResponse(data, true)) {
-        updateLog(data.message, data.artwork_title);
+        updateLog(data.message);
     }
 });
 
 
-// Update the progress bar, showing and hiding as required
-function progress_bar(percent, message = "") {
+// Update the progress bars, showing and hiding as required
+function progressBar(percent, message = "", barType = "main", speed = "smooth") {
 
-    const bar_container = document.getElementById("progress_bar_container")
-    const bar = document.getElementById("progress_bar")
+    const suffix = barType === "bulk" ? "_bulk" : "_main";
+    const container = document.getElementById("progress_bar_container" + suffix);
+    const bar = document.getElementById("progress_bar" + suffix);
+    const barTitle = document.getElementById("progress_bar_title" + suffix);
+    const barPercent = document.getElementById("progress_bar_percent" + suffix);
 
-    percent = percent > 100 ? 100 : percent;
+    if (!container || !bar) return;
 
-    if (percent <= 100) {
-        if (barTimer) {
-            clearTimeout(barTimer); // Cancel the previous timeout
-        }
-        bar_container.classList.add("show")
-        bar.style.width = percent + "%"
-        bar_container.ariaValueNow = message
-        bar.innerHTML = message || ""
+    percent = Math.min(Math.max(percent, 0), 100);
+
+    container.classList.add("show");
+
+    if (barTimer) clearTimeout(barTimer);
+
+    if (barTitle) barTitle.innerText = message;
+    if (barPercent) barPercent.innerText = Math.round(percent) + "%";
+
+    const currentPercent = parseFloat(bar.style.width) || 0;
+
+    if (speed == "fast") transition = "none";
+    else transition = "width 0.5s ease";
+
+    if (percent < currentPercent) {
+        bar.style.transition = "none";
+        void bar.offsetWidth;
+        bar.style.width = percent + "%";
+        void bar.offsetHeight;
+    } else {
+        bar.style.transition = transition;
+        bar.style.width = percent + "%";
     }
 
     if (percent === 100) {
         barTimer = setTimeout(() => {
-            bar_container.classList.remove('show'); // Fade out the progress bar after a second
+            // Hide both containers
+            document.getElementById("progress_bar_container_main").classList.remove("show");
+            document.getElementById("progress_bar_container_bulk").classList.remove("show");
+            document.getElementById("progress_bar_main").style.width = "0%";
+            document.getElementById("progress_bar_bulk").style.width = "0%";
         }, 2000);
     }
 }
-
 socket.on("progress_bar", (data) => {
-    if (validResponse(data)) {
-        progress_bar(data.percent, data.message)
-    }
-})
-
-
-// Update the sub-progress bar (progress within the current item, e.g. page/set n of N), showing and hiding as required
-function sub_progress_bar(percent, message = "") {
-
-    const bar_container = document.getElementById("sub_progress_bar_container")
-    const bar = document.getElementById("sub_progress_bar")
-
-    percent = percent > 100 ? 100 : percent;
-
-    if (percent <= 100) {
-        if (subBarTimer) {
-            clearTimeout(subBarTimer); // Cancel the previous timeout
-        }
-        bar_container.classList.add("show")
-        bar.style.width = percent + "%"
-        bar_container.ariaValueNow = percent
-        bar.innerHTML = message || ""
-    }
-
-    if (percent === 100) {
-        subBarTimer = setTimeout(() => {
-            bar_container.classList.remove('show'); // Fade out the sub-progress bar after a second
-        }, 2000);
-    }
-}
-
-socket.on("sub_progress_bar", (data) => {
-    if (validResponse(data)) {
-        sub_progress_bar(data.percent, data.message)
+    if (validResponse(data, true)) {
+        progressBar(data.percent, data.message, data.bar_type, data.bar_speed)
     }
 })
 
@@ -351,9 +1101,9 @@ socket.on("add_to_bulk_list", (data) => {
 
         if (!regex.test(bulkText)) {
             if (config.auto_manage_bulk_files) {
-                document.getElementById("bulk_import_text").value = processAndSortUrls(bulkText, data.title, cleanedUrl);
+                document.getElementById("bulk_import_text").value = processAndSortUrls(bulkText, data.title, data.author, cleanedUrl);
             } else {
-                document.getElementById("bulk_import_text").value += `\n// ${data.title}\n${cleanedUrl}\n`;
+                document.getElementById("bulk_import_text").value += `\n// ${data.title} | ${data.author}\n${cleanedUrl}\n`;
             }
 
         }
@@ -365,98 +1115,99 @@ socket.on("add_to_bulk_list", (data) => {
 
 
 // Sort the bulk list into order by media title
-function processAndSortUrls(inputText, newTitle, newUrl) {
+function processAndSortUrls(inputText, newTitle, newAuthor, newUrl) {
 
-    // Initialize data structures
-    const titleMap = {};
-    const mediUXUrls = [];
-    const thePosterDBUrls = [];
+  // Initialize data structures
+  const titleMap = {};
+  const mediUXUrls = [];
+  const thePosterDBUrls = [];
 
-    // Function to remove leading articles from a title
-    const removeLeadingArticles = (title) => {
-        const articles = ['a', 'an', 'the'];
-        const words = title.toLowerCase().split(' ');
-        if (words.length > 1 && articles.includes(words[0])) {
-            words.shift(); // Remove the leading article
-        }
-        return words.join(' ');
-    };
-
-    // Function to add a new title and its URL
-    const addTitleAndUrl = (title, url) => {
-        if (title && url) {
-            titleMap[title] = titleMap[title] || [];
-            titleMap[title].push(url);
-        }
-    };
-
-    // Split the input data into lines
-    const lines = inputText.split('\n');
-    let currentTitle = '';
-
-    // Process each line
-    lines.forEach(line => {
-        line = line.trim();
-        if (line.startsWith('//')) {
-            // New title
-            currentTitle = line.substring(3).trim();
-            titleMap[currentTitle] = [];
-        } else if (line === '') {
-            // Blank line
-            currentTitle = '';
-        } else if (line) {
-            // URL line
-            if (currentTitle) {
-                // Associated with a title
-                titleMap[currentTitle].push(line);
-            } else {
-                // Standalone URL
-                if (line.includes('mediux.pro')) {
-                    mediUXUrls.push(line);
-                } else if (line.includes('theposterdb.com')) {
-                    thePosterDBUrls.push(line);
-                }
-            }
-        }
-    });
-
-    // Add the new title and URL
-    addTitleAndUrl(newTitle, newUrl);
-
-    // Format the output
-    let output = '';
-    // Sort titles alphabetically, ignoring leading articles
-    const sortedTitles = Object.keys(titleMap).sort((a, b) => {
-        const aTitle = removeLeadingArticles(a);
-        const bTitle = removeLeadingArticles(b);
-        return aTitle.localeCompare(bTitle);
-    });
-    // Add title sections
-    sortedTitles.forEach(title => {
-        output += `// ${title}\n`;
-        titleMap[title].forEach(url => {
-            output += `${url}\n`;
-        });
-        output += '\n';
-    });
-    // Add MediUX URLs section
-    if (mediUXUrls.length > 0) {
-        output += '// MediUX URLs\n';
-        mediUXUrls.forEach(url => {
-            output += `${url}\n`;
-        });
-        output += '\n';
+  // Function to remove leading articles from a title
+  const removeLeadingArticles = (title) => {
+    const articles = ['a', 'an', 'the'];
+    const words = title.toLowerCase().split(' ');
+    if (words.length > 1 && articles.includes(words[0])) {
+      words.shift(); // Remove the leading article
     }
-    // Add The Poster DB URLs section
-    if (thePosterDBUrls.length > 0) {
-        output += '// The Poster DB URLs\n';
-        thePosterDBUrls.forEach(url => {
-            output += `${url}\n`;
-        });
-        output += '\n';
-    }
+    return words.join(' ');
+  };
 
-    return output;
+  // Function to add a new title and its URL
+  const addTitleAndUrl = (title, url) => {
+    if (title && url) {
+      titleMap[title] = titleMap[title] || [];
+      titleMap[title].push(url);
+    }
+  };
+
+  // Split the input data into lines
+  const lines = inputText.split('\n');
+  let currentTitle = '';
+
+  // Process each line
+  lines.forEach(line => {
+    line = line.trim();
+    if (line.startsWith('//')) {
+      // New title
+      currentTitle = line.substring(3).trim();
+      titleMap[currentTitle] = [];
+    } else if (line === '') {
+      // Blank line
+      currentTitle = '';
+    } else if (line) {
+      // URL line
+      if (currentTitle) {
+        // Associated with a title
+        titleMap[currentTitle].push(line);
+      } else {
+        // Standalone URL
+        if (line.includes('mediux.pro')) {
+          mediUXUrls.push(line);
+        } else if (line.includes('theposterdb.com')) {
+          thePosterDBUrls.push(line);
+        }
+      }
+    }
+  });
+
+  // Add the new title and URL
+  newTitle = newTitle + ' | ' + newAuthor
+  addTitleAndUrl(newTitle, newUrl);
+
+  // Format the output
+  let output = '';
+  // Sort titles alphabetically, ignoring leading articles
+  const sortedTitles = Object.keys(titleMap).sort((a, b) => {
+    const aTitle = removeLeadingArticles(a);
+    const bTitle = removeLeadingArticles(b);
+    return aTitle.localeCompare(bTitle);
+  });
+  // Add title sections
+  sortedTitles.forEach(title => {
+    output += `// ${title}\n`;
+    titleMap[title].forEach(url => {
+      output += `${url}\n`;
+    });
+    output += '\n';
+  });
+  // Add MediUX URLs section
+  if (mediUXUrls.length > 0) {
+    output += '// MediUX URLs\n';
+    mediUXUrls.forEach(url => {
+      output += `${url}\n`;
+    });
+    output += '\n';
+  }
+  // Add The Poster DB URLs section
+  if (thePosterDBUrls.length > 0) {
+    output += '// The Poster DB URLs\n';
+    thePosterDBUrls.forEach(url => {
+      output += `${url}\n`;
+    });
+    output += '\n';
+  }
+
+  return output;
 }
 
 
@@ -465,303 +1216,466 @@ function processAndSortUrls(inputText, newTitle, newUrl) {
 // ==================================================
 
 // Button handler for save configuration
-document.getElementById("save_config_button").addEventListener("click", function (event) {
+document.getElementById("save_config_button").addEventListener("click", async function(event) {
     event.preventDefault(); // Prevent actual form submission
-    saveConfig();
-});
-
-// Save configuration
-function saveConfig() {
     const form = document.getElementById("config_form");
-
     if (!form.checkValidity()) {
         form.classList.add("was-validated");
         return; // Prevent further execution if form is invalid
     }
+    // Form is valid: make sure highlights are cleared if user successfully saves
+    const tvLibraries = tvPicker ? tvPicker.getValue() : [];
+    const movieLibraries = moviePicker ? moviePicker.getValue() : [];
 
-    // Form is valid, proceed with saving config
-    const save_config = {};
-
-    save_config.base_url = document.getElementById("plex_base_url").value.trim();
-    save_config.token = document.getElementById("plex_token").value.trim();
-    save_config.kometa_base = document.getElementById("kometa_base").value.trim();
-    save_config.temp_dir = document.getElementById("temp_dir").value.trim();
-    toggleTempCheckbox();
-
-    // Parse kometa_library_paths from JSON
-    const kometaLibraryPathsInput = document.getElementById("kometa_library_paths").value.trim();
-    if (kometaLibraryPathsInput) {
-        try {
-            save_config.kometa_library_paths = JSON.parse(kometaLibraryPathsInput);
-            // Validate it's an object with string keys/values
-            if (typeof save_config.kometa_library_paths !== 'object' ||
-                Array.isArray(save_config.kometa_library_paths)) {
-                throw new Error("Must be an object");
-            }
-        } catch (e) {
-            document.getElementById("kometa_library_paths").classList.add("is-invalid");
-            updateStatus("Invalid JSON in Kometa Library Path Mappings", "danger");
-            return;
-        }
+    if (tvLibraries.length + movieLibraries.length > 0) {
+        form.classList.remove("was-validated");
+        saveConfig();
     } else {
-        save_config.kometa_library_paths = {};
+        updateStatus("Select at least one show or movie library", "danger", false, false, "x-circle");
     }
+});
 
-    // Parse arr_root_folder_library_map from JSON
-    const arrRootFolderLibraryMapInput = document.getElementById("arr_root_folder_library_map").value.trim();
-    if (arrRootFolderLibraryMapInput) {
-        try {
-            save_config.arr_root_folder_library_map = JSON.parse(arrRootFolderLibraryMapInput);
-            // Validate it's an object with string keys/values
-            if (save_config.arr_root_folder_library_map === null ||
-                typeof save_config.arr_root_folder_library_map !== 'object' ||
-                Array.isArray(save_config.arr_root_folder_library_map)) {
-                throw new Error("Must be an object");
+
+function getCanonicalConfig(config) {
+    const result = {};
+
+    Object.keys(config).sort().forEach(key => {
+        // Omit the "schedules" key since bulk import schedules are
+        // managed by the Bulk Import tab and not in the Settings tab
+        if (key === "schedules") return;
+
+        if (Array.isArray(config[key])) {
+            // Sort lists so that list order changes don't trigger a config 
+            // changed state where the buttons get enabled unnecessarily
+            // except for the webhook TPDb users where order matters
+            if (key != "webhook_tpdb_users") {
+                result[key] = [...config[key]].sort()
+            } else {
+                result[key] = config[key]
             }
-        } catch (e) {
-            document.getElementById("arr_root_folder_library_map").classList.add("is-invalid");
-            updateStatus("Invalid JSON in Root Folder Library Mappings", "danger");
-            return;
+        } else {
+            result[key] = config[key]
         }
-    } else {
-        save_config.arr_root_folder_library_map = {};
-    }
+    });
 
-    save_config.bulk_txt = document.getElementById("bulk_import_file").value;
+    return result;
+}
 
-    // Convert comma-separated Apprise URLs to array
-    save_config.apprise_urls = document.getElementById("apprise_urls").value
-        .split(",")
-        .map(item => item.trim())
-        .filter(item => item !== ""); // Remove empty values
+function getCurrentConfigForm() {
+    const current_form = {};
 
-    // Convert comma-separated library inputs to arrays
-    save_config.tv_library = document.getElementById("tv_library").value
-        .split(",")
-        .map(item => item.trim())
-        .filter(item => item !== ""); // Remove empty values
+    current_form.base_url = document.getElementById("plex_base_url").value.trim();
+    current_form.token = document.getElementById("plex_token").value.trim();
+    current_form.plex_local_assets = document.getElementById("plex_local_assets").checked;
 
-    save_config.movie_library = document.getElementById("movie_library").value
-        .split(",")
-        .map(item => item.trim())
-        .filter(item => item !== ""); // Remove empty values
+    current_form.path_mappings = collectPathMappings();
+
+    current_form.kometa_base = document.getElementById("kometa_base").value.trim();
+    current_form.temp_dir = document.getElementById("temp_dir").value.trim();
+    current_form.bulk_txt = document.getElementById("bulk_import_file").value;
+    
+    // Save the Apprise notification channels (URL plus the events each one is subscribed to)
+    current_form.apprise_urls = collectAppriseChannels();
+
+    // Collect movie and TV library lists from TomSelect pickers
+    current_form.tv_library = tvPicker ? tvPicker.getValue() : [];
+    current_form.movie_library = moviePicker ? moviePicker.getValue() : [];
 
     // Checkbox for tracking artwork IDs
-    save_config.track_artwork_ids = document.getElementById("track_artwork_ids").checked;
+    current_form.track_artwork_ids = document.getElementById("track_artwork_ids").checked;
 
     // Checkbox for saving artwork to Kometa asset directory
-    save_config.save_to_kometa = document.getElementById("save_to_kometa").checked;
+    current_form.save_to_kometa = document.getElementById("save_to_kometa").checked;
 
     // Checkbox for staging assets
-    save_config.stage_assets = document.getElementById("stage_assets").checked;
-    toggleScraperStageCheckbox();
+    current_form.stage_assets = document.getElementById("stage_assets").checked;
 
-    // Checkbox for staging specials
-    save_config.stage_specials = document.getElementById("stage_specials").checked;
-
-    // Checkbox for staging collections
-    save_config.stage_collections = document.getElementById("stage_collections").checked;
-
-    // Checkbox for Radarr/Sonarr pre-seeding
-    save_config.preseed_arr = document.getElementById("preseed_arr").checked;
-    save_config.radarr_url = document.getElementById("radarr_url").value.trim();
-    save_config.radarr_api_key = document.getElementById("radarr_api_key").value.trim();
-    save_config.sonarr_url = document.getElementById("sonarr_url").value.trim();
-    save_config.sonarr_api_key = document.getElementById("sonarr_api_key").value.trim();
+    // Fork: Radarr/Sonarr pre-seed + Kometa library path mapping (no upstream equivalent)
+    current_form.stage_specials = document.getElementById("stage_specials").checked;
+    current_form.stage_collections = document.getElementById("stage_collections").checked;
+    current_form.kometa_library_paths = parseJsonMapField("kometa_library_paths");
+    current_form.preseed_arr = document.getElementById("preseed_arr").checked;
+    current_form.radarr_url = document.getElementById("radarr_url").value.trim();
+    current_form.radarr_api_key = document.getElementById("radarr_api_key").value.trim();
+    current_form.sonarr_url = document.getElementById("sonarr_url").value.trim();
+    current_form.sonarr_api_key = document.getElementById("sonarr_api_key").value.trim();
+    current_form.arr_root_folder_library_map = parseJsonMapField("arr_root_folder_library_map");
 
     // Checkbox for managing bulk files
-    save_config.auto_manage_bulk_files = document.getElementById("auto_manage_bulk_files").checked;
+    current_form.auto_manage_bulk_files = document.getElementById("auto_manage_bulk_files").checked;
 
     // Checkbox for reset overlay for Kometa
-    save_config.reset_overlay = document.getElementById("reset_overlay").checked;
+    current_form.reset_overlay = document.getElementById("reset_overlay").checked;
 
     // Checkbox for skipping artwork with locked fields in Plex
-    save_config.skip_locked_artwork = document.getElementById("skip_locked_artwork").checked;
-    toggleSkipLockedCheckbox();
+    current_form.skip_locked_artwork = document.getElementById("skip_locked_artwork").checked;
+
+    // Checkbox for matching artwork against the local libraries before fetching poster pages
+    current_form.local_library_matching = document.getElementById("local_library_matching").checked;
+    
+    // Checkbox for caching ThePosterDB user scrapes
+    current_form.cache_user_scrapes = document.getElementById("cache_user_scrapes").checked;
+
+    // ThePosterDB user cache expiration threshold
+    current_form.user_cache_refresh_days = parseInt(document.getElementById("user_cache_refresh_days").value) || 0;
+
+    // Timeouts and retries
+    current_form.plex_connect_timeout = parseInt(document.getElementById("plex_connect_timeout").value) || 10;
+    current_form.kometa_download_timeout = parseInt(document.getElementById("kometa_download_timeout").value) || 10;
+    current_form.upload_retry_attempts = parseInt(document.getElementById("upload_retry_attempts").value) || 3;
+    current_form.upload_retry_backoff_seconds = parseFloat(document.getElementById("upload_retry_backoff_seconds").value) || 1;
+
+    // How late a missed scheduled run can be and still be caught up on startup
+    current_form.catch_up_window_minutes = parseInt(document.getElementById("catch_up_window_minutes").value) || 0;
+
+    // Checkbox for taking an artist's newer artwork for posters we applied
+    current_form.allow_artist_updates = document.getElementById("allow_artist_updates").checked;
 
     // Get selected mediux filters
-    save_config.mediux_filters = Array.from(document.querySelectorAll('[id^="m_filter-"]:checked'))
+    current_form.mediux_filters = Array.from(document.querySelectorAll('[id^="m_filter-"]:checked'))
         .map(checkbox => checkbox.value);
 
     // Get selected tpdb filters
-    save_config.tpdb_filters = Array.from(document.querySelectorAll('[id^="p_filter-"]:checked'))
+    current_form.tpdb_filters = Array.from(document.querySelectorAll('[id^="p_filter-"]:checked'))
         .map(checkbox => checkbox.value);
 
     // Save schedules (Ensure it's an array)
-    save_config.schedules = Array.isArray(schedules) ? schedules : [];
+    current_form.schedules = Array.isArray(schedules) ? schedules : [];
 
     // Authentication settings
-    save_config.auth_mode = document.getElementById("auth_mode").value;
-    save_config.auth_enabled = save_config.auth_mode !== "none";
-    save_config.auth_username = document.getElementById("auth_username").value.trim();
-    // Don't send password in save_config - it's handled separately
+    current_form.auth_enabled = document.getElementById("auth_enabled").checked;
+    current_form.auth_username = document.getElementById("auth_username").value.trim();
+    current_form.auth_password = document.getElementById("auth_password").value;
 
     // OIDC settings
-    save_config.oidc_issuer = document.getElementById("oidc_issuer").value.trim();
-    save_config.oidc_client_id = document.getElementById("oidc_client_id").value.trim();
-    save_config.oidc_provider_name = document.getElementById("oidc_provider_name").value.trim() || "SSO";
-    save_config.oidc_scopes = document.getElementById("oidc_scopes").value.trim() || "openid profile email groups";
-    save_config.oidc_groups_claim = document.getElementById("oidc_groups_claim").value.trim() || "groups";
-    save_config.oidc_allowed_groups = document.getElementById("oidc_allowed_groups").value
-        .split(",").map(group => group.trim()).filter(group => group.length > 0);
-    save_config.oidc_allow_password_fallback = document.getElementById("oidc_allow_password_fallback").checked;
-    save_config.external_url = document.getElementById("external_url").value.trim();
+    current_form.oidc_enabled = document.getElementById("oidc_enabled").checked;
+    current_form.oidc_issuer = document.getElementById("oidc_issuer").value;
+    current_form.oidc_label = document.getElementById("oidc_label").value;
+    current_form.oidc_client_id = document.getElementById("oidc_client_id").value;
+    current_form.oidc_client_secret = document.getElementById("oidc_client_secret").value;
+    current_form.oidc_scopes = oidcScopesPicker ? oidcScopesPicker.getValue() : [];
+    current_form.oidc_groups_claim = document.getElementById("oidc_groups_claim").value;
+    current_form.oidc_allowed_groups = oidcAllowedGroupsPicker ? oidcAllowedGroupsPicker.getValue() : [];
+    current_form.external_url = document.getElementById("external_url").value;
+    
+    // Webhook settings
+    current_form.enable_webhooks = document.getElementById("enable_webhooks").checked;
+    current_form.webhook_token = document.getElementById("webhook_token").value.trim();
+    current_form.webhook_tpdb_users = tpdbUserPicker ? tpdbUserPicker.getValue() : [];
+    current_form.webhook_apply_delay = parseInt(document.getElementById("webhook_apply_delay").value, 10) || 30;
 
-    // Secrets are sent as-is: the backend keeps the stored value when it gets the
-    // placeholder back, and clearing the field really does clear the secret
-    save_config.oidc_client_secret = document.getElementById("oidc_client_secret").value;
+    return current_form
+}
 
-    // Check if we need to set a new password
-    const newPassword = document.getElementById("auth_password").value;
-    if (save_config.auth_enabled && newPassword) {
-        // First set the password
-        socket.emit("set_password", {
-            instance_id: instanceId,
-            username: save_config.auth_username,
-            password: newPassword
-        });
-        // Clear the password field
-        document.getElementById("auth_password").value = "";
+// Save configuration
+function saveConfig() {
+    const save_config = getCurrentConfigForm();
 
-        // Wait a moment then save config
-        setTimeout(() => {
-            socket.emit("save_config", {instance_id: instanceId, config: save_config});
-        }, 500);
+    // Process every possible condition of auth enable/disable and same/different username and password/no password provided
+    // If auth is enabled and a password is NOT provided
+    if (save_config.auth_enabled && !save_config.auth_username) {
+        updateStatus("A username must be provided to enable authentication", "danger", false, false, "x-circle");
+    } else if (save_config.auth_enabled && !save_config.auth_password) {
+        // If the username provided is the same, proceed saving the configuration
+        if (save_config.auth_username === config.auth_username) {
+            socket.emit("save_config", { instance_id: instanceId, config: save_config });
+        // If the username has changed and a password is not provided, don't proceed
+        } else if (save_config.auth_enabled != config.auth_username) {
+            updateStatus("Password must be provided when changing authentication account", "danger", false, false, "x-circle");
+        // Proceed saving the configuration with a new username/password combination
+        } else {
+            socket.emit("display_message", { "instance_id": instanceId, "message": "Changing username and providing password", "level": "log"});
+            socket.emit("save_config", { instance_id: instanceId, config: save_config });
+        }
+    } else if (save_config.auth_enabled && save_config.auth_password) {
+        // Clear the password fill and save the config
+        document.getElementById("auth_password").value = ""
+        socket.emit("save_config", { instance_id: instanceId, config: save_config })
     } else {
-        socket.emit("save_config", {instance_id: instanceId, config: save_config});
+        // If the auth cehckbox is off, proceed to disable authentication
+        document.getElementById("auth_username").value = ""
+        socket.emit("save_config", { instance_id: instanceId, config: save_config });
     }
 
     // Prevent duplicate event listeners
     socket.once("save_config", (data) => {
-        if (validResponse(data)) {
+        if (validResponse(data, true)) {
             if (data.saved) {
                 config = data.config;
-                updateStatus("Configuration saved", "success", false, false, "check-circle");
+                socket.emit("display_message", {
+                    level: "status",
+                    instance_id: instanceId,
+                    message: "Configuration updated",
+                    color: "success",
+                    icon: "check2-circle",
+                    broadcast: true
+                });
                 configureTabs(true);
+                initialConfig = JSON.stringify(getCanonicalConfig(getCurrentConfigForm()));
+                toggleConfigButtons();
             } else {
-                updateStatus("Configuration could not be saved", "danger", false, false, "cross-circle");
+                updateStatus("Configuration could not be saved", "danger", false, false, "x-circle");
                 configureTabs(true);
             }
         }
     });
 }
 
+socket.on("update_ui", (data) => {
+    if (validResponse(data, true)) {
+        updateConfigUI(data.config);
+    }
+});
+
+socket.on("toggle_config_buttons", () => {
+    toggleConfigButtons();
+});
+
+
+function updateConfigUI(config) {
+
+    document.getElementById("plex_base_url").value = config.base_url;
+    document.getElementById("plex_token").value = config.token;
+
+    document.getElementById("plex_local_assets").checked = config.plex_local_assets;
+    togglePathMappings();
+
+    // Populate path mappings
+    pathMappingsCounter = 0
+    document.querySelectorAll(".inline-remove-btn").forEach(btn => {
+        btn.removeEventListener("click", removePathMappingRow);
+    })
+    const pathMappingsContainer = document.getElementById("path_mappings_container");
+    if (pathMappingsContainer) {
+        pathMappingsContainer.innerHTML = "";
+
+        if (Array.isArray(config.path_mappings) && config.path_mappings.length > 0) {
+            config.path_mappings.forEach(mapping => {
+                createPathMappingRow(null, mapping.plex_path, mapping.app_path);
+            });
+        }
+    }
+    // Create event listeners for the remove buttons
+    document.querySelectorAll(".inline-remove-btn").forEach(btn => {
+        btn.addEventListener("click", removePathMappingRow);
+    })
+
+    document.getElementById("bulk_import_file").value = config.bulk_txt;
+    
+    // Load TV libraries
+    if (Array.isArray(config.tv_library)) {
+        // Add options first so Tom Select knows about them
+        config.tv_library.forEach(lib => tvPicker.addOption({ value: lib, text: lib }));
+        // Set active values (chips)
+        tvPicker.setValue(config.tv_library);
+    }
+    // Load Movie Libraries
+    if (Array.isArray(config.movie_library)) {
+        // Add options first
+        config.movie_library.forEach(lib => moviePicker.addOption({ value: lib, text: lib }));
+        // Set active values (chips)
+        moviePicker.setValue(config.movie_library);
+    }            
+    updateLibraryPickers();
+    
+    document.getElementById("track_artwork_ids").checked = config.track_artwork_ids;
+    document.getElementById("save_to_kometa").checked = config.save_to_kometa;
+    document.getElementById("stage_assets").checked = config.stage_assets;
+    document.getElementById("kometa_base").value = config.kometa_base;
+    document.getElementById("temp_dir").value = config.temp_dir || "";
+    // Fork: Radarr/Sonarr pre-seed + Kometa library path mapping (no upstream equivalent)
+    document.getElementById("stage_specials").checked = config.stage_specials;
+    document.getElementById("stage_collections").checked = config.stage_collections;
+    document.getElementById("kometa_library_paths").value =
+        (config.kometa_library_paths && Object.keys(config.kometa_library_paths).length)
+            ? JSON.stringify(config.kometa_library_paths, null, 2) : "";
+    document.getElementById("preseed_arr").checked = config.preseed_arr || false;
+    document.getElementById("radarr_url").value = config.radarr_url || "";
+    document.getElementById("radarr_api_key").value = config.radarr_api_key || "";
+    document.getElementById("sonarr_url").value = config.sonarr_url || "";
+    document.getElementById("sonarr_api_key").value = config.sonarr_api_key || "";
+    document.getElementById("arr_root_folder_library_map").value =
+        (config.arr_root_folder_library_map && Object.keys(config.arr_root_folder_library_map).length)
+            ? JSON.stringify(config.arr_root_folder_library_map, null, 2) : "";
+    document.getElementById("auto_manage_bulk_files").checked = config.auto_manage_bulk_files;
+    document.getElementById("reset_overlay").checked = config.reset_overlay;
+    document.getElementById("skip_locked_artwork").checked = config.skip_locked_artwork;
+    document.getElementById("local_library_matching").checked = config.local_library_matching;
+    document.getElementById("cache_user_scrapes").checked = config.cache_user_scrapes;
+    document.getElementById("user_cache_refresh_days").value = config.user_cache_refresh_days ?? 7;
+    document.getElementById("plex_connect_timeout").value = config.plex_connect_timeout ?? 10;
+    document.getElementById("kometa_download_timeout").value = config.kometa_download_timeout ?? 10;
+    document.getElementById("upload_retry_attempts").value = config.upload_retry_attempts ?? 3;
+    document.getElementById("upload_retry_backoff_seconds").value = config.upload_retry_backoff_seconds ?? 1;
+    document.getElementById("catch_up_window_minutes").value = config.catch_up_window_minutes ?? 0;
+    document.getElementById("allow_artist_updates").checked = config.allow_artist_updates;
+    document.getElementById("option-add-to-bulk").checked = config.auto_manage_bulk_files;
+    
+    // Populate Apprise URLs
+    const container = document.getElementById("apprise_urls_container");
+    if (container) {
+        container.innerHTML = "";
+        
+        if (Array.isArray(config.apprise_urls) && config.apprise_urls.length > 0) {
+            const numUrls = config.apprise_urls.length
+            let thisUrl = 0
+            config.apprise_urls.forEach(url => {
+                thisUrl += 1
+                if (thisUrl < numUrls) {
+                    createAppriseUrlRow(url);
+                } else {
+                    createAppriseUrlRow(url, last=true);
+                }
+            });
+        } else {
+            createAppriseUrlRow();
+        }
+    }
+    
+    // Load authentication settings
+    document.getElementById("auth_enabled").checked = config.auth_enabled || false;
+    document.getElementById("auth_username").value = config.auth_username || "";
+
+    // Load OIDC settings
+    document.getElementById("oidc_enabled").checked = config.oidc_enabled || false;
+    document.getElementById("oidc_label").value = config.oidc_label || "";
+    document.getElementById("oidc_issuer").value = config.oidc_issuer || "";
+    document.getElementById("oidc_client_id").value = config.oidc_client_id || "";
+    document.getElementById("oidc_client_secret").value = config.oidc_client_secret || "";
+    document.getElementById("oidc_scopes").value = config.oidc_scopes || "";
+    if (Array.isArray(config.oidc_scopes) && oidcScopesPicker) {
+        oidcScopesPicker.setValue(config.oidc_scopes, true);
+    }
+    document.getElementById("oidc_groups_claim").value = config.oidc_groups_claim || "";
+    if (Array.isArray(config.oidc_allowed_groups) && oidcAllowedGroupsPicker) {
+        oidcAllowedGroupsPicker.clearOptions();
+        config.oidc_allowed_groups.forEach(group => oidcAllowedGroupsPicker.addOption({ value: group, text: group }));
+        oidcAllowedGroupsPicker.setValue(config.oidc_allowed_groups, true);
+    }
+    updatePickerLabel(oidcScopesPicker);
+    updatePickerLabel(oidcAllowedGroupsPicker);
+    document.getElementById("external_url").value = config.external_url || "",
+    
+    // Load webhook settings
+    document.getElementById("enable_webhooks").checked = config.enable_webhooks || false;
+    document.getElementById("webhook_token").value = config.webhook_token || "";
+    if (Array.isArray(config.webhook_tpdb_users) && tpdbUserPicker) {
+        // Clear existing options
+        tpdbUserPicker.clearOptions();
+        // Add options first
+        config.webhook_tpdb_users.forEach(user => tpdbUserPicker.addOption({ value: user, text: user }));
+        // Set active values (chips)
+        tpdbUserPicker.setValue(config.webhook_tpdb_users, true);
+    };
+    updatePickerLabel(tpdbUserPicker);
+    document.getElementById("webhook_apply_delay").value = config.webhook_apply_delay ?? 30;
+    
+    // Toggle Kometa settings visibility
+    toggleKometaSettings();
+
+    // Fork: toggle Radarr/Sonarr pre-seed settings visibility
+    toggleArrSettings();
+    
+    // Toggle Add to Bulk checkbox visibility
+    toggleAddToBulkCheckbox();
+    
+    // Toggle auth settings visibility
+    toggleAuthSettings();
+
+    // Toggle OIDC settings visibility
+    toggleOIDCSettings();
+    
+    // Toggle webhook settings visibility
+    toggleWebhookSettings();
+    
+    // Make sure Plex options visibility is set correctly on load
+    togglePlexOptions();
+    
+    // Make sure temp option visibility is set correctly on load
+    toggleTempCheckbox();
+    
+    // Make sure scraper stage option visibility is set correctly on load
+    toggleScraperStageCheckbox();
+    
+    // Make sure skip locked artwork option visibility is set correctly on load
+    toggleSkipLockedCheckbox();
+
+    // Make sure user asset cache expiry field visibility is seet correctly on load
+    toggleUserCacheExpiryField();
+    
+    // Show/hide logout button based on auth enabled
+    if (config.auth_enabled || config.oidc_enabled) {
+        document.getElementById("logout-link").style.display = "block";
+    } else {
+        document.getElementById("logout-link").style.display = "none";
+    }
+    
+    if (Array.isArray(config.mediux_filters)) {
+        document.querySelectorAll('[id^="m_filter-"]').forEach(checkbox => {
+            checkbox.checked = config.mediux_filters.includes(checkbox.value);
+        });
+    }
+    
+    if (Array.isArray(config.tpdb_filters)) {
+        document.querySelectorAll('[id^="p_filter-"]').forEach(checkbox => {
+            checkbox.checked = config.tpdb_filters.includes(checkbox.value);
+        });
+    }
+    
+    schedules = config.schedules;
+    
+    loadBulkFileList(); // For the switcher
+    loadRunHistory();
+};
 
 // Load configuration
-function loadConfig() {
-    socket.emit("load_config", {instance_id: instanceId});
+function loadConfig(silent=false, restore=false) {
+    socket.emit("load_config", { instance_id: instanceId });
 
     socket.once("load_config", (data) => { // Use 'once' to prevent duplicate listeners
         if (validResponse(data) && data.config) {
             config = data.config;
-            document.getElementById("plex_base_url").value = data.config.base_url;
-            document.getElementById("plex_token").value = data.config.token;
-            document.getElementById("bulk_import_file").value = data.config.bulk_txt;
-            document.getElementById("tv_library").value = data.config.tv_library.join(", ");
-            document.getElementById("movie_library").value = data.config.movie_library.join(", ");
-            document.getElementById("track_artwork_ids").checked = data.config.track_artwork_ids;
-            document.getElementById("save_to_kometa").checked = data.config.save_to_kometa;
-            document.getElementById("stage_assets").checked = data.config.stage_assets;
-            document.getElementById("stage_specials").checked = data.config.stage_specials;
-            document.getElementById("stage_collections").checked = data.config.stage_collections;
-            document.getElementById("kometa_base").value = data.config.kometa_base;
-            document.getElementById("temp_dir").value = data.config.temp_dir || "";
-
-            // Load kometa_library_paths
-            if (data.config.kometa_library_paths) {
-                document.getElementById("kometa_library_paths").value =
-                    JSON.stringify(data.config.kometa_library_paths, null, 2);
-            } else {
-                document.getElementById("kometa_library_paths").value = "";
+            updateConfigUI(config)
+            configureTabs(silent);
+            initialConfig = JSON.stringify(getCanonicalConfig(getCurrentConfigForm()));
+            document.getElementById("config_form").addEventListener("change", toggleConfigButtons);
+            document.getElementById("config_form").querySelectorAll(".form-control").forEach(element => {
+                element.addEventListener("input", toggleConfigButtons);
+            });
+            toggleConfigButtons();
+            if (restore) {
+                updateStatus("Configuration restored successfully", "success", false, false, "check2-circle");
+                const passwordField = document.getElementById("auth_password");
+                if (passwordField) passwordField.value = '';
             }
+        }
+    });
+}
 
-            // Load Radarr/Sonarr pre-seeding settings
-            document.getElementById("preseed_arr").checked = data.config.preseed_arr || false;
-            document.getElementById("radarr_url").value = data.config.radarr_url || "";
-            document.getElementById("radarr_api_key").value = data.config.radarr_api_key || "";
-            document.getElementById("sonarr_url").value = data.config.sonarr_url || "";
-            document.getElementById("sonarr_api_key").value = data.config.sonarr_api_key || "";
-            if (data.config.arr_root_folder_library_map) {
-                document.getElementById("arr_root_folder_library_map").value =
-                    JSON.stringify(data.config.arr_root_folder_library_map, null, 2);
-            } else {
-                document.getElementById("arr_root_folder_library_map").value = "";
-            }
+function toggleConfigButtons() {
+    const currentConfig = JSON.stringify(getCanonicalConfig(getCurrentConfigForm()));
 
-            document.getElementById("auto_manage_bulk_files").checked = data.config.auto_manage_bulk_files;
-            document.getElementById("reset_overlay").checked = data.config.reset_overlay;
-            document.getElementById("skip_locked_artwork").checked = data.config.skip_locked_artwork;
-            document.getElementById("option-add-to-bulk").checked = data.config.auto_manage_bulk_files;
-            document.getElementById("apprise_urls").value = (data.config.apprise_urls || []).join(", ");
+    if (currentConfig === initialConfig) {
+        disableElement(["save_config_button", "restore_config"], true);
+    } else {
+        disableElement(["save_config_button", "restore_config"], false);
+    }
+    
+    const rows = document.querySelectorAll(".apprise-url-row");
 
-            // Load authentication settings
-            document.getElementById("auth_mode").value = data.config.auth_mode ||
-                (data.config.auth_enabled ? "password" : "none");
-            document.getElementById("auth_username").value = data.config.auth_username || "";
-
-            // Load OIDC settings
-            document.getElementById("oidc_issuer").value = data.config.oidc_issuer || "";
-            document.getElementById("oidc_client_id").value = data.config.oidc_client_id || "";
-            document.getElementById("oidc_client_secret").value = data.config.oidc_client_secret || "";
-            document.getElementById("oidc_provider_name").value = data.config.oidc_provider_name || "SSO";
-            document.getElementById("oidc_scopes").value = data.config.oidc_scopes || "";
-            document.getElementById("oidc_groups_claim").value = data.config.oidc_groups_claim || "groups";
-            document.getElementById("oidc_allowed_groups").value = (data.config.oidc_allowed_groups || []).join(", ");
-            document.getElementById("oidc_allow_password_fallback").checked =
-                data.config.oidc_allow_password_fallback !== false;
-            document.getElementById("external_url").value = data.config.external_url || "";
-            document.getElementById("oidc_client_secret_help").textContent =
-                data.config.oidc_client_secret_from_env
-                    ? "Set by the OIDC_CLIENT_SECRET environment variable, which takes precedence"
-                    : (data.config.oidc_client_secret
-                        ? "A secret is stored; leave this field untouched to keep it, or clear it to remove it"
-                        : "No secret stored yet");
-
-            // Toggle Kometa settings visibility
-            toggleKometaSettings();
-
-            // Toggle Radarr/Sonarr pre-seed settings visibility
-            toggleArrSettings();
-
-            // Toggle auth settings visibility
-            toggleAuthSettings();
-
-            // Make sure Plex options visibility is set correctly on load
-            togglePlexOptions();
-
-            // Make sure temp option visibility is set correctly on load
-            toggleTempCheckbox();
-
-            // Make sure scraper stage option visibility is set correctly on load
-            toggleScraperStageCheckbox();
-
-            // Make sure skip locked artwork option visibility is set correctly on load
-            toggleSkipLockedCheckbox();
-
-            // Show/hide logout button based on auth enabled
-            if (data.config.auth_required || data.config.auth_enabled) {
-                document.getElementById("logout-link").style.display = "block";
-            } else {
-                document.getElementById("logout-link").style.display = "none";
-            }
-
-            if (Array.isArray(data.config.mediux_filters)) {
-                document.querySelectorAll('[id^="m_filter-"]').forEach(checkbox => {
-                    checkbox.checked = data.config.mediux_filters.includes(checkbox.value);
-                });
-            }
-
-            if (Array.isArray(data.config.tpdb_filters)) {
-                document.querySelectorAll('[id^="p_filter-"]').forEach(checkbox => {
-                    checkbox.checked = data.config.tpdb_filters.includes(checkbox.value);
-                });
-            }
-
-            schedules = data.config.schedules;
-            console.log(schedules);
-
-            loadBulkFileList(); // For the switcher
-            configureTabs();
+    rows.forEach((row, index) => {
+        const isLast = index === rows.length - 1;
+        const input = row.querySelector(".apprise-url-input");
+        const panel = row.querySelector(".apprise-events-panel");
+        
+        if (input) {
+            input.classList.toggle("has-three-inline-btns", isLast);
+            input.classList.toggle("has-two-inline-btns", !isLast);
+        }
+        
+        if (panel) {
+            panel.classList.toggle("caret-three-btn", isLast);
+            panel.classList.toggle("caret-two-btn", !isLast);
         }
     });
 }
@@ -779,13 +1693,15 @@ function saveBulkChangesModal(filename) {
         document.getElementById("yesNoCancelModalMessage").innerText = "Do you want to save changes to " + currentBulkImport + " first?";
 
         // Update buttons with choices
-        document.getElementById("yesButton").innerText = "Yes, save changes"
-        document.getElementById("noButton").innerText = "No, lose changes"
-        document.getElementById("cancelButton").innerText = "Cancel"
+        document.getElementById("yesButton").innerHTML = '&thinsp;<i class="bi bi-floppy2"></i>&ensp;Save&nbsp;'
+        document.getElementById("noButton").innerHTML = '<i class="bi bi-trash3"></i>&ensp;Discard&nbsp;'
+        document.getElementById("cancelButton").innerHTML = '<i class="bi bi-x-circle"></i>&ensp;Cancel&nbsp;'
 
         // Show modal
         const modal = new bootstrap.Modal(modalElement);
         modal.show();
+
+        modalElement.addEventListener('hidden.bs.modal', resetYesNoCancelModal);
 
         // Handle button clicks
         document.getElementById("yesButton").onclick = () => {
@@ -807,11 +1723,11 @@ function saveBulkChangesModal(filename) {
 }
 
 function startScrape() {
-    const form = document.getElementById('scraperForm');
-    const logTab = document.querySelector('#scraping-log-tab');
+    var form = document.getElementById('scraperForm');
 
     // Check if the form is valid
     if (form.checkValidity()) {
+        form.classList.remove('was-validated');
         // Proceed with scraping if form is valid
 
         // Collect checked input fields with ids starting with "option-"
@@ -822,7 +1738,7 @@ function startScrape() {
 
         // Collect checked checkboxes with ids starting with "filter-"
         let filters = [];
-        if (!document.getElementById("scraper-filters-global").checked) {
+        if(!document.getElementById("scraper-filters-global").checked) {
             document.querySelectorAll('[id^="filter-"]:checked').forEach(checkbox => {
                 filters.push(checkbox.value);
             });
@@ -830,19 +1746,43 @@ function startScrape() {
 
         const year = document.getElementById("year").value;
         const url = document.getElementById("scrape_url").value;
-        socket.emit("start_scrape", {
-            url: url,
-            year: year,
-            options: options,
-            filters: filters,
-            instance_id: instanceId
-        });
-        // Switch to the log tab
-        bootstrap.Tab.getOrCreateInstance(logTab).show();
+        socket.emit("start_scrape", { url: url, year: year, options: options, filters: filters, instance_id: instanceId });
     } else {
         // Trigger Bootstrap validation styles
         form.classList.add('was-validated');
     }
+}
+
+document.querySelectorAll('.nav-link[data-bs-target]').forEach(tabEl => {
+    tabEl.addEventListener('click', (e) => {
+        // Check if the click originated on or inside a cancel icon
+        const cancelBtn = e.target.closest('#scrape-cancel, #bulk-import-cancel, #upload-cancel');
+        
+        if (cancelBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            tabEl.blur();
+            stopScrape();
+            return; // Exit early so Bootstrap never activates the clicked tab
+        }
+
+        // Standard tab click: switch active tab programmatically
+        const tab = bootstrap.Tab.getOrCreateInstance(tabEl);
+        tab.show();
+    });
+});
+
+function stopScrape() {
+    socket.emit("display_message", {
+        instance_id: instanceId,
+        message: "Cancelation requested by user, please wait...",
+        color: "danger",
+        sticky: true,
+        spinner: true,
+        level: "status",
+        broadcast: true
+    });
+    socket.emit("stop_scrape", { instance_id: instanceId });
 }
 
 // Function to check for changes and enable/disable the save button
@@ -851,7 +1791,15 @@ function updateBulkSaveButtonState() {
     const bulkTextArea = document.getElementById("bulk_import_text");
     const saveButton = document.getElementById("save_bulk_button");
 
-    saveButton.disabled = bulkTextArea.value === bulkTextAsLoaded;
+    if (bulkTextArea.value !== bulkTextAsLoaded) {
+        saveButton.disabled = false; // Enable button if text has changed
+        saveButton.classList.add("btn-success");
+        saveButton.classList.remove("btn-secondary");
+    } else {
+        saveButton.disabled = true;  // Disable button if no changes
+        saveButton.classList.remove("btn-success");
+        saveButton.classList.add("btn-secondary");
+    }
 }
 
 // Attach event listener to track changes
@@ -861,32 +1809,32 @@ function updateBulkSaveButtonState() {
 // ==================================================
 
 function toggleThePosterDBElements() {
-    const urlInput = document.getElementById("scrape_url");
-    if (!urlInput) return;
+        const urlInput = document.getElementById("scrape_url");
+        if (!urlInput) return;
 
-    const url = urlInput.value;
-    const elements = document.querySelectorAll(".theposterdb");
-    const filts = document.querySelectorAll('[id^="tpdb-');
+        const url = urlInput.value;
+        const elements = document.querySelectorAll(".theposterdb");
+        const filts = document.querySelectorAll('[id^="tpdb-"');
 
-    // Define the regex pattern from the input
-    const pattern = /^https:\/\/theposterdb\.com\/set\/\d+$/;
+        // Define the regex pattern from the input
+        const pattern = /^https:\/\/theposterdb\.com\/set\/\d+$/;
 
-    // Validate the URL before showing elements
-    if (pattern.test(url)) {
-        elements.forEach(el => el.style.display = "block");
-        filts.forEach(filt => filt.style.display = "none");
-    } else {
-        elements.forEach(el => {
-            el.style.display = "none";
-            // Uncheck checkboxes inside hidden elements
-            el.querySelectorAll("input[type='checkbox']").forEach(checkbox => {
-                checkbox.checked = false;
+        // Validate the URL before showing elements
+        if (pattern.test(url)) {
+            elements.forEach(el => el.style.display = "block");
+            filts.forEach(filt => filt.style.display = "none");
+        } else {
+            elements.forEach(el => {
+                el.style.display = "none";
+                // Uncheck checkboxes inside hidden elements
+                el.querySelectorAll("input[type='checkbox']").forEach(checkbox => {
+                    checkbox.checked = false;
+                });
             });
-        });
-        filts.forEach(filt => filt.style.display = "block");
-    }
+            filts.forEach(filt => filt.style.display = "block");
+        }
 
-}
+    }
 
 // Run function on input change
 if (scrapeUrlInput) {
@@ -894,57 +1842,56 @@ if (scrapeUrlInput) {
 }
 
 function configureTabs(afterSave = false) {
-    if (config.base_url && config.token) {
-        document.getElementById('bulk-import-tab').classList.add("show");
-        document.getElementById('scraper-tab').classList.add("show");
         document.getElementById('scraping-log-tab').classList.add("show");
-        document.getElementById('uploader-tab').classList.add("show");
-        if (!afterSave) {
-            document.getElementById('config').classList.remove("show", "active");
-            document.getElementById('config-tab').classList.remove("active");
-            document.getElementById('scraper').classList.add("show", "active");
-            document.getElementById('scraper-tab').classList.add("active");
+        document.getElementById('run-history-tab').classList.add("show");
+        document.getElementById('about-tab').classList.add("show");
+        if (config.base_url && config.token) {
+            document.getElementById('bulk-import-tab').classList.add("show");
+            document.getElementById('scraper-tab').classList.add("show");
+            document.getElementById('uploader-tab').classList.add("show");
+            if (!afterSave) {
+                document.getElementById('settings').classList.remove("show","active");
+                document.getElementById('settings-tab').classList.remove("active");
+                document.getElementById('scraper').classList.add("show","active");
+                document.getElementById('scraper-tab').classList.add("active");
+            }
         }
-    }
 }
 
 /* Loading the bulk import file */
 
 function loadBulkFile(bulkImport = null) {
 
-    if (!bulkImport) {
-        bulkImport = config.bulk_txt;
-    }
+    if (!bulkImport) {bulkImport = config.bulk_txt;}
 
-    socket.emit("load_bulk_import", {instance_id: instanceId, filename: bulkImport});
+    socket.emit("load_bulk_import", { instance_id: instanceId, filename: bulkImport });
 
     socket.once("load_bulk_import", (data) => {
 
         const textArea = document.getElementById("bulk_import_text");
 
-        if (validResponse(data)) {
+        if(validResponse(data)) {
 
-            if (data.loaded) {
-                textArea.value = data.bulk_import_text;
-                currentBulkImport = data.filename;
-                bulkTextAsLoaded = data.bulk_import_text;
+                if (data.loaded) {
+                    textArea.value = data.bulk_import_text;
+                    currentBulkImport = data.filename;
+                    bulkTextAsLoaded = data.bulk_import_text;
 
-                // Select the correct option in the dropdown
-                const selectElement = document.getElementById("switch_bulk_file");
-                for (const option of selectElement.options) {
-                    if (option.value === data.filename) {
-                        option.selected = true;
-                        break;
+                    // Select the correct option in the dropdown
+                    const selectElement = document.getElementById("switch_bulk_file");
+                    for (const option of selectElement.options) {
+                        if (option.value === data.filename) {
+                            option.selected = true;
+                            break;
+                        }
                     }
-                }
 
-                updateBulkSaveButtonState();
-                handleDefaultCheckbox();
-                updateSchedulerIcon();
-                //                    updateStatus("Bulk import file '" + data.filename + "' was loaded","success", false, false, "check-circle")
-            } else {
-                updateStatus("Bulk import file could not be loaded", "danger", false, false, "cross-circle")
-            }
+                    updateBulkSaveButtonState();
+                    handleDefaultCheckbox();
+                    updateSchedulerIcon();
+                } else {
+                    updateStatus("Bulk import file could not be loaded","danger", false, false, "x-circle")
+                }
 
 
         }
@@ -962,7 +1909,7 @@ function checkBulkImportFileToSave() {
 
 function loadBulkFileList() {
 
-    socket.emit("load_bulk_filelist", {instance_id: instanceId});
+    socket.emit("load_bulk_filelist", { instance_id: instanceId });
 
     socket.once("load_bulk_filelist", (data) => {
         if (validResponse(data)) {
@@ -1018,6 +1965,531 @@ function loadBulkFileList() {
     });
 }
 
+/* Loading the run history */
+
+const RUN_HISTORY_OUTCOME_LABELS = {
+    success: { text: "Completed successfully", className: "text-success", icon: "check-circle-fill", iconColor: "success" },
+    partial: { text: "Completed with errors", className: "text-warning", icon: "exclamation-circle-fill", iconColor: "warning" },
+    stopped: { text: "Stopped", className: "text-warning", icon: "stop-circle-fill", iconColor: "orange" },
+    failed: { text: "Failed", className: "text-danger", icon: "x-circle-fill", iconColor: "danger" },
+    skipped: { text: "Skipped", className: "text-muted", icon: "fast-forward-circle-fill", iconColor: "info" }
+};
+
+const RUN_HISTORY_TYPE_LABELS = {
+    bulk: "Bulk import",
+    scrape: "Scrape",
+    upload: "Upload",
+    webhook: "Webhook"
+};
+
+const RUN_HISTORY_TYPE_ICONS = {
+    bulk: "journal-text",
+    scrape: "arrow-repeat",
+    upload: "cloud-arrow-up",
+    webhook: "broadcast-pin"
+};
+
+const RUN_HISTORY_TRIGGER_LABELS = {
+    manual: "Manual",
+    scheduled: "Scheduled",
+    cli: "Command line",
+    radarr: "Radarr",
+    sonarr: "Sonarr"
+};
+
+const RUN_HISTORY_TRIGGER_ICONS = {
+    manual: "hand-index-thumb",
+    scheduled: "alarm",
+    cli: "code-square",
+    radarr: "film",
+    sonarr: "tv"
+}
+
+function formatRunDuration(startedAt, endedAt) {
+    const start = new Date(startedAt);
+    const end = new Date(endedAt);
+    const seconds = Math.max(0, Math.round((end - start) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    const typeFilter = document.getElementById("run_history_type");
+    if (typeFilter) {
+        typeFilter.addEventListener("change", loadRunHistory);
+    }
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+    const popoverBtn = document.getElementById("legendPopover");
+    if (!popoverBtn) return;
+
+    const popover = new bootstrap.Popover(popoverBtn, { 
+        trigger: "click",
+        container: "body"
+    });
+
+    // Dismiss when tapping/clicking anywhere outside the popover or button
+    document.addEventListener("click", (e) => {
+        const isBtn = popoverBtn.contains(e.target);
+        const isPopover = e.target.closest(".popover");
+
+        if (!isBtn && !isPopover) {
+            popover.hide();
+        }
+    });
+});
+
+function loadRunHistory() {
+
+    const typeFilter = document.getElementById("run_history_type");
+    const runType = typeFilter ? typeFilter.value : "";
+    const runHistoryCount = document.getElementById("run-history-count");
+
+    socket.emit("load_run_history", { instance_id: instanceId, run_type: runType });
+
+    socket.once("load_run_history", (data) => {
+        if (!validResponse(data)) { return; }
+
+        const body = document.getElementById("run_history_body");
+        body.innerHTML = "";
+
+        const runs = data.runs || [];
+        const clearButton = document.getElementById("clear-history-btn");
+
+        if (runs.length === 0) {
+            const row = document.createElement("tr");
+            const cell = document.createElement("td");
+            cell.colSpan = 11;
+            cell.className = "text-muted";
+            cell.textContent = runType ? "No runs of this type recorded yet." : "No runs recorded yet.";
+            row.appendChild(cell);
+            body.appendChild(row);
+            clearButton.classList.add("disabled");
+            runHistoryCount.classList.add("d-none");
+            return;
+        }
+        
+        runHistoryCount.classList.remove("d-none");
+        if (runs.length < data.total) {
+            runHistoryCount.textContent = `${runs.length} of ${data.total} run${runs.length > 1 ? 's' : ''}`;
+        } else {
+            runHistoryCount.textContent = `${runs.length} ${runs.length > 1 ? 'runs' : 'run'}`;
+        }
+        clearButton.classList.remove("disabled");
+        runs.forEach((run) => {
+            const row = document.createElement("tr");
+            const outcome = RUN_HISTORY_OUTCOME_LABELS[run.outcome] || { text: run.outcome, className: "" };
+            const triggerIcon = RUN_HISTORY_TRIGGER_ICONS[run.trigger] || "question-circle";
+            const triggerLabel = RUN_HISTORY_TRIGGER_LABELS[run.trigger] || "unknown";
+            const typeIcon = RUN_HISTORY_TYPE_ICONS[run.run_type] || "question-circle";
+            const typeLabel = RUN_HISTORY_TYPE_LABELS[run.run_type] || "unknown";
+            const logFileName = run.log_file
+
+            const cells = [
+                `<span title="${run.started_at}">${formatDateTime(run.started_at)}</span>`, // Started time
+                `<i class="bi bi-${typeIcon}" title="${typeLabel}"></i>`, // Type
+                run.html_label, // Label
+                `<i class="bi bi-${triggerIcon}" title="${triggerLabel}"></i>`, // Trigger
+                `<i class="bi bi-${outcome.icon} cursor-pointer inline-run-btn" style="cursor: pointer;" title="${outcome.text}" onclick="showLogsforRun('${logFileName}', '${run.label}')"></i>`, // Outcome
+                `<span class="text-monospace">${run.assets_processed}</span>`, // Processed assets
+                `<span class="text-monospace">${run.success_count}</span>`, // Updated assets
+                `<span class="text-monospace">${run.cached_count}</span>`, // Cached assets
+                `<span class="text-monospace">${run.locked_count}</span>`, // Locked assets
+                `<span class="text-monospace">${run.error_count}</span>`, // Errors encountered
+                `<span class="text-monospace">${formatRunDuration(run.started_at, run.ended_at)}</span>`, // Run duration
+            ];
+
+            // Indexes match the header row: detail columns collapse on narrow screens
+            const centeredIndexes = [1, 3, 4, 5, 6, 7, 8, 9, 10];
+            cells.forEach((value, index) => {
+                const cell = document.createElement("td");
+                cell.innerHTML = value;
+                if (index === 4) { cell.className = `text-${outcome.iconColor}`; }
+                if (centeredIndexes.includes(index)) {
+                    cell.classList.add("text-center");
+                }
+                row.appendChild(cell);
+            });
+
+            body.appendChild(row);
+        });
+    });
+}
+
+function deleteRun(timestamp, label) {
+    if (!timestamp || !label) return;
+
+    const modalElement = document.getElementById("yesNoCancelModal");
+    const modalLabel = document.getElementById("yesNoCancelModalLabel");
+    const modalMessage = document.getElementById("yesNoCancelModalMessage");
+    const yesButton = document.getElementById("yesButton");
+    const noButton = document.getElementById("noButton");
+
+    // Update modal message and title
+    modalLabel.innerText = "Delete run from history";
+    modalMessage.innerHTML = `You are about to delete run <span class="text-monospace"></span> from <span></span>. <br><br>Are you sure?`;
+    const [runLabelEl, runTimestampEl] = modalMessage.querySelectorAll("span");
+    runLabelEl.textContent = label;
+    runTimestampEl.textContent = formatDateTime(timestamp);
+
+    // Update buttons with choices
+    yesButton.innerHTML = '<i class="bi bi-trash"></i>&ensp;Delete&nbsp;'
+    yesButton.classList.add("btn-danger")
+    noButton.innerHTML = '<i class="bi bi-x-lg"></i>&ensp;Cancel&nbsp;'
+    document.getElementById("cancelButton").classList.add("d-none")
+
+    // Show modal
+    const modal = new bootstrap.Modal(modalElement);
+    modal.show();
+
+    // Handle button clicks
+    yesButton.onclick = () => {
+        yesButton.onclick = null; // Disable button to prevent duplicate clicks
+
+        modalElement.addEventListener('hidden.bs.modal', function onModalHidden() {
+            modalElement.removeEventListener('hidden.bs.modal', onModalHidden);
+            
+            socket.once("run_deleted", data => {
+                if (validResponse(data, true)) {
+                    loadRunHistory();
+                    if (data.result === "success") {
+                        updateStatus(data.message, "success", false, false, "check2-circle");
+                    } else if (data.result === "warning") {
+                        updateStatus(data.message, "warning", false, false, "exclamation-triangle");
+                    } else if (data.result === "error") {
+                        updateStatus(data.message, "danger", false, false, "x-octagon");
+                    }
+                }
+            });
+            
+            socket.emit("delete_run", { instance_id: instanceId, timestamp: timestamp, label: label });
+            
+            resetYesNoCancelModal();
+        }, { once: true });
+        modal.hide();
+    };
+
+    document.getElementById("noButton").onclick = () => {
+        modal.hide();
+    };
+}
+
+function clearHistory() {
+    const modalElement = document.getElementById("yesNoCancelModal");
+    const modalDialog = document.querySelector("#yesNoCancelModal .modal-dialog");
+    const runType = document.getElementById("run_history_type").value;
+    const yesButton = document.getElementById("yesButton");
+    const noButton = document.getElementById("noButton");
+    const cancelButton = document.getElementById("cancelButton");
+    const modalMessage = document.getElementById("yesNoCancelModalMessage");
+    const modalLabel = document.getElementById("yesNoCancelModalLabel");
+    const modalCloseBtn = document.getElementById("yesNoModalCloseBtn");
+
+    // Update modal message and title
+    modalLabel.innerText = "Clear run history";
+    modalMessage.innerHTML = `You are about to clear all ${runType ? RUN_HISTORY_TYPE_LABELS[runType].toLowerCase() : ''} runs from the history. This action cannot be undone. <br><br>Are you sure?`;
+
+    // Update buttons with choices
+    yesButton.innerHTML = '<i class="bi bi-radioactive"></i>&ensp;Clear&nbsp;'
+    yesButton.classList.add("btn-danger")
+    noButton.innerHTML = '<i class="bi bi-x-lg"></i>&ensp;Cancel&nbsp;'
+    cancelButton.classList.add("d-none")
+
+    // Instantiate Modal with backdrop static so user can't click outside while deleting
+    const modal = new bootstrap.Modal(modalElement);
+    modal.show();
+    
+    modalElement.addEventListener('hidden.bs.modal', resetYesNoCancelModal);
+    
+    // Handle button clicks
+    yesButton.onclick = () => {
+        modal._config.backdrop = 'static';
+        modal._config.keyboard = false;
+        modalCloseBtn.classList.add("d-none");
+        yesButton.disabled = true;
+        noButton.disabled = true;
+        yesButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>&ensp;Clearing...';
+        modalLabel.innerText = "Summary";
+        
+        socket.once("history_cleared", (data) => {
+            modalCloseBtn.classList.remove("d-none");
+            if (validResponse(data, true)) {
+                yesButton.classList.add("d-none");
+                modal._config.backdrop = true;
+                modal._config.keyboard = true;
+                noButton.disabled = false;
+                noButton.innerHTML = '<i class="bi bi-check-lg"></i>&ensp;Accept&nbsp;';
+                noButton.classList.remove("btn-secondary");
+                noButton.classList.add("btn-primary");
+                loadRunHistory();
+                if (data.result === "success") {
+                    modalMessage.innerHTML = `Successfully deleted ${data.deleted} run${data.deleted > 1 ? 's' : ''}.`
+                } else if (data.result === "partial") {
+                    modalMessage.innerHTML = `Unable to delete all runs (deleted ${data.deleted} of ${data.total} runs).`
+                } else if (data.result === "failed") {
+                    modalMessage.innerHTML = `Unable to delete any runs.`
+                }
+                if (data.remaining_logs.length > 0) {
+                    modalMessage.innerHTML += `<br>The following log files could not be deleted:<br>`;
+                    modalDialog.classList.add("modal-lg");
+                    let logTable = '<table class="table"><thead><tr><th class="fw-bold">Log File</th><th class="fw-bold">Reason</th></tr></thead><tbody>';
+                    data.remaining_logs.forEach(log => {
+                        logTable += `<tr><td class="text-monospace" style="font-size: 0.95rem;">${log.file_name}</td><td>${log.reason}</td></tr>`;
+                    });
+                    logTable += '</tbody>';
+                    modalMessage.innerHTML += logTable;
+                }                
+            }
+        });
+        
+        socket.emit("clear_history", { instance_id: instanceId, run_type: runType });
+    };
+
+    noButton.onclick = () => {
+        modal.hide();
+    };
+}
+
+document.getElementById("clear-history-btn").addEventListener("click", clearHistory);
+
+function resetYesNoCancelModal() {
+    const yesButton = document.getElementById("yesButton");
+    const noButton = document.getElementById("noButton");
+    const cancelButton = document.getElementById("cancelButton");
+    const modalCloseBtn = document.getElementById("yesNoModalCloseBtn");
+    const modalDialog = document.querySelector("#yesNoCancelModal .modal-dialog");
+
+    yesButton.disabled = false;
+    yesButton.innerHTML = '<i class="bi bi-check-lg"></i>&ensp;Yes&ensp;</button>'
+    yesButton.classList.remove("btn-primary", "btn-danger", "btn-success", "btn-secondary", "d-none");
+    yesButton.classList.add("btn-primary");
+    noButton.disabled = false;
+    noButton.innerHTML = '<i class="bi bi-x-lg"></i>&ensp;No&ensp;</button>'
+    noButton.classList.remove("btn-primary", "btn-danger", "btn-success", "btn-secondary", "d-none");
+    noButton.classList.add("btn-secondary");
+    cancelButton.disabled = false;
+    cancelButton.innerHTML = '<i class="bi bi-x-circle"></i>&ensp;Cancel&ensp;</button>'
+    cancelButton.classList.remove("btn-primary", "btn-danger", "btn-success", "btn-secondary", "d-none");
+    cancelButton.classList.add("btn-danger");
+    modalCloseBtn.classList.remove("d-none");
+    modalDialog.classList.remove("modal-sm", "modal-lg", "modal-xl");
+}
+
+let logData = {};
+
+let logFilterToggles = {
+    updated: {
+        state: false,
+        iconOff: "bi-check-circle",
+        iconOn: "bi-check-circle-fill"
+    },
+    skipped: {
+        state: false,
+        iconOff: "bi-fast-forward-circle",
+        iconOn: "bi-fast-forward-circle-fill"
+    },
+    warning: {
+        state: false,
+        iconOff: "bi-exclamation-circle",
+        iconOn: "bi-exclamation-circle-fill"
+    },
+    error: {
+        state: false,
+        iconOff: "bi-x-circle",
+        iconOn: "bi-x-circle-fill"
+    }
+}
+
+function showLogsforRun(logFileName, runLabel) {
+    if (!logFileName || logFileName === "undefined") {
+        updateStatus(`No associated log file for ${runLabel}`, "warning", false, false, "exclamation-triangle")
+        return;
+    }
+
+    socket.emit("get_log_file", { instance_id: instanceId, log_file_name: logFileName });
+
+    socket.once("get_log_file", data => {
+        if (validResponse(data)) {
+            if (data.success) {
+                logData = filterLogContent(data.contents);
+                // logData.content = data.contents;
+                const modalEl = document.getElementById("run_log_modal");
+                const contentEl = document.getElementById("run_log_content");
+                const modalTitleEl = document.getElementById("runLogModalLabel");
+
+                Object.keys(logFilterToggles).forEach(toggle => {
+                    logFilterToggles[toggle].state = false;
+                    const config = logFilterToggles[toggle]
+                    const toggleElement = document.querySelector(`i[data-filter="${toggle}"]`);
+                    toggleElement.innerHTML = `&ensp;<span class="text-monospace text-muted">${logData[toggle]}</span>`;
+                    toggleElement.classList.add(config.state ? config.iconOn : config.iconOff);
+                    toggleElement.classList.remove(config.state ? config.iconOff : config.iconOn);
+                });
+                const filterSummary = document.getElementById("filter-summary");
+                filterSummary.textContent = '';
+
+                document.getElementById("log-filters").addEventListener("click", onFilterChange);
+
+                // Update modal header title & content
+                modalTitleEl.innerHTML = `<i class="bi bi-file-earmark-text"></i>&ensp;<span class="text-monospace small"></span>`;
+                modalTitleEl.querySelector("span").textContent = runLabel;
+                contentEl.textContent = logData.content;
+
+                // Show modal safely
+                const logModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                logModal.show();
+            } else {
+                updateStatus(`Unable to load log file for ${runLabel} (${data.error})`, "danger", false, false, "x-octagon")
+                console.warn(`Unable to display log file contents for ${runLabel}`)
+            }
+        }
+    })
+}
+
+function onFilterChange(event) {
+    const toggleElement = event.target.closest("[data-filter]");
+    if (!toggleElement) return;
+
+    const toggle = toggleElement.dataset.filter;
+    if (!toggle) return;
+
+    const contentEl = document.getElementById("run_log_content");
+    if (!contentEl) return;
+    
+    logFilterToggles[toggle].state = !logFilterToggles[toggle].state;
+    
+    const config = logFilterToggles[toggle]
+    toggleElement.classList.add(config.state ? config.iconOn : config.iconOff);
+    toggleElement.classList.remove(config.state ? config.iconOff : config.iconOn);
+
+    const filterSummary = document.getElementById("filter-summary");
+    if (Object.values(logFilterToggles).every(tg => !tg.state)) {
+        contentEl.textContent = logData.content;
+        filterSummary.textContent = ``;
+    } else {
+        filteredLog = filterLogContent(logData.content, logFilterToggles);
+        contentEl.textContent = filteredLog.content;
+        filterSummary.textContent = `Filtered ${filteredLog.filtered} of ${filteredLog.lines} results`;
+    }
+}
+
+function filterLogContent(logContent, logFilterToggles=null) {
+    if (!logContent) return;
+
+    function isValidLine(line) {
+        const assetRegex = /\b(Poster|Season|Show|Square|Error|Background)\b/i;
+        return assetRegex.test(line);
+    }
+
+    let result = {
+        content: '',
+        lines: 0,
+        updated: 0,
+        skipped: 0,
+        warning: 0,
+        error: 0,
+        filtered: 0
+    };
+
+    logContent.split("\n").forEach(line => {
+        if (!logFilterToggles) result.content += line + "\n";
+        if (logFilterToggles && line.includes("-----")) result.content += line + "\n";
+
+        if (isValidLine(line)) {
+            result.lines += 1;
+            if (line.includes("✅") || line.includes("♻️")) {
+                result.updated += 1;
+                if (logFilterToggles && logFilterToggles.updated.state) {
+                    result.content += line + "\n";
+                    result.filtered += 1;
+                }
+            } else if (line.includes("⏩")) {
+                result.skipped += 1;
+                if (logFilterToggles && logFilterToggles.skipped.state) {
+                    result.content += line + "\n";
+                    result.filtered += 1;
+                }
+            } else if (line.includes("⚠️")) {
+                result.warning += 1;
+                if (logFilterToggles && logFilterToggles.warning.state) {
+                    result.content += line + "\n";
+                    result.filtered += 1;
+                }
+            } else if (line.includes("❌")) {
+                result.error += 1;
+                if (logFilterToggles && logFilterToggles.error.state) {
+                    result.content += line + "\n";
+                    result.filtered += 1;
+                }
+            }
+        }
+    });
+    result.total = result.updated + result.skipped + result.warning + result.error
+    return result;
+}
+
+function configLogModalProperties() {
+    const modalEl = document.getElementById("run_log_modal");
+    if (!modalEl) return;
+
+    const dialog = modalEl.querySelector(".modal-dialog");
+    const header = modalEl.querySelector(".modal-header");
+    const content = modalEl.querySelector(".modal-content");
+
+    let isDragging = false;
+    let startX, startY, initialLeft, initialTop;
+
+    header.addEventListener("mousedown", (e) => {
+        if (e.target.closest(".btn-close")) return;
+
+        const dialogRect = dialog.getBoundingClientRect();
+
+        dialog.classList.add("is-dragging");
+
+        // Convert centered transform to explicit pixel coordinates ONLY when dragging starts
+        dialog.style.transform = "none";
+        dialog.style.left = `${dialogRect.left}px`;
+        dialog.style.top = `${dialogRect.top}px`;
+
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        initialLeft = dialogRect.left;
+        initialTop = dialogRect.top;
+
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+    });
+
+    function onMouseMove(e) {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        dialog.style.left = `${initialLeft + dx}px`;
+        dialog.style.top = `${initialTop + dy}px`;
+    }
+
+    function onMouseUp() {
+        isDragging = false;
+        dialog.classList.remove("is-dragging");
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+    }
+
+    // Wipe all custom inline position/size overrides on modal hide
+    modalEl.addEventListener("hidden.bs.modal", () => {
+        isDragging = false;
+        dialog.classList.remove("is-dragging");
+        dialog.removeAttribute("style");
+        if (content) {
+            content.removeAttribute("style");
+        }
+    });
+};
+
 function saveBulkImport(filename, nowLoad = null) {
 
     const textArea = document.getElementById("bulk_import_text");
@@ -1035,12 +2507,11 @@ function saveBulkImport(filename, nowLoad = null) {
     // And wait for a response
     socket.once("save_bulk_import", data => {
         if (validResponse(data)) {
-            if (data.saved === true) {
+            if (data.saved == true) {
                 loadBulkFileList();
                 bulkTextAsLoaded = textArea.value
                 updateBulkSaveButtonState()
                 if (data.now_load) {
-                    //console.log("Saved, now loading " + data.now_load)
                     loadBulkFile(data.now_load);
                 }
             }
@@ -1049,14 +2520,11 @@ function saveBulkImport(filename, nowLoad = null) {
 }
 
 function runBulkImport() {
-    const logTab = document.querySelector('#scraping-log-tab');
-    // Switch to the log tab
-    bootstrap.Tab.getOrCreateInstance(logTab).show();
-
-    socket.emit("start_bulk_import", {
+    socket.emit("start_bulk_import",{
         instance_id: instanceId,
         bulk_list: document.getElementById("bulk_import_text").value,
-        filename: currentBulkImport || document.getElementById("switch_bulk_file").value || "bulk_import.txt"
+        filename: currentBulkImport || document.getElementById("switch_bulk_file").value || "bulk_import.txt",
+        notify: document.getElementById("bulk_notify").checked
     });
 }
 
@@ -1065,19 +2533,19 @@ function runBulkImport() {
 (function () {
     'use strict';
     // Fetch all forms we want to apply custom Bootstrap validation styles to
-    const forms = document.querySelectorAll('.needs-validation');
+    var forms = document.querySelectorAll('.needs-validation');
 
     // Loop over them and prevent submission if invalid
     Array.prototype.slice.call(forms)
         .forEach(function (form) {
-            form.addEventListener('submit', function (event) {
-                if (!form.checkValidity()) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                }
-                form.classList.add('was-validated');
-            }, false);
-        });
+        form.addEventListener('submit', function (event) {
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            form.classList.add('was-validated');
+        }, false);
+    });
 })();
 
 /* =============================================
@@ -1117,6 +2585,10 @@ function inheritGlobalFiltersForScraper() {
     if (document.getElementById("scraper-filters-global").checked) {
         document.getElementById("scraper-filters").classList.remove("show");
     } else {
+        // If the "As set by global filters" checkbox is turned off, turn off each individual filter checkbox
+        document.querySelectorAll('[id^="filter-"]:checked').forEach(checkbox => {
+            checkbox.checked = false;
+        });
         document.getElementById("scraper-filters").classList.add("show");
     }
 }
@@ -1125,6 +2597,10 @@ function inheritGlobalFiltersForUploads() {
     if (document.getElementById("upload-filters-global").checked) {
         document.getElementById("upload-filters").classList.remove("show");
     } else {
+        // If the "As set by global filters" checkbox is turned off, turn off each individual filter checkbox
+        document.querySelectorAll('[id^=upload-filter-]:checked').forEach(checkbox => {
+            checkbox.checked = false;
+        });        
         document.getElementById("upload-filters").classList.add("show");
     }
 }
@@ -1209,7 +2685,6 @@ document.getElementById("rename_icon").addEventListener("click", function () {
 
         renameInput.addEventListener("blur", function () {
 
-            //console.log("Blur event triggered"); // Debugging line
             const newFilename = renameInput.value + ".txt"; // Ensure .txt is appended
             if (newFilename && newFilename !== filename) {
                 // Emit rename event
@@ -1226,6 +2701,14 @@ document.getElementById("rename_icon").addEventListener("click", function () {
 
                             // Set the currently loaded file
                             currentBulkImport = data.new_filename
+
+                            // Carry any schedules over to the new filename
+                            schedules.forEach(s => {
+                                if (s.file === data.old_filename) {
+                                    s.file = data.new_filename;
+                                }
+                            });
+                            updateSchedulerIcon();
 
                             // If the renamed file is the default, update the config
                             const bulkImportFileField = document.getElementById("bulk_import_file");
@@ -1268,7 +2751,7 @@ document.getElementById("delete_icon").addEventListener("click", function () {
 
     // Prevent deleting if the selected file is the default file
     if (filename === defaultBulkFile) {
-        alert("You cannot delete the default bulk file.");
+        updateStatus("You cannot delete the default bulk import file", "danger", false, false, "x-circle");
         return; // Exit the function if it's the default file
     }
 
@@ -1289,7 +2772,11 @@ document.getElementById("delete_icon").addEventListener("click", function () {
                         bulkTextAsLoaded = null
                         loadBulkFileList(); // Reload the file list if deleted
                         loadBulkFile(defaultBulkFile);
-                        updateBulkSaveButtonState()
+                        updateBulkSaveButtonState();
+                        // The server removes the file's schedules authoritatively;
+                        // mirror it in the local list.
+                        schedules = schedules.filter(s => s.file !== data.filename);
+                        updateSchedulerIcon();
                     }
                 }
             });
@@ -1297,14 +2784,14 @@ document.getElementById("delete_icon").addEventListener("click", function () {
     }
 });
 
-// Function to handle uploading a bulk file
+// Function to handle creating a new bulk file
 document.getElementById("create_icon").addEventListener("click", function () {
     // Create a new bulk import file
-    socket.emit("create_bulk_file", {instance_id: instanceId});
+    socket.emit("create_bulk_file", { instance_id: instanceId });
 
     socket.once("create_bulk_file", (data) => {
         if (data.created) {
-            updateStatus("New bulk file created: " + data.filename, "success", false, false, "check-circle");
+            updateStatus("Created " + data.filename, "success", false, false, "check2-circle");
             // Store the filename to load after refresh
             const newFilename = data.filename;
             // The backend will emit load_bulk_filelist, so we just need to handle it
@@ -1342,8 +2829,8 @@ document.getElementById("download_icon").addEventListener("click", function () {
     const filename = currentBulkImport || document.getElementById("switch_bulk_file").value;
     if (filename) {
         downloadBulkImportFile(filename)
-    socket.emit("display_message", { "instance_id": instanceId, "message": `📥 ${filename} • File successfully downloaded`, "level": "log" });
-    updateStatus(filename + " successfully downloaded", "success", false, false, "check-circle");
+        socket.emit("display_message", { "instance_id": instanceId, "message": `📥 ${filename} • File successfully downloaded`, "level": "log" });
+        updateStatus(filename + " successfully downloaded", "success", false, false, "check2-circle");
     }
 });
 
@@ -1357,6 +2844,7 @@ function downloadBulkImportFile(filename) {
     document.body.removeChild(a);
 }
 
+// Function to handle uploading a bulk file
 document.getElementById("upload_icon").addEventListener("click", function () {
     document.getElementById("bulk_import_upload").value = "";
     document.getElementById("bulk_import_upload").click(); // Trigger file input click
@@ -1370,6 +2858,8 @@ function uploadBulkImportFile(event) {
 
         if (!file.name.endsWith('.txt')) {
             console.error("Invalid file type. Only .txt files are allowed.");
+            socket.emit("display_message", { "instance_id": instanceId, "message": "🚫 " + file.name + " • Invalid file type. Only .txt files are allowed.", "level": "log" });
+            updateStatus("Invalid file type. Only .txt files are allowed.", "danger", false, false, "x-circle");
             return;
         }
 
@@ -1389,14 +2879,13 @@ function uploadBulkImportFile(event) {
         if (fileExists) {
             const confirmOverwrite = confirm("File '" + file.name + "' already exists. Would you like to overwrite it?");
             if (!confirmOverwrite) {
-                //console.log("User chose not to overwrite the file.");
                 return;
             }
         }
 
         // Proceed with reading and processing the file
         const reader = new FileReader();
-        reader.onload = function (e) {
+        reader.onload = function(e) {
             const text = e.target.result;
 
             const bulkTextArea = document.getElementById("bulk_import_text");
@@ -1408,7 +2897,9 @@ function uploadBulkImportFile(event) {
                         saveBulkImport(currentBulkImport);
                     }
 
-                    if (confirmed !== "cancel") {
+                    if (confirmed === "cancel") {
+                        return
+                    } else {
                         bulkTextArea.value = text;
                         bulkTextAsLoaded = text;
                         currentBulkImport = file.name;
@@ -1446,6 +2937,7 @@ document.getElementById("default_bulk_file_icon").addEventListener("click", func
         // Disable the icon to prevent further changes
         this.classList.add("disabled");
 
+        socket.emit("display_message", { "instance_id": instanceId, "message": `✅ Default bulk import file set to '${selectedFile}'`, "level": "log" });
         // Save the configuration change
         saveConfig();
     }
@@ -1482,9 +2974,8 @@ dropArea.addEventListener("drop", (e) => {
 });
 
 dropArea.addEventListener("click", () => {
-
     const form = document.getElementById("upload_form");
-
+    
     if (!form.checkValidity()) {
         form.classList.add('was-validated');
         return;
@@ -1500,19 +2991,16 @@ dropArea.addEventListener("click", () => {
 });
 
 function uploadFile(file) {
-    // Switch to the log tab
-    const logTab = document.querySelector('#scraping-log-tab');
-    bootstrap.Tab.getOrCreateInstance(logTab).show();
-
-    socket.emit("display_message", {"message": `Uploading '${file.name}'...`, "title": "uploadFile"});
 
     const reader = new FileReader();
 
     let offset = 0;
+    let isAborted = false;
 
     reader.onload = function (event) {
         const arrayBuffer = event.target.result;
         const totalChunks = Math.ceil(arrayBuffer.byteLength / CHUNK_SIZE);
+        let startTime = performance.timeOrigin + performance.now();
 
         function arrayBufferToBase64(buffer) {
             return new Promise((resolve) => {
@@ -1527,6 +3015,8 @@ function uploadFile(file) {
         }
 
         function sendChunk() {
+            if (isAborted) return;
+
             if (offset >= arrayBuffer.byteLength) {
                 console.log("All chunks sent, emitting upload_complete event.");
 
@@ -1534,8 +3024,8 @@ function uploadFile(file) {
                 let options = [];
                 document.querySelectorAll('[id^="upload-option-"]:checked').forEach(checkbox => {
                     options.push(checkbox.value);
-                });
-
+                });   
+                
                 // Collect checked checkboxes with ids starting with "upload-filter-"
                 let filters = [];
                 if (!document.getElementById("upload-filters-global").checked) {
@@ -1547,10 +3037,6 @@ function uploadFile(file) {
                 const plex_year = document.getElementById("plex_year").value;
                 const plex_title = document.getElementById("plex_title").value;
 
-                socket.emit("display_message", {
-                    "message": `Successfully uploaded '${file.name}'`,
-                    "title": "uploadFile"
-                });
                 socket.emit("upload_complete", {
                     instance_id: instanceId,
                     fileName: file.name,
@@ -1559,7 +3045,6 @@ function uploadFile(file) {
                     plex_title: plex_title,
                     plex_year: plex_year
                 });
-                progress_bar(100, "Upload complete!");
 
                 return; // Ensure no further execution in this function
             }
@@ -1567,43 +3052,48 @@ function uploadFile(file) {
             const chunk = arrayBuffer.slice(offset, offset + CHUNK_SIZE);
 
             arrayBufferToBase64(chunk).then(base64Chunk => {
+                if (isAborted) return;
+                
+                let currentTime = performance.timeOrigin + performance.now();
+                let totalSize = arrayBuffer.byteLength / 1000000;
                 socket.emit("upload_artwork_chunk", {
                     instance_id: instanceId,
                     fileName: file.name,
                     chunkData: base64Chunk,
                     chunkIndex: offset / CHUNK_SIZE,
-                    totalChunks: totalChunks
+                    totalChunks: totalChunks,
+                    totalSize: totalSize,
+                    startTime: startTime,
+                    currentTime: currentTime
+                }, (ack) => {
+                    if (ack === "ok") {
+                        if (isAborted) return;
+
+                        offset += CHUNK_SIZE; // Offset is in bytes
+                        sendChunk();
+                    } else if (ack === "abort") {
+                        isAborted = true;
+                        return;
+                    } else {
+                        console.error("Backend failed to acknowledge chunk.")
+                    }
                 });
-
-                offset += CHUNK_SIZE;
-                let progress = Math.round((offset / arrayBuffer.byteLength) * 100);
-                updateStatus(`Uploading '${file.name}'...`, "info", false, false, "cloud-upload");
-                progress_bar(progress, `${progress}%`);
-
-                if (offset < arrayBuffer.byteLength) {
-                    setTimeout(sendChunk, 10);
-                } else {
-                    console.log("Final chunk sent, triggering upload_complete...");
-                    sendChunk(); // This ensures the final event fires
-                }
             });
         }
-
         sendChunk();
     };
-
     reader.readAsArrayBuffer(file);
 }
 
 socket.on("upload_progress", function (data) {
-    if (validResponse(data)) {
-        progress_bar(data.progress);
+    if(validResponse(data)) {
+        progressBar(data.progress, `${progress}%`);
     }
 });
 
 socket.on("upload_complete", function (data) {
-    if (validResponse(data)) {
-        progress_bar(100, "Upload complete!");
+    if(validResponse(data)) {
+        progressBar(100,"Upload complete!");
     }
 });
 
@@ -1611,162 +3101,488 @@ socket.on("upload_complete", function (data) {
 // Scheduler
 // =====================
 
-function updateOrAddSchedule(fileName, newTime, jobReference = null) {
-    const schedule = schedules.find(s => s.file === fileName);
-    if (schedule) {
-        schedule.time = newTime;
-        schedule.jobReference = jobReference;
-    } else {
-        schedules.push({file: fileName, time: newTime});
+    let editingScheduleId = null; // Set while the form is editing an existing schedule rather than adding a new one
+    let editingScheduleLastRun = null;
+    let editingScheduleLastRunStatus = null;
+
+    function describeSchedule(s) {
+        let text = "";
+        if (s.time) {
+            text = `Daily at ${s.time}`;
+        } else {
+            const unit = s.interval_value === 1 ? s.interval_unit.replace(/s$/, "") : s.interval_unit;
+            text = `Every ${s.interval_value} ${unit}`;
+        }
+
+        if (s.next_run) {
+            let status_badge = ""
+            const formattedNextRun = formatDateTime(s.next_run);
+            const formattedLastRun = formatDateTime(s.last_run)
+            if (formattedNextRun){
+                text = `${text} <span class="badge text-body-secondary bg-body-tertiary border ms-2 fw-normal fs-7">${formattedNextRun}</span>`;
+            }
+            if (s.last_run_status) {
+                const outcome = RUN_HISTORY_OUTCOME_LABELS[s.last_run_status]
+                const colorClass = s.last_run_status === "never_run" 
+                    ? "secondary" 
+                    : (outcome?.iconColor || "secondary");
+                const iconClass = s.last_run_status === "never_run"
+                    ? "bi bi-question-circle-fill"
+                    : `bi bi-${outcome?.icon || "bi bi-question-circle-fill"}`;
+                const titleText = outcome ? `${outcome.text} (${formattedLastRun})` : "Never run";
+                const status_badge = `<i class="text-${colorClass} ${iconClass} ms-2 align-middle" title="${titleText}"></i>`;
+                text = `${text}${status_badge}`
+            }
+        }
+        return text;
     }
-}
 
-// Show the time selector when the clock icon is clicked
-scheduleIcon.addEventListener("click", function () {
-
-    const iconRect = scheduleIcon.getBoundingClientRect();
-
-    // Position tooltip relative to the icon
-    timeSelectBox.style.top = `${iconRect.bottom + window.scrollY + 10}px`; // Below the icon
-    timeSelectBox.style.right = `${window.innerWidth - iconRect.right - window.scrollX - 15}px`; // Align right edge
-
-    // Toggle visibility
-    timeSelectBox.classList.toggle("show-tooltip");
-
-});
-
-document.addEventListener("click", function (event) {
-    if (!timeSelectBox.contains(event.target) && !scheduleIcon.contains(event.target)) {
-        timeSelectBox.classList.remove("show-tooltip");
+    function getSchedulesForFile(fileName) {
+        return schedules.filter(s => s.file === fileName);
     }
-});
 
-// Handle setting the time
-setTimeBtn.addEventListener("click", function () {
-    const selectedTime = scheduleTimeInput.value;
-    if (selectedTime) {
-        socket.emit("add_schedule", {instance_id: instanceId, file: currentBulkImport, time: selectedTime})
+    socket.on("get_schedules", (data) => {
+        if (validResponse(data, true)) {
+            schedules = data.schedules
+            updateSchedulerIcon();
+        } else {
+            console.log("Unable to obtain schedules from backend")
+        }
+    });
+
+    // Show the time selector when the clock icon is clicked
+    scheduleIcon.addEventListener("click", function () {
+        socket.emit("get_schedules", {instance_id: instanceId})
+
+        const iconRect = scheduleIcon.getBoundingClientRect();
+        const boxWidth = timeSelectBox.offsetWidth || 300; // Fallback width
+
+        // Vertical placement below icon
+        timeSelectBox.style.top = `${iconRect.bottom + window.scrollY + 10}px`;
+
+        // Horizontal placement bounded to screen edges (15px padding)
+        let leftPos = iconRect.right + window.scrollX - boxWidth + 13;
+        leftPos = Math.max(15, Math.min(leftPos, window.innerWidth - boxWidth - 15));
+        timeSelectBox.style.left = `${leftPos}px`;
+        timeSelectBox.style.right = 'auto';
+
+        // Align arrow directly under the clock icon center
+        const arrow = document.getElementById("tooltip_arrow");
+        if (arrow) {
+            const arrowOffset = (iconRect.left + window.scrollX + (iconRect.width / 2)) - leftPos;
+            arrow.style.left = `${Math.max(15, Math.min(arrowOffset, boxWidth - 25))}px`;
+            arrow.style.right = 'auto';
+        }
+
+        // Reset the state of selected schedules
+        resetScheduleForm();
+        
+        // Toggle visibility
+        timeSelectBox.classList.toggle("show-tooltip");
+
+    });
+
+    document.addEventListener("click", function (event) {
+        if (!timeSelectBox.contains(event.target) && !scheduleIcon.contains(event.target)) {
+            resetScheduleForm();
+            timeSelectBox.classList.remove("show-tooltip");
+        }
+    });
+
+    // Toggle between the "daily at a time" and "every N hours/days" inputs
+    scheduleTypeSelect.addEventListener("change", function () {
+        const isDaily = scheduleTypeSelect.value === "daily";
+
+        scheduleTimeGroup.classList.toggle("d-none", !isDaily);
+        scheduleIntervalGroup.classList.toggle("d-none", isDaily);
+        runNowLabel.classList.toggle("d-none", isDaily);
+        runNowCheckbox.checked = !isDaily;
+        
+        // Initialize tooltip if switching to interval schedule
+        if (!isDaily) {
+            const tooltipIcon = document.getElementById("run_now_info_icon");
+            if (tooltipIcon) {
+                // Dispose of any old/stale instance created while hidden
+                const existingInstance = bootstrap.Tooltip.getInstance(tooltipIcon);
+                if (existingInstance) {
+                    existingInstance.dispose();
+                }
+                // Create fresh instance NOW that the element has non-zero dimensions!
+                new bootstrap.Tooltip(tooltipIcon, {
+                    html: true,
+                    sanitize: false,
+                    container: 'body', // Appends to <body> so z-index/popover clipping is bypassed
+                    trigger: 'hover'
+                });
+            }
+        }
+    });
+
+    function resetScheduleForm() {
+        const fileSchedules = getSchedulesForFile(currentBulkImport);
+        fileSchedules.forEach(s => {
+            const row = document.getElementById(s.id);
+            if (row){
+                row.classList.remove("bg-body-secondary");
+                row.classList.remove("border-primary");
+            };
+        });
+        editingScheduleId = null;
+        editingScheduleLastRun = null;
+        editingScheduleLastRunStatus = null;
+        setTimeBtn.innerHTML = '<i class="bi bi-plus-lg"></i>';
+        setTimeBtn.classList.add("btn-primary");
+        setTimeBtn.classList.remove("btn-success");
+        scheduleTypeSelect.value = "daily";
+        scheduleTimeGroup.classList.remove("d-none");
+        scheduleIntervalGroup.classList.add("d-none");
+        scheduleTimeInput.value = "";
+        scheduleIntervalValueInput.value = 1;
+        scheduleIntervalUnitSelect.value = "hours";
+        runNowLabel.classList.add("d-none");
+        runNowCheckbox.checked = true;
+    }
+
+    function editSchedule(s) {
+        editingScheduleId = s.id;
+        editingScheduleLastRun = s.last_run;
+        editingScheduleLastRunStatus = s.last_run_status;
+        setTimeBtn.innerHTML = '<i class="bi bi-arrow-counterclockwise"></i>';
+        setTimeBtn.classList.remove("btn-primary");
+        setTimeBtn.classList.add("btn-success");
+        if (s.time) {
+            scheduleTypeSelect.value = "daily";
+            scheduleTimeGroup.classList.remove("d-none");
+            scheduleIntervalGroup.classList.add("d-none");
+            scheduleTimeInput.value = s.time;
+            runNowLabel.classList.add("d-none");
+        } else {
+            scheduleTypeSelect.value = "interval";
+            scheduleTimeGroup.classList.add("d-none");
+            scheduleIntervalGroup.classList.remove("d-none");
+            scheduleIntervalValueInput.value = s.interval_value;
+            scheduleIntervalUnitSelect.value = s.interval_unit;
+            runNowLabel.classList.remove("d-none");
+            runNowCheckbox.checked = true;
+        }
+    }
+
+    // Handle adding or updating a schedule
+    setTimeBtn.addEventListener("click", function () {
+        const payload = { instance_id: instanceId, file: currentBulkImport };
+        if (editingScheduleId) {
+            payload.id = editingScheduleId;
+            payload.last_run = editingScheduleLastRun;
+            payload.last_run_status = editingScheduleLastRunStatus;
+        } else {
+            payload.last_run_status = "never_run";
+        }
+
+        if (scheduleTypeSelect.value === "daily") {
+            if (!scheduleTimeInput.value) return;
+            payload.time = scheduleTimeInput.value;
+        } else {
+            const intervalValue = parseInt(scheduleIntervalValueInput.value, 10);
+            if (!intervalValue || intervalValue < 1) return;
+            payload.interval_value = intervalValue;
+            payload.interval_unit = scheduleIntervalUnitSelect.value;
+            payload.run_now = runNowCheckbox.checked
+        }
+
+        socket.emit("add_schedule", payload);
 
         // Wait for response on add schedule
         socket.once("add_schedule", (data) => {
             if (validResponse(data)) {
                 if (data.added) {
-                    updateOrAddSchedule(data.file, data.time, data.jobReference);
+                    schedules = schedules.filter(s => s.id !== data.id);
+                    schedules.push({
+                        id: data.id,
+                        file: data.file,
+                        time: data.time,
+                        interval_value: data.interval_value,
+                        interval_unit: data.interval_unit,
+                        next_run: data.next_run,
+                        last_run_status: data.last_run_status
+                    });
                     updateSchedulerIcon();
-                    timeSelectBox.classList.remove("show-tooltip");
                 }
             }
         });
-
-    }
-});
-
-// Handle cancelling the schedule
-cancelTimeBtn.addEventListener("click", function () {
-    socket.emit("delete_schedule", {instance_id: instanceId, file: currentBulkImport})
-
-    // Wait for response
-    socket.once("delete_schedule", (data) => {
-        if (validResponse(data)) {
-            if (data.deleted) {
-                // Get the value of the default bulk file from the hidden field
-                console.log(schedules)
-                updateOrAddSchedule(data.file, null, null)
-                console.log(schedules)
-                updateSchedulerIcon();
-            } else {
-
-            }
-            timeSelectBox.classList.remove("show-tooltip");
-        }
     });
 
-});
-
-function updateSchedulerIcon() {
-    let details = getScheduleDetails(currentBulkImport);
-    // console.log(schedules)
-    if (details && details['time']) {
-        scheduleIcon.classList.remove("bi-clock");
-        scheduleIcon.classList.add("bi-clock-fill"); // Change to filled icon
-        setContainer.classList.remove("show"); // Hide set button
-        cancelContainer.classList.add("show"); // Show cancel button
-        scheduleTimeInput.value = details['time'];
-        scheduleTimeInput.readOnly = true;
-        scheduleIcon.classList.add("text-success");
-    } else {
-        scheduleIcon.classList.add("bi-clock");
-        scheduleIcon.classList.remove("bi-clock-fill"); // Change to filled icon
-        scheduleIcon.classList.remove("text-success");
-        setContainer.classList.add("show"); // Show set button
-        cancelContainer.classList.remove("show"); // Hide cancel button
-        scheduleTimeInput.value = "";
-        scheduleTimeInput.readOnly = false;
+    // Handle removing a schedule from the list
+    function deleteSchedule(scheduleId) {
+        // Uses the ack callback (rather than a shared "once" listener) so that
+        // deleting several schedules in a row - e.g. all of a file's schedules
+        // when the file itself is deleted - matches each response to its own
+        // request instead of every listener consuming the first reply.
+        socket.emit("delete_schedule", { instance_id: instanceId, id: scheduleId }, (data) => {
+            if (data && data.deleted) {
+                schedules = schedules.filter(s => s.id !== data.id);
+                updateSchedulerIcon();
+            }
+        });
     }
-}
 
-function getScheduleDetails(fileName) {
-    return schedules.find(s => s.file === fileName);
-}
+    function formatDateTime(isoString) {
+        if (!isoString) return "";
+        
+        try {
+            const date = new Date(isoString);
+            if (isNaN(date.getTime())) return "";
+
+            const today = new Date();
+            
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+
+            const isToday = date.toDateString() === today.toDateString();
+            const isTomorrow = date.toDateString() === tomorrow.toDateString();
+            const isYesterday = date.toDateString() === yesterday.toDateString();
+
+            // Format time as HH:MM
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const timeStr = `${hours}:${minutes}`;
+
+            if (isToday) {
+                return `Today at ${timeStr}`;
+            } else if (isTomorrow) {
+                return `Tomorrow at ${timeStr}`;
+            } else if (isYesterday) {
+                return `Yesterday at ${timeStr}`;
+            }
+
+            // Format date as "Aug 14, 23:58"
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const month = monthNames[date.getMonth()];
+            const day = date.getDate();
+
+            return `${month} ${day}, ${timeStr}`;
+        } catch (e) {
+            // Fallback: strip ISO microseconds and timezone if regex/date fails
+            return isoString.replace("T", " ").replace(/\.\d+/, "").slice(0, 16);
+        }
+    }
+
+    function renderScheduleList() {
+        scheduleListEl.innerHTML = "";
+        const fileSchedules = getSchedulesForFile(currentBulkImport);
+
+        if (!fileSchedules.length) return;
+
+        const title = document.createElement("label");
+        title.innerHTML = '<i class="bi bi-calendar-check"></i>&ensp;Current schedules';
+        scheduleListEl.appendChild(title);
+        
+        fileSchedules.forEach((s, i, arr) => {
+            
+            const item = document.createElement("li");
+            item.id = s.id;
+            item.className = "list-group-item d-flex justify-content-between align-items-center";
+
+            const isFirst = i === 0;
+            const isLast = i === arr.length - 1;
+
+            if (isFirst) item.classList.add("mt-2", "rounded-top");
+            if (isLast) item.classList.add("mb-2", "rounded-bottom");
+
+            const label = document.createElement("span");
+            label.innerHTML = describeSchedule(s);
+            label.setAttribute("role", "button");
+            label.addEventListener("click", () => {
+                if (s.id != editingScheduleId) {
+                    activeRow = document.getElementById(editingScheduleId);
+                    if (activeRow) {
+                        activeRow.classList.remove("bg-body-secondary");
+                        activeRow.classList.remove("border-primary");
+                    };
+                    label.parentElement.classList.toggle("bg-body-secondary");
+                    label.parentElement.classList.toggle("border-primary");
+                    editSchedule(s);
+                } else {
+                    resetScheduleForm();
+                }
+            });
+
+            const deleteBtn = document.createElement("i");
+            deleteBtn.className = "bi bi-trash3 text-danger delete-schedule-btn";
+            deleteBtn.setAttribute("role", "button");
+            deleteBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                deleteSchedule(s.id);
+            });
+
+            item.appendChild(label);
+            item.appendChild(deleteBtn);
+            scheduleListEl.appendChild(item);
+        });
+    }
+
+    function updateSchedulerIcon(){
+        const fileSchedules = getSchedulesForFile(currentBulkImport);
+        renderScheduleList();
+
+        if (fileSchedules.length > 0) {
+            scheduleIcon.classList.remove("bi-clock");
+            scheduleIcon.classList.add("bi-clock-fill"); // Change to filled icon
+            scheduleIcon.classList.add("text-success"); // Turn icon green
+        } else {
+            scheduleIcon.classList.add("bi-clock"); // Change to unfilled icon
+            scheduleIcon.classList.remove("bi-clock-fill");
+            scheduleIcon.classList.remove("text-success"); // Remove green color
+        }
+
+        resetScheduleForm();
+    }
+
+
 
 function updateApp() {
-    document.getElementById("version_notifier").style.display = "none";
-    socket.emit("update_app", {instance_id: instanceId});
+    document.getElementById("version_notifier").classList.add("d-none");
+    socket.emit("update_app", { instance_id: instanceId});
 }
 
-socket.on("update_failed", function (data) {
+socket.on("update_failed", function(data) {
     alert("Update failed: " + data.error);
 });
 
 
-socket.on("backend_restarting", function () {
-    console.log("Backend restarting, refreshing frontend too...");
+function logout(message, severity, timeout) {
+    updateStatus(message, severity, true, true, "arrow-counterclockwise");
     setTimeout(() => {
-        location.reload();  // Reload the page
-    }, 3000);  // Delay for 2 seconds to ensure restart
+        location.replace("/logout");
+    }, timeout);
+}
+
+socket.on("logout", function() {
+    console.log("Auth settings changed, you must log in again...");
+    logout("Authentication settings changed, you must log in again. Reloading...", "warning", 2000);
+});
+
+function reload(message, severity, timeout) {
+    updateStatus(message, severity, true, true, "arrow-counterclockwise");
+    setTimeout(() => {
+        location.reload();
+    }, timeout);
+}
+
+socket.on("backend_restarting", function() {
+    console.log("Backend restarting, refreshing frontend too...");
+    reload("Backend restarting, refreshing frontend too...", "warning", 3000);
+});
+
+// After a reconnect the backend may have been updated while this page was open
+socket.on("connect", function() {
+    if (knownBackendVersion !== null) {
+        socket.emit("check_for_update", { instance_id: instanceId });
+    }
 });
 
 // Detect when the WebSocket connection is lost
-socket.on("disconnect", function () {
+socket.on("disconnect", function() {
     console.log("WebSocket disconnected, attempting to reconnect...");
-    // Refresh the page to reconnect to the WebSocket
-    setTimeout(() => {
-        location.reload();  // Reload to attempt reconnection
-    }, 3000);  // Delay for 3 seconds before refresh to allow connection retry
+    reload("Connection to server lost, reconnecting...", "warning", 3000);
 });
 
-// The server refuses Socket.IO connections without a valid session; reloading
-// sends the browser back through the login flow instead of retrying forever
-socket.on("connect_error", function (error) {
-    if (String(error && error.message).includes("Authentication required")) {
-        location.reload();
-    }
-});
 
 // ==================================================
 // Authentication Settings Toggle
 // ==================================================
 
-/**
- * Show the credential fields that belong to the selected authentication mode.
- *
- * Local credentials stay visible in OIDC mode because they are the break-glass
- * way back in when the identity provider is unreachable.
- */
 function toggleAuthSettings() {
-    const mode = document.getElementById("auth_mode").value;
-    const showPassword = mode === "password" ||
-        (mode === "oidc" && document.getElementById("oidc_allow_password_fallback").checked);
-    document.getElementById("auth_settings").style.display = showPassword ? "block" : "none";
-    document.getElementById("oidc_settings").style.display = mode === "oidc" ? "block" : "none";
-    document.getElementById("oidc_redirect_uri_hint").textContent =
-        (document.getElementById("external_url").value.trim().replace(/\/$/, "") || window.location.origin) +
-        "/auth/oidc/callback";
+    const authEnabled = document.getElementById("auth_enabled").checked;
+    const authSettings = document.getElementById("auth_settings");
+
+    authSettings.style.display = authEnabled ? "block" : "none";
 }
 
-document.getElementById("auth_mode").addEventListener("change", toggleAuthSettings);
-document.getElementById("oidc_allow_password_fallback").addEventListener("change", toggleAuthSettings);
-document.getElementById("external_url").addEventListener("input", toggleAuthSettings);
+function updateCallbackAlert () {
+    const callbackAlert = document.getElementById("callback_alert");
+    const externalURL = document.getElementById("external_url");
+
+    if (externalURL.value.includes("https://")) {
+        callbackAlert.innerHTML = `<i class="bi bi-info-circle"></i>&ensp;Add <code></code> as an allowed callback URL in your OIDC provider. Optionally, you can add <code></code> as a logout callback URL if supported by your provider.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>`
+        const callbackCodes = callbackAlert.querySelectorAll("code");
+        callbackCodes[0].textContent = `${externalURL.value}/login/oidc/callback`;
+        callbackCodes[1].textContent = `${externalURL.value}/login`;
+        callbackAlert.style.display = "block";
+    } else {
+        callbackAlert.style.display = "none";
+    }
+}
+
+function toggleOIDCSettings() {
+    const oidcEnabled = document.getElementById("oidc_enabled").checked;
+    const oidcSettings = document.getElementById("oidc_settings");
+    const issuerURL = document.getElementById("oidc_issuer");
+    const clientID = document.getElementById("oidc_client_id");
+    const clientSecret = document.getElementById("oidc_client_secret");
+    const externalURL = document.getElementById("external_url");
+
+    updateCallbackAlert();
+
+    if (oidcEnabled) {
+        oidcSettings.style.display = "block";
+        issuerURL.setAttribute("required", "");
+        clientID.setAttribute("required", "");
+        clientSecret.setAttribute("required", "");
+        externalURL.setAttribute("required", "");
+        externalURL.addEventListener("input", updateCallbackAlert)
+    } else {
+        oidcSettings.style.display = "none";
+        issuerURL.removeAttribute("required");
+        clientID.removeAttribute("required");
+        clientSecret.removeAttribute("required");
+        externalURL.removeAttribute("required");
+    }
+}
+
+// Add event listener for auth_enabled checkbox
+document.getElementById("auth_enabled").addEventListener("change", toggleAuthSettings);
+document.getElementById("oidc_enabled").addEventListener("change", toggleOIDCSettings)
+
+// ==================================================
+// Webhook Settings Toggle
+// ==================================================
+
+function toggleWebhookSettings() {
+    const enabled = document.getElementById("enable_webhooks").checked;
+    document.getElementById("webhook_settings").style.display = enabled ? "block" : "none";
+    // When enabling with an empty token, pre-fill a random one. getRandomValues works in
+    // insecure (plain http) contexts, unlike crypto.randomUUID.
+    const tokenField = document.getElementById("webhook_token");
+    if (enabled) {
+        tokenField.setAttribute("required", "");
+        if (tokenField.dataset.originalValue) {
+            tokenField.value = tokenField.dataset.originalValue;
+        }
+    } else {
+        tokenField.removeAttribute("required");
+        tokenField.classList.remove("is-invalid", "is-valid");
+        if (!tokenField.dataset.originalValue) {
+            tokenField.dataset.originalValue = tokenField.value;
+        }
+        tokenField.value='';
+    }
+}
+
+function generateRandomToken() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
+}
+
+document.getElementById("generate_webhook_token").addEventListener("click", function () {
+    document.getElementById("webhook_token").value = generateRandomToken();
+    toggleConfigButtons();
+})
+
+document.getElementById("enable_webhooks").addEventListener("change", toggleWebhookSettings);
 
 // ==================================================
 // Kometa Settings Toggle
@@ -1774,16 +3590,34 @@ document.getElementById("external_url").addEventListener("input", toggleAuthSett
 
 function toggleKometaSettings() {
     const saveToKometa = document.getElementById("save_to_kometa").checked;
+    const plexLocalAssets = document.getElementById("plex_local_assets");
     const kometaSettings = document.getElementById("kometa_settings");
     const kometaBase = document.getElementById("kometa_base");
+    const dockerWarning = document.getElementById("docker_warning");
+
     if (saveToKometa) {
+        plexLocalAssets.checked = false;
+        togglePathMappings();
         kometaSettings.style.display = "block";
+        if (docker) {
+            if (dockerWarning) {
+                dockerWarning.classList.remove("d-none");
+            }
+        } else {
+            if (dockerWarning) {
+                dockerWarning.classList.add("d-none");
+            }
+        }
         if (kometaBase) {
+            // Make the Kometa base directory field required
             kometaBase.required = true;
             // Optionally clear any previous invalid state so the user can re-validate
             kometaBase.classList.remove('is-invalid');
         }
     } else {
+        if (dockerWarning) {
+            dockerWarning.classList.add("d-none");
+        }
         kometaSettings.style.display = "none";
         if (kometaBase) {
             kometaBase.required = false;
@@ -1791,25 +3625,124 @@ function toggleKometaSettings() {
             kometaBase.classList.remove('is-invalid');
         }
     }
-    // Update the label for the "force" option depending on Kometa mode
-    const forceLabel = document.querySelector('label[for="option-force"]');
-    const forceLabelUpload = document.querySelector('label[for="upload-option-force"]');
-    if (forceLabel) {
-        if (saveToKometa) {
-            forceLabel.textContent = 'Force save the artwork, replacing any existing asset';
-            forceLabelUpload.textContent = 'Force save the artwork, replacing any existing asset';
-        } else {
-            forceLabel.textContent = 'Force upload the artwork, even if it already exists';
-            forceLabelUpload.textContent = 'Force upload the artwork, even if it already exists';
-        }
-    }
-
+    
     // Check if temp option should be shown, the Plex options should be hidden, and the stage option in the scraper tab should be hidden
     toggleTempCheckbox();
     togglePlexOptions();
     toggleScraperStageCheckbox();
     toggleSkipLockedCheckbox();
+    toggleKometaLabels();
 }
+
+// Fork: Radarr/Sonarr pre-seed settings visibility (no upstream equivalent)
+function toggleArrSettings() {
+    const preseedArr = document.getElementById("preseed_arr").checked;
+    const arrSettings = document.getElementById("arr_settings");
+    if (arrSettings) {
+        arrSettings.style.display = preseedArr ? "block" : "none";
+    }
+}
+
+// Fork: live-validate a JSON-object textarea so checkValidity() reflects the
+// current text before the save button's click handler reads it.
+function validateJsonMapField(elementId) {
+    const field = document.getElementById(elementId);
+    const raw = field.value.trim();
+    if (!raw) {
+        field.setCustomValidity("");
+        return;
+    }
+    try {
+        JSON.parse(raw);
+        field.setCustomValidity("");
+    } catch (e) {
+        field.setCustomValidity("Invalid JSON format. Please use valid JSON syntax.");
+    }
+}
+
+// Fork: parse a JSON-object textarea for save, after checkValidity() has already
+// confirmed it (via validateJsonMapField) - guard with try/catch regardless.
+function parseJsonMapField(elementId) {
+    const raw = document.getElementById(elementId).value.trim();
+    if (!raw) return {};
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        return {};
+    }
+}
+
+function toggleKometaLabels() {
+    const saveToKometa = document.getElementById("save_to_kometa").checked;
+    const plexLocalAssets = document.getElementById("plex_local_assets").checked;
+    const localAssetMode = saveToKometa || plexLocalAssets;
+    const downloadTimeout = document.getElementById("download_timeout_container");
+    const uploadTimeoutLabel = document.getElementById("plex_timeout_label");
+    const uploadRetryLabel = document.getElementById("upload_retry_label");
+    const forceLabel = document.querySelector('label[for="option-force"]');
+    const forceLabelUpload = document.querySelector('label[for="upload-option-force"]');
+
+    if (localAssetMode) {
+        downloadTimeout.classList.remove("d-none");
+        uploadTimeoutLabel.innerHTML='<i class="bi bi-plugin"></i>&ensp;Plex connect timeout:';
+        uploadRetryLabel.textContent="download";
+        forceLabel.textContent = 'Force save the artwork, replacing any existing asset';
+        forceLabelUpload.textContent = 'Force save the artwork, replacing any existing asset';
+    } else {
+        downloadTimeout.classList.add("d-none");
+        uploadTimeoutLabel.innerHTML='<i class="bi bi-cloud-upload"></i>&ensp;Plex connect/upload timeout:';
+        uploadRetryLabel.textContent="upload";
+        forceLabel.textContent = 'Force upload the artwork, even if it\'s locked or it already exists';
+        forceLabelUpload.textContent = 'Force upload the artwork, even if it\'s locked or it already exists';
+    }
+}
+
+function toggleSkipLockedCheckbox() {
+    const saveToKometa = document.getElementById("save_to_kometa").checked;
+    const plexLocalAssets = document.getElementById("plex_local_assets").checked;
+    const localAssetMode = saveToKometa || plexLocalAssets;
+    const globalSkipLocked = document.getElementById("skip_locked_artwork");
+    const skipLockedScraperOption = document.getElementById("option-skip-locked");
+    const skipLockedUploadOption = document.getElementById("upload-option-skip-locked");
+    const globalAllowArtistUpdates = document.getElementById("allow_artist_updates");
+    const allowArtistUpdatesScrapeOption = document.getElementById("option-allow-artist-updates");
+    const trackArtworkIDs = document.getElementById("track_artwork_ids").checked;
+    
+    // Hide and uncheck the skip locked option if Kometa is enabled
+    if (localAssetMode) {
+        skipLockedScraperOption.parentElement.style.display = "none";
+        skipLockedScraperOption.checked = false;
+        skipLockedUploadOption.parentElement.style.display = "none";
+        skipLockedUploadOption.checked = false;
+        globalAllowArtistUpdates.parentElement.style.display = "none";
+        globalAllowArtistUpdates.checked = false;
+        allowArtistUpdatesScrapeOption.parentElement.style.display = "none";
+        allowArtistUpdatesScrapeOption.checked = false;
+    } else {
+        if (globalSkipLocked.checked) {
+            skipLockedScraperOption.parentElement.style.display = "none";
+            skipLockedScraperOption.checked = true;
+            skipLockedUploadOption.parentElement.style.display = "none";
+            skipLockedUploadOption.checked = true;
+            globalAllowArtistUpdates.parentElement.style.display = trackArtworkIDs ? "block" : "none";
+            allowArtistUpdatesScrapeOption.parentElement.style.display = globalAllowArtistUpdates.checked ? "none" : "block";
+        } else {
+            skipLockedScraperOption.parentElement.style.display = "block";
+            skipLockedScraperOption.checked = false;
+            skipLockedUploadOption.parentElement.style.display = "block";
+            skipLockedUploadOption.checked = false;
+            globalAllowArtistUpdates.parentElement.style.display = "none";
+            globalAllowArtistUpdates.checked = false;
+            allowArtistUpdatesScrapeOption.parentElement.style.display = "none";
+            allowArtistUpdatesScrapeOption.checked = false;
+        }
+    }
+}
+
+// Add event listener for global skip locked artwork checkbox
+document.getElementById("skip_locked_artwork").addEventListener("change", toggleSkipLockedCheckbox);
+document.getElementById("track_artwork_ids").addEventListener("change", toggleSkipLockedCheckbox);
+document.getElementById("allow_artist_updates").addEventListener("change", toggleSkipLockedCheckbox);
 
 function toggleScraperStageCheckbox() {
     const globalStageSetting = document.getElementById("stage_assets").checked;
@@ -1841,7 +3774,7 @@ function toggleTempCheckbox() {
     const tempDir = document.getElementById("temp_dir").value.trim();
     const tempCheckbox = document.getElementById("option-temp");
     const tempCheckboxUpload = document.getElementById("upload-option-temp");
-
+    
     // Only show temp option in the scraper tab if Kometa is enabled AND temp dir has a value
     if (saveToKometa && tempDir) {
         tempCheckbox.parentElement.style.display = "block";
@@ -1857,81 +3790,397 @@ function toggleTempCheckbox() {
 
 function togglePlexOptions() {
     const saveToKometa = document.getElementById("save_to_kometa").checked;
+    const plexLocalAssets = document.getElementById("plex_local_assets").checked;
+    const localAssetMode = saveToKometa || plexLocalAssets;
     const trackArtworkIDs = document.getElementById("track_artwork_ids").parentElement;
-    const resetOverlay = document.getElementById("reset_overlay").parentElement;
     const skipLocked = document.getElementById("skip_locked_artwork").parentElement;
+    const resetOverlay = document.getElementById("reset_overlay").parentElement;
 
     // Ony show the Track Artwork IDs and Reset Overlay options if Kometa is disabled
-    if (!saveToKometa) {
+    if (!localAssetMode) {
         trackArtworkIDs.style.display = "block";
         resetOverlay.style.display = "block";
         skipLocked.style.display = "block";
     } else {
         trackArtworkIDs.style.display = "none";
         resetOverlay.style.display = "none";
-        skipLocked.style.display = "none"; // Hide only; preserve the checked state so it isn't lost when Kometa is toggled off again
+        skipLocked.style.display = "none";
+        document.getElementById("skip_locked_artwork").checked = false; // Uncheck the skip locked option if Local Asset mode is enabled
         document.getElementById("track_artwork_ids").checked = true;
-        //    document.getElementById("reset_overlay").checked = false;
     }
 }
-
-function toggleSkipLockedCheckbox() {
-    const saveToKometa = document.getElementById("save_to_kometa").checked;
-    const globalSetting = document.getElementById("skip_locked_artwork").checked;
-    const skipLockedCheckbox = document.getElementById("option-skip-locked");
-    const skipLockedCheckboxUpload = document.getElementById("upload-option-skip-locked");
-
-    // Hide and uncheck the skip locked option if Kometa is enabled
-    if (saveToKometa) {
-        skipLockedCheckbox.parentElement.style.display = "none";
-        skipLockedCheckbox.checked = false;
-        skipLockedCheckboxUpload.parentElement.style.display = "none";
-        skipLockedCheckboxUpload.checked = false;
-    } else {
-        if (globalSetting) {
-            skipLockedCheckbox.parentElement.style.display = "none";
-            skipLockedCheckbox.checked = true;
-            skipLockedCheckboxUpload.parentElement.style.display = "none";
-            skipLockedCheckboxUpload.checked = true;
-        } else {
-            skipLockedCheckbox.parentElement.style.display = "block";
-            skipLockedCheckbox.checked = false;
-            skipLockedCheckboxUpload.parentElement.style.display = "block";
-            skipLockedCheckboxUpload.checked = false;
-        }
-    }
-}
-
-// Add event listener for global skip locked artwork checkbox
-document.getElementById("skip_locked_artwork").addEventListener("change", toggleSkipLockedCheckbox);
 
 // Add event listener for save_to_kometa checkbox
 document.getElementById("save_to_kometa").addEventListener("change", toggleKometaSettings);
 
-// Add event listener for kometa_library_paths textarea to clear invalid state on input
-document.getElementById("kometa_library_paths").addEventListener("input", function() {
-    this.classList.remove("is-invalid");
+// Fork: Radarr/Sonarr pre-seed settings listeners (no upstream equivalent)
+document.getElementById("preseed_arr").addEventListener("change", toggleArrSettings);
+document.getElementById("kometa_library_paths").addEventListener("input", function () {
+    validateJsonMapField("kometa_library_paths");
+});
+document.getElementById("arr_root_folder_library_map").addEventListener("input", function () {
+    validateJsonMapField("arr_root_folder_library_map");
 });
 
-// ==================================================
-// Radarr/Sonarr Pre-Seed Settings Toggle
-// ==================================================
+// Add event listener for plex_Local_assets checkbox
+document.getElementById("plex_local_assets").addEventListener("change", togglePathMappings);
 
-function toggleArrSettings() {
-    const preseedArr = document.getElementById("preseed_arr").checked;
-    document.getElementById("arr_settings").style.display = preseedArr ? "block" : "none";
+function togglePathMappings() {
+    const saveToKometa = document.getElementById("save_to_kometa");
+    const plexLocalAssets = document.getElementById("plex_local_assets");
+    const pathMappings = document.getElementById("path-mappings");
+
+
+    if (saveToKometa.checked && plexLocalAssets.checked) {
+        saveToKometa.checked = false;
+        toggleKometaSettings();
+    }
+
+    toggleKometaLabels();
+    togglePlexOptions();
+    
+    pathMappings.classList.toggle("d-none", !plexLocalAssets.checked)
 }
 
-// Add event listener for preseed_arr checkbox
-document.getElementById("preseed_arr").addEventListener("change", toggleArrSettings);
+// Add event listener for auto_manage_bulk_files checkbox
+document.getElementById("auto_manage_bulk_files").addEventListener("change", toggleAddToBulkCheckbox);
 
-// Add event listener for arr_root_folder_library_map textarea to clear invalid state on input
-document.getElementById("arr_root_folder_library_map").addEventListener("input", function() {
-    this.classList.remove("is-invalid");
-});
+function toggleAddToBulkCheckbox() {
+    const autoManageBulkFiles = document.getElementById("auto_manage_bulk_files").checked;
+    const addToBulkCheckbox = document.getElementById("option-add-to-bulk")
+    const addToBulk = addToBulkCheckbox.parentElement;
+    if (autoManageBulkFiles) {
+        // Hides the scraper-level add-to-bulk checkbox if the global settings is enabled
+        addToBulkCheckbox.checked = true;
+        addToBulk.classList.add("d-none");
+    } else {
+        // Shows the scraper-level add-to-bulk cehckbox if the global setting is disabled
+        addToBulkCheckbox.checked = false;
+        addToBulk.classList.remove("d-none");
+    }
+}
 
 // Add event listener for temp_dir input to toggle temp option visibility
 document.getElementById("temp_dir").addEventListener("input", toggleTempCheckbox);
 
 // Add event listener for stage_assets checkbox
 document.getElementById("stage_assets").addEventListener("change", toggleScraperStageCheckbox);
+
+document.getElementById("cache_user_scrapes").addEventListener("change", toggleUserCacheExpiryField);
+
+function toggleUserCacheExpiryField() {
+    const userCacheToggle = document.getElementById("cache_user_scrapes");
+    const cacheExpiryContainer = document.getElementById("cache_expiry_container");
+
+    if (userCacheToggle.checked) {
+        cacheExpiryContainer.classList.remove("d-none");
+    } else {
+        cacheExpiryContainer.classList.add("d-none");
+    }
+}
+
+// Notification events a channel can be subscribed to, mirrors core/enums.py NotificationEvent
+const NOTIFICATION_EVENTS = [
+    { value: "run_started", label: "Started" },
+    { value: "run_completed", label: "Completed successfully" },
+    { value: "run_completed_with_errors", label: "Completed with errors" },
+    { value: "run_failed_to_start", label: "Failed to start" },
+    { value: "run_skipped", label: "Skipped" },
+    { value: "run_cancelled", label: "Cancelled" },
+];
+
+// Events a newly added channel is subscribed to, matches core/constants.py DEFAULT_NOTIFICATION_EVENTS
+const DEFAULT_NOTIFICATION_EVENTS = ["run_started", "run_completed", "run_completed_with_errors", "run_cancelled"];
+
+
+// Path Mappings settings
+const addMappingBtn = document.getElementById("add-mapping");
+
+addMappingBtn.addEventListener("click", createPathMappingRow);
+
+function createPathMappingRow(e, plexPath = "", appPath = "") {
+    const container = document.getElementById("path_mappings_container");
+    pathMappingsCounter++;
+    const rowId = pathMappingsCounter;
+
+    const row = document.createElement("div");
+    
+    if (pathMappingsCounter === 1) {
+        const heading = document.createElement("div");
+        
+        heading.innerHTML = `
+        <div class="path-mappings-heading mt-0 d-flex justify-content-between align-items-center me-4">
+            <small class="form-text text-muted w-100">Plex Path</small>
+            <small class="form-text text-muted w-100">Artwork Uploader Path</small>
+        </div>
+        `;
+        container.appendChild(heading);
+    }
+
+    row.innerHTML = `
+        <div id="path_mappings_row_${rowId}" class="path-mappings-row d-flex justify-content-between gap-2 align-items-top mb-3">
+            <input id="plex_path_${rowId}"
+                value="${plexPath || ''}"
+                type="text"
+                class="form-control plex-path-input"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                data-1p-ignore
+                data-bwignore
+                data-lpignore="true"
+                data-dashlane-ignore="true">
+            <input id="app_path_${rowId}"
+                value="${appPath || ''}"
+                type="text"
+                class="form-control app-path-input"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                data-1p-ignore
+                data-bwignore
+                data-lpignore="true"
+                data-dashlane-ignore="true">
+            <i class="bi bi-x-circle inline-remove-btn mt-1 me-2" title="Remove mapping" role="button"></i>
+        </div>
+    `;
+
+    container.appendChild(row);
+
+    let rowNum = 0
+    const allRows = document.querySelectorAll(".path-mappings-row")
+    allRows.forEach(row => {
+        rowNum++;
+        if (rowNum === allRows.length) {
+            row.classList.remove("mb-3");
+        } else {
+            row.classList.add("mb-3");
+        }
+    })
+
+    document.querySelectorAll(".plex-path-input").forEach(input => {
+        input.addEventListener("input", toggleConfigButtons);
+    })
+    
+    document.querySelectorAll(".app-path-input").forEach(input => {
+        input.addEventListener("input", toggleConfigButtons);
+    })
+    
+    document.querySelectorAll(".inline-remove-btn").forEach(btn => {
+        btn.addEventListener("click", removePathMappingRow);
+    })
+
+    toggleConfigButtons();
+}
+
+function removePathMappingRow() {
+
+    const container = document.getElementById("path_mappings_container");
+    if (!container || pathMappingsCounter === 0) return;
+    
+    if (pathMappingsCounter === 1) {
+        const heading = document.querySelector(".path-mappings-heading");
+        container.removeChild(heading.parentElement);
+    }
+    
+    const row = this.closest(".path-mappings-row");
+    container.removeChild(row.parentElement);
+
+    const allRows = document.querySelectorAll(".path-mappings-row");
+    let rowNum = 0
+    allRows.forEach(row => {
+        rowNum++;
+        row.id = `path_mappings_row_${rowNum}`;
+        if (rowNum === allRows.length) {
+            row.classList.remove("mb-3");
+        }
+    })
+    
+    pathMappingsCounter--;
+    toggleConfigButtons();
+}
+
+function collectPathMappings() {
+    const pathMappings = Array.from(document.querySelectorAll(".path-mappings-row"))
+        .map(row => {
+            const plex_path = row.querySelector(".plex-path-input").value.trim();
+            const app_path = row.querySelector(".app-path-input").value.trim();
+            return { plex_path, app_path };
+        })
+        .filter(row => row.plex_path !== "" && row.app_path !== "");
+
+    return pathMappings;
+}
+
+// Creates a single Apprise URL input row, with a delete button and per-event notification toggles
+let appriseRowCounter = 0;
+function createAppriseUrlRow(channel = {}, last = false) {
+    const container = document.getElementById("apprise_urls_container");
+    const url = channel.url || "";
+    const events = Array.isArray(channel.events) ? channel.events : DEFAULT_NOTIFICATION_EVENTS;
+    const rowId = appriseRowCounter++;
+
+    const row = document.createElement("div");
+    row.className = "apprise-url-row";
+
+    const eventChecksHtml = NOTIFICATION_EVENTS.map(event => `
+        <div class="form-check form-switch mb-1">
+            <input class="form-check-input apprise-event-checkbox" type="checkbox" value="${event.value}"
+                   id="apprise_event_${rowId}_${event.value}" ${events.includes(event.value) ? "checked" : ""}>
+            <label class="form-check-label small" for="apprise_event_${rowId}_${event.value}">${event.label}</label>
+        </div>`).join("");
+        
+    row.innerHTML = `
+        <div class="position-relative apprise-url-input-wrap">
+            <input type="text"
+                   class="form-control input-monospace apprise-url-input ${last ? 'has-three-inline-btns' : 'has-two-inline-btns'}"
+                   placeholder="discord://{botname}@{WebhookID}/{WebhookToken}"
+                   spellcheck="false"
+                   autocomplete="off"
+                   autocorrect="off"
+                   autocapitalize="off">
+            <div class="apprise-row-actions">
+                <button type="button" class="btn-inline-icon add-apprise-url-btn" title="Add another URL">
+                    <i class="bi bi-plus-circle"></i>
+                </button>
+                <button type="button" class="btn-inline-icon config-apprise-events-btn" title="Notification events">
+                    <i class="bi bi-wrench-adjustable-circle"></i>
+                </button>               
+                <button type="button" class="btn-inline-icon remove-apprise-url-btn" title="Remove URL">
+                    <i class="bi bi-x-circle"></i>
+                </button>
+            </div>
+            <!-- Custom Dropdown Panel -->
+            <div class="apprise-events-panel shadow-sm rounded-3 border p-2">
+                <div class="fw-bold text-muted small mb-2 border-bottom pb-1">Subscribed Events</div>
+                ${eventChecksHtml}
+            </div>
+        </div>
+    `;
+
+    container.appendChild(row);
+    
+    const configBtn = row.querySelector(".config-apprise-events-btn");
+    const panel = row.querySelector(".apprise-events-panel");
+
+    configBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Close any other open panels first
+        document.querySelectorAll(".apprise-events-panel.show").forEach(p => {
+            if (p !== panel) p.classList.remove("show");
+        });
+        panel.classList.toggle("show");
+    });
+
+    // Prevent clicking inside the panel from closing it
+    panel.addEventListener("click", (e) => {
+        e.stopPropagation();
+    });
+
+    // Global listener to close panel on click outside
+    const dismissHandler = (e) => {
+        if (!panel.contains(e.target) && !configBtn.contains(e.target)) {
+            panel.classList.remove("show");
+        }
+    };
+
+    document.addEventListener("click", dismissHandler);
+
+    // Event listener to add a row
+    row.querySelector(".add-apprise-url-btn").addEventListener("click", () => {
+        createAppriseUrlRow();
+        const inputs = document.querySelectorAll(".apprise-url-input");
+        inputs[inputs.length - 1].focus();
+        inputs[inputs.length - 1].addEventListener("input", toggleConfigButtons);
+    });
+
+    // Event listener to remove this row
+    row.querySelector(".remove-apprise-url-btn").addEventListener("click", () => {
+        document.removeEventListener("click", dismissHandler);
+        row.remove();
+        // Keep at least one empty row if all are deleted
+        if (container.children.length === 0) {
+            createAppriseUrlRow();
+        }
+        toggleConfigButtons();
+    });
+
+    // Assign as a property, not interpolated into innerHTML: a quote in the
+    // URL would truncate the attribute and corrupt the channel on next save.
+    row.querySelector(".apprise-url-input").value = url;
+
+    toggleConfigButtons();
+}
+
+// Reads the URL and subscribed events out of every Apprise channel row currently in the DOM
+function collectAppriseChannels() {
+    return Array.from(document.querySelectorAll(".apprise-url-row"))
+        .map(row => {
+            const url = row.querySelector(".apprise-url-input").value.trim();
+            const events = Array.from(row.querySelectorAll(".apprise-event-checkbox:checked")).map(cb => cb.value);
+            return { url, events };
+        })
+        .filter(channel => channel.url !== "");
+}
+
+let tooltipTimeout = null;
+
+function toggleNotification() {
+    const checkbox = document.getElementById("bulk_notify");
+    const button = document.getElementById("notify_toggle");
+    const icon = document.getElementById("notify_icon");
+    
+    // Toggle state
+    checkbox.checked = !checkbox.checked;
+
+    if (checkbox.checked) {
+        // Active State (Enabled)
+        button.classList.remove("btn-secondary");
+        button.classList.add("btn-success");
+        icon.classList.remove("bi-bell-slash");
+        icon.classList.add("bi-bell");
+        newTitle = "Notifications enabled";
+    } else {
+        // Inactive State (Disabled)
+        button.classList.remove("btn-success");
+        button.classList.add("btn-secondary");
+        icon.classList.remove("bi-bell");
+        icon.classList.add("bi-bell-slash");        
+        newTitle = "Notifications disabled";
+    }
+    
+    let tooltip = bootstrap.Tooltip.getInstance(button);
+    if (!tooltip) {
+        tooltip = new bootstrap.Tooltip(button, { trigger: 'manual' });
+    }
+    
+    if (tooltipTimeout) clearTimeout(tooltipTimeout);
+
+    tooltip.setContent({ '.tooltip-inner': newTitle });
+    tooltip.show()
+
+    tooltipTimeout = setTimeout(() => {
+        tooltip.hide();
+    }, 1000);    
+}
+
+document.getElementById("option-force").addEventListener("change", () => {
+    warning = document.getElementById("force-warning");
+    checked = document.getElementById("option-force").checked;
+    warning.classList.toggle("d-none", !checked);
+})
+
+document.getElementById("upload-option-force").addEventListener("change", () => {
+    warning = document.getElementById("force-warning-upload");
+    checked = document.getElementById("upload-option-force").checked;
+    warning.classList.toggle("d-none", !checked);
+})
+
+document.querySelectorAll(".link-to-filters").forEach(el => el.addEventListener("click", () => {
+    const mainTab = document.querySelector("#myTab a[data-bs-target='#settings']");
+    const subTab = document.querySelector("#settingsSubTabs button[data-bs-target='#subtab-artwork']");
+    bootstrap.Tab.getOrCreateInstance(mainTab).show();
+    bootstrap.Tab.getOrCreateInstance(subTab).show();
+}));

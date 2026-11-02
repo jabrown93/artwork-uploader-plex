@@ -54,19 +54,21 @@ of the target upstream commit and compare.
 
 ## Fork differences
 
-Only what is verified fork-only at the current merge base. Both sides have grown web
-authentication (password + OIDC) independently; which implementation survives is decided at the
-first catch-up sync (see Decisions).
+Verified against upstream v1.3.3 (`517eed0`). Each kept behavior has a test; `# Fork:` marks the
+patch in code.
 
 | Area | Behavior | Where |
 | --- | --- | --- |
-| Layout | Application code under `src/`; `run.sh` sets `PYTHONPATH`. Dev deps pinned from `requirements*.in`; Ruff config in `pyproject.toml`. | `src/`, `run.sh`, `pyproject.toml` |
-| Container | `tini` + `gosu` entrypoint; runs as `PUID`/`PGID`, not root. | `Dockerfile`, `entrypoint.sh` |
-| Versioning | semantic-release from Conventional Commits writes `src/core/__version__.py` and `CHANGELOG.md`; `beta` is a prerelease line merged back from `main`. | `.releaserc.js`, `release.yml`, `merge-back.yml` |
-| HTTPS / binding | `TLS_CERT_FILE`/`TLS_KEY_FILE` serve HTTPS; bind IPv4, IPv6, or dual-stack. | `src/core/config.py`, `src/web_routes.py` |
-| Plex lookups | Title and show/season/episode lookups are memoized per upload run. `PlexLookupError` carries a partial result so a transient library error is never cached as a miss; caches clear when `PlexConnector.state_generation` changes on reconnect. | `src/core/exceptions.py`, `src/plex/plex_connector.py`, `src/processors/upload_processor.py` |
-| Auth | Separate `oidc_service.py` (Authlib); saved secrets redacted from settings responses. Upstream has its own OIDC in `authentication_service.py`. | `src/services/oidc_service.py`, `src/services/authentication_service.py`, `src/web_routes.py` |
-| Scheduling | APScheduler for periodic jobs. | `src/services/scheduler_service.py` |
+| Layout | Application code under `src/`; `run.sh` sets `PYTHONPATH`; `tests/conftest.py` puts `src/` on `sys.path`. Deps pinned from `requirements*.in` with `uv pip compile`; Ruff config in `pyproject.toml`. | `src/`, `run.sh`, `pyproject.toml` |
+| Container | `tini` + `gosu` entrypoint; runs as `PUID`/`PGID`, not root. Upstream's `HEALTHCHECK` ported. | `Dockerfile`, `entrypoint.sh` |
+| Versioning | semantic-release from Conventional Commits writes `src/core/__version__.py` and `CHANGELOG.md`; `beta` is a prerelease line merged back from `main`. Upstream's `bump_version.py` and version strings are not taken. | `.releaserc.js`, `release.yml`, `merge-back.yml` |
+| HTTPS / binding | `tls_cert_file`/`tls_key_file` (env `TLS_CERT_FILE`/`TLS_KEY_FILE`) serve HTTPS; `ip_binding` = `auto` (dual-stack), `ipv4`, `ipv6`. | `src/core/config.py`, `src/web_routes.py` (`start_web_server`), `tests/test_config_tls.py` |
+| Plex lookups | On top of upstream's `PlexLibraryIndex`: a transient per-library error raises `PlexLookupError(message, partial_result)` instead of being cached as a miss; a hit found after an earlier error is partial; `PlexConnector.state_generation` bumps on reconnect and every per-run cache (title, show structure, season/episode) clears with it. ZIP imports resolve titles through the same memoized, error-aware cascade (underscore/colon, accent folding, progressive shortening). | `src/core/exceptions.py`, `src/plex/plex_connector.py`, `src/plex/library_index.py`, `src/processors/upload_processor.py`, `src/web_routes.py` (`_resolve_plex_title`), `tests/test_plex_connector_recovery.py`, `tests/test_upload_processor_plex_memoization.py`, `tests/test_extract_and_list_zip.py` |
+| Auth | Upstream's password + OIDC (`requests-oauthlib`) plus: PKCE S256 on the authorization-code flow; saved secrets (`token`, `auth_password_hash`, `oidc_client_secret`, `webhook_token`) are redacted in settings responses and kept unless the client sends a new value. | `src/web_routes.py`, `tests/test_auth_routes.py` |
+| Uploads | Chunked uploads are isolated per Socket.IO client (`(sid, file_name)` keyed, locked, cleaned on disconnect); upload filenames are basename-contained; bulk-import failures are reported. | `src/web_routes.py`, `tests/test_socket_uploads.py`, `tests/test_bulk_file_path_traversal.py`, `tests/test_bulk_import_failure_reporting.py` |
+| Sonarr/Radarr pre-seed | Kometa assets for items not yet in Plex are pre-seeded from Sonarr/Radarr (`radarr_*`, `sonarr_*`, `arr_root_folder_library_map`, `preseed_arr`, `kometa_library_paths`, `stage_specials`, `stage_collections`). Distinct from upstream's import webhooks. | `src/services/arr_service.py`, `src/processors/upload_processor.py`, settings UI, `tests/test_arr_service.py`, `tests/test_upload_processor_preseed.py` |
+| Scraping | MediUX `movie_poster` files in a collection set without `movie_id` count as the collection poster. URL validation (IPv6, IDNA, label rules) in `utils.py` instead of the `validators` package. | `src/scrapers/mediux_scraper.py`, `src/utils/utils.py`, `tests/test_mediux_scraper_process_set.py`, `tests/test_utils_urls.py` |
+| Config paths | `CONFIG_PATH`/`LOGS_DIR` env and `--config`/`--logs` CLI overrides. | `src/artwork_uploader.py`, `src/models/arguments.py` |
 
 ## Decisions
 
@@ -76,3 +78,24 @@ Dated so a later sync can revisit them.
   Sync script and weekly workflow as in jabrown93/AURA and jabrown93/CrossWatch. The first catch-up
   to upstream v1.3.3 is a separate PR; its decisions (auth implementation, `PlexLibraryIndex` vs
   the fork's lookup cache, health endpoint, local-assets saver) are recorded here when made.
+- **2026-11 catch-up (upstream `c75774d` → v1.3.3 `517eed0`)**
+  - The two sides diverged past git's rename detection on most large files; those were rebuilt
+    from upstream's version with the table above re-applied as `# Fork:` patches. Fork-only
+    refactors with "characterization" tests that pinned the refactor (not behavior) were dropped
+    with their tests: the fork's `_process_set` MediUX scraper shape, `PlexConnector` socket probe
+    and name-tracking re-resolution, `UploadProcessor` filter/exclusion checks (upstream does this
+    in the scraper layer), the Authlib `oidc_service.py` and its `auth_mode` config keys.
+  - Auth: upstream's implementation and config keys (`auth_enabled`, `oidc_*`, `external_url`).
+    Dropped fork keys: `auth_mode`, `oidc_provider_name`, `oidc_allow_password_fallback`,
+    `session_secret`, `session_cookie_secure`, `trusted_proxy_count`, `cors_allowed_origins`
+    (Flask-CORS removed), `zip_title_strip_words`. Kept: PKCE, secret redaction, groups allowlist
+    (upstream has its own `oidc_allowed_groups`).
+  - Server: upstream's `async_mode="threading"`; eventlet removed. Scheduler: upstream's
+    `schedule`-based service; APScheduler removed (its fork tests re-expressed against `schedule`).
+  - Plex: upstream's `PlexLibraryIndex` is the single cache; the fork's invariants attach to it
+    rather than adding a second layer. `services/update_service.py` restored (upstream's call).
+  - Upstream's `save_uploaded_file` takes the finished temp path instead of the shared
+    `upload_chunks` dict (consequence of per-client isolation); its `test_upload_temp_cleanup`
+    adapted.
+  - Kometa: the fork's multi-extension stale-asset cleanup in `kometa_saver.py` was dropped (no
+    test). Revisit if stale assets reappear.

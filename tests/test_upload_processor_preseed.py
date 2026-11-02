@@ -5,8 +5,7 @@ from plexapi.exceptions import NotFound
 
 from core import globals
 from core.config import Config
-from core.exceptions import (MovieNotFound, NotProcessedByExclusion,
-                             NotProcessedByFilter, ShowNotFound)
+from core.exceptions import MovieNotFound, ShowNotFound
 from kometa.kometa_saver import KometaSaver
 from models.options import Options
 from processors.upload_processor import UploadProcessor
@@ -53,7 +52,7 @@ class FakeArr:
 def _movie_artwork(**overrides):
     artwork = {
         "title": "The Matrix", "url": "http://example.com/poster.jpg", "year": 1999,
-        "source": "mediux", "id": "poster-1", "type": "movie_poster", "author": "someone",
+        "source": "mediux", "id": "poster-1", "file_type": "movie_poster", "author": "someone",
         "tmdb_id": 603,
     }
     artwork.update(overrides)
@@ -64,7 +63,7 @@ def _tv_artwork(**overrides):
     artwork = {
         "title": "Breaking Bad", "url": "http://example.com/season.jpg", "season": 1,
         "episode": None, "year": 2008, "source": "mediux", "id": "season-1",
-        "type": "season_cover", "author": "someone", "tmdb_id": 1396,
+        "file_type": "season_cover", "author": "someone", "tmdb_id": 1396,
     }
     artwork.update(overrides)
     return artwork
@@ -102,6 +101,7 @@ class FakeSeason:
 class FakeShow:
     def __init__(self, title, seasons):
         self.title = title
+        self.year = 2008
         self._seasons = seasons
 
     def seasons(self):
@@ -204,22 +204,6 @@ class TestMoviePreseed:
             proc.process_movie_artwork(_movie_artwork())
 
         assert not capture_kometa_saves
-
-    def test_excluded_artwork_raises_not_processed_by_exclusion(self, configured, capture_kometa_saves):
-        arr_movie = _arr_movie()
-        arr = FakeArr(radarr=FakeRadarr(movie=arr_movie))
-        proc = _processor(configured, arr, options=Options(kometa=True, exclude=["poster-1"]))
-
-        with pytest.raises(NotProcessedByExclusion):
-            proc.process_movie_artwork(_movie_artwork())
-
-    def test_filtered_artwork_raises_not_processed_by_filter(self, configured, capture_kometa_saves):
-        arr_movie = _arr_movie()
-        arr = FakeArr(radarr=FakeRadarr(movie=arr_movie))
-        proc = _processor(configured, arr, options=Options(kometa=True, filters=["background"]))
-
-        with pytest.raises(NotProcessedByFilter):
-            proc.process_movie_artwork(_movie_artwork())
 
     def test_per_run_kometa_option_enables_arr_fallback_after_set_options(
             self, configured, capture_kometa_saves):

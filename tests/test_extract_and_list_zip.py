@@ -71,11 +71,15 @@ def _make_zip(tmp_path, name, files):
 def _extract(tmp_path, zip_name, files, plex_stub=None, filters=None, plex_title=None, plex_year=None,
              orientation="portrait"):
     zip_path = _make_zip(tmp_path, zip_name, files)
+    # Upstream's caller owns the extraction directory (tempfile.mkdtemp in save_uploaded_file).
+    extract_dir = os.path.join(tmp_path, "extracted")
+    os.makedirs(extract_dir, exist_ok=True)
     globals.plex = plex_stub or StubPlexConnector()
     instance = Instance(id=None, mode="cli")
     return web_routes.extract_and_list_zip(
         instance,
         zip_path,
+        extract_dir,
         FILENAME_PATTERN,
         filters or [],
         plex_title,
@@ -284,27 +288,52 @@ class TestResolvePlexTitleMemoization:
         ]
 
     def test_hit_after_library_error_not_cached_and_next_entry_requeries(self, tmp_path):
+        # PlexLibraryIndex builds a persistent per-library index (reload/totalSize snapshot,
+        # then all()), unlike the plain library.search(title=, year=) stubs this test used
+        # before that architecture landed - see test_plex_connector_recovery.py's _library()
+        # helper for the same pattern.
         class ErrorThenMissLibrary:
             title = "Movies"
+            type = "movie"
 
             def __init__(self):
                 self.calls = 0
+                self.totalSize = 1
+
+            def reload(self):
+                pass
 
             def search(self, **_kwargs):
+                # Snapshot peek: errors transiently on the first call, then settles.
                 self.calls += 1
                 if self.calls == 1:
                     raise RuntimeError("transient library error")
                 return []
 
+            def all(self):
+                return []
+
         class HitLibrary:
             title = "Shows"
+            type = "show"
 
             def __init__(self):
                 self.calls = 0
+                self.totalSize = 1
+                self._item = SimpleNamespace(
+                    title="Some Show", year=2020, guids=[], ratingKey=42,
+                    slug=None, originalTitle=None, addedAt=0,
+                )
+
+            def reload(self):
+                pass
 
             def search(self, **_kwargs):
                 self.calls += 1
-                return [SimpleNamespace(title="Some Show", year=2020, guids=[])]
+                return [self._item]
+
+            def all(self):
+                return [self._item]
 
         movie_library = ErrorThenMissLibrary()
         show_library = HitLibrary()
@@ -312,7 +341,6 @@ class TestResolvePlexTitleMemoization:
         plex_connector.plex = object()
         plex_connector.movie_libraries = [movie_library]
         plex_connector.tv_libraries = [show_library]
-        plex_connector._refresh_missing_libraries = lambda: None
 
         file_list, *_ = _extract(
             tmp_path, "export.zip",

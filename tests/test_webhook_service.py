@@ -1,0 +1,629 @@
+"""Unit tests for the Sonarr/Radarr import webhook (services/webhook_service.py)."""
+
+import os
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+import services.webhook_service as webhook_service_module
+from core.constants import ARTWORK_ID_MAP, ARTWORK_TYPE_MAP
+from models.callbacks import ProcessingCallbacks
+from plex.plex_uploader import PlexUploader
+from services.asset_index import AssetIndex
+from services.run_history import RunHistory
+from services.webhook_service import WebhookEvent, WebhookService, parse_event
+from utils import utils
+
+FAR_FUTURE = "2999-01-01T00:00:00+00:00"
+
+
+@pytest.fixture
+def index(tmp_path):
+    return AssetIndex(str(tmp_path / "asset_index.db"))
+
+
+@pytest.fixture
+def history(tmp_path, monkeypatch):
+    """Keep the webhook's history writes inside the test's own tmp directory."""
+    real_history = RunHistory(str(tmp_path / "run_history.json"))
+    monkeypatch.setattr(webhook_service_module, "RunHistory", lambda: real_history)
+    return real_history
+
+
+def _tally():
+    return ProcessingCallbacks(
+        success_counter=[0], assets_processed=[0], locked_counter=[0], failed_counter=[0]
+    )
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _rec(index, user, asset_id, title, year, media_type, season=None):
+    index.record(user, [{
+        "id": asset_id, "title": title, "year": year, "season": season,
+        "media_type": media_type, "author": user,
+        "url": f"https://theposterdb.com/api/assets/{asset_id}",
+    }])
+
+
+# ------------------------------- parse_event -------------------------------
+
+@pytest.mark.unit
+def test_parse_radarr_download():
+    event = parse_event({"eventType": "Download",
+                         "movie": {"title": "Dune", "year": 2021, "tmdbId": 438631}})
+    assert isinstance(event, WebhookEvent)
+    assert (event.kind, event.title, event.year, event.tmdb_id, event.source) == \
+           ("movie", "Dune", 2021, 438631, "radarr")
+    assert event.seasons == frozenset()
+
+
+@pytest.mark.unit
+def test_parse_sonarr_download_multi_episode():
+    event = parse_event({"eventType": "Download",
+                         "series": {"title": "Severance", "year": 2022, "tvdbId": 371980, "tmdbId": 95396},
+                         "episodes": [{"seasonNumber": 1}, {"seasonNumber": 2}, {"seasonNumber": 0}]})
+    assert event.kind == "tv"
+    assert event.tvdb_id == 371980 and event.tmdb_id == 95396
+    assert event.seasons == frozenset({0, 1, 2})   # season 0 (Specials) is kept
+
+
+@pytest.mark.unit
+def test_parse_csharp_zero_defaults_are_none():
+    event = parse_event({"eventType": "Download",
+                         "movie": {"title": "Nope", "year": 0, "tmdbId": 0}})
+    assert event.year is None and event.tmdb_id is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("movie_fields,movie_file,folder,file", [
+    ({"folderPath": "/movies/Alien (1979) {edition-35mm Film Scan}"}, None, "Alien (1979) {edition-35mm Film Scan}", ()),
+    ({"folderPath": "/movies/Alien (1979)/"}, None, "Alien (1979)", ()),
+    ({"folderPath": "/movies/Alien (1979)"},
+     {"path": "/movies/Alien (1979)/Alien (1979) Bluray-1080p.mkv", "relativePath": "Alien (1979) Bluray-1080p.mkv"},
+     "Alien (1979)", ("Alien (1979) Bluray-1080p.mkv",)),
+    ({}, {"path": "/movies/Alien (1979)/Alien (1979) Bluray-1080p.mkv"}, "Alien (1979)", ("Alien (1979) Bluray-1080p.mkv",)),
+    ({}, {"path": "/movies/Alien (1979)/Extras/Alien.mkv", "relativePath": "Extras/Alien.mkv"}, "Alien (1979)", ("Extras", "Alien.mkv")),
+    ({}, {"path": "D:\\Movies\\Alien (1979)\\Alien (1979).mkv"}, "Alien (1979)", ("Alien (1979).mkv",)),
+    ({"folderPath": ""}, {"relativePath": "Alien (1979).mkv"}, None, ()),
+    ({}, {"path": "/Alien (1979).mkv"}, None, ()),
+    ({}, None, None, ()),
+])
+def test_parse_radarr_import_path(movie_fields, movie_file, folder, file):
+    payload = {"eventType": "Download",
+               "movie": {"title": "Alien", "year": 1979, "tmdbId": 348, **movie_fields}}
+    if movie_file is not None:
+        payload["movieFile"] = movie_file
+    event = parse_event(payload)
+    assert (event.media_folder, event.media_file) == (folder, file)
+
+
+@pytest.mark.unit
+def test_parse_test_and_ignored_events():
+    assert parse_event({"eventType": "Test"}) == "test"
+    for event_type in ("Grab", "MovieAdded", "Rename", "Health", "SeriesAdd"):
+        assert parse_event({"eventType": event_type, "movie": {"title": "X"}}) is None
+    assert parse_event({}) is None                                   # missing eventType
+    assert parse_event({"eventType": "Download"}) is None            # no movie/series
+    assert parse_event({"eventType": "Download", "movie": {}}) is None  # no title
+    assert parse_event("not a dict") is None                         # never raises
+
+
+# --------------------------------- lookup ----------------------------------
+
+@pytest.mark.unit
+def test_lookup_preferred_user_wins(index):
+    _rec(index, "filler", 999, "Heat", 1995, "movie_poster")   # newer id, less preferred
+    _rec(index, "preferred", 1, "Heat", 1995, "movie_poster")
+    row = index.lookup(["preferred", "filler"], "Heat", 1995, ["movie_poster"])
+    assert row["user_key"] == "preferred"
+
+
+@pytest.mark.unit
+def test_lookup_newest_within_user(index):
+    _rec(index, "user", 1, "Heat", 1995, "movie_poster")
+    _rec(index, "user", 5, "Heat", 1995, "movie_poster")
+    assert index.lookup(["user"], "Heat", 1995, ["movie_poster"])["asset_id"] == 5
+
+
+@pytest.mark.unit
+def test_lookup_year_exact_then_nearby(index):
+    _rec(index, "user", 1, "Heat", 1995, "movie_poster")
+    assert index.lookup(["user"], "Heat", 1995, ["movie_poster"]) is not None
+    assert index.lookup(["user"], "Heat", 1996, ["movie_poster"]) is not None   # +/-1
+    assert index.lookup(["user"], "Heat", 2010, ["movie_poster"]) is None       # too far
+
+
+@pytest.mark.unit
+def test_lookup_year_none_ambiguity(index):
+    _rec(index, "user", 1, "Solo Title", 2020, "movie_poster")
+    assert index.lookup(["user"], "Solo Title", None, ["movie_poster"]) is not None
+    _rec(index, "user", 2, "Solo Title", 1990, "movie_poster")   # now two distinct years
+    assert index.lookup(["user"], "Solo Title", None, ["movie_poster"]) is None
+
+
+@pytest.mark.unit
+def test_lookup_season_and_show_cover(index):
+    _rec(index, "user", 10, "Severance", 2022, "show_cover")
+    _rec(index, "user", 11, "Severance", 2022, "season_cover", season=0)
+    _rec(index, "user", 12, "Severance", 2022, "season_cover", season=1)
+    assert index.lookup(["user"], "Severance", 2022, ["season_cover"], season=0)["asset_id"] == 11
+    assert index.lookup(["user"], "Severance", 2022, ["season_cover"], season=1)["asset_id"] == 12
+    assert index.lookup(["user"], "Severance", 2022, ["show_cover"])["asset_id"] == 10
+
+
+@pytest.mark.unit
+def test_lookup_tombstoned_and_parenthetical(index):
+    _rec(index, "user", 1, "The Office", 2005, "show_cover")   # index stores the parsed (stripped) title
+    row = index.lookup(["user"], "The Office (US)", 2005, ["show_cover"])   # query strips the suffix
+    assert row is not None and row["asset_id"] == 1
+    index.reconcile("user", seen_ids=set(), crawl_started_at=FAR_FUTURE)   # tombstone everything
+    assert index.lookup(["user"], "The Office (US)", 2005, ["show_cover"]) is None
+
+
+# ------------------------------- dedupe key --------------------------------
+
+@pytest.mark.unit
+def test_dedupe_key():
+    def series(seasons):
+        return WebhookEvent(kind="tv", title="Show", year=2020, tmdb_id=42, tvdb_id=7,
+                            seasons=frozenset(seasons), source="sonarr")
+    assert WebhookService._dedupe_key(series([1])) == WebhookService._dedupe_key(series([1]))
+    assert WebhookService._dedupe_key(series([1])) != WebhookService._dedupe_key(series([2]))
+    # falls back to normalized title when there is no id
+    no_id = WebhookEvent(kind="movie", title="Léon", year=1994, tmdb_id=None, tvdb_id=None,
+                         seasons=frozenset(), source="radarr")
+    assert WebhookService._dedupe_key(no_id)[1] == "leon"
+    # an edition in its own folder shares the TMDb ID, and is a separate import
+    def alien(folder):
+        return WebhookEvent(kind="movie", title="Alien", year=1979, tmdb_id=348, tvdb_id=None,
+                            seasons=frozenset(), source="radarr", media_folder=folder)
+    assert WebhookService._dedupe_key(alien("Alien (1979)")) != \
+        WebhookService._dedupe_key(alien("Alien (1979) {edition-35mm Film Scan}"))
+
+
+# ------------------- regression: the file_type contract (the live crash) -------------------
+
+@pytest.mark.unit
+@pytest.mark.parametrize("artwork_type,season", [
+    ("movie_poster", None),
+    ("show_cover", None),
+    ("season_cover", 2),
+])
+def test_artwork_dict_carries_the_file_type_key_the_processor_reads(artwork_type, season):
+    """The webhook must key the artwork type as 'file_type' - the key get_posters writes and the
+       upload processor reads. Keyed as 'type' (the old bug), ARTWORK_ID_MAP.get(...) returns None
+       and PlexUploader.set_artwork does None + md5, the exact 'unsupported operand type(s) for +:
+       NoneType and str' that broke a real Radarr import in production."""
+    row = {"title": "Dune", "author": "someuser", "year": 2021, "asset_id": 42,
+           "url": "https://theposterdb.com/api/assets/42"}
+    artwork = WebhookService._artwork_dict(row, "&_cb=123", artwork_type, season)
+
+    assert artwork["file_type"] == artwork_type
+    assert ARTWORK_ID_MAP.get(artwork["file_type"]) is not None
+
+    # Reproduce the runtime path: the processor derives artwork_id from file_type and hands it to
+    # the uploader, whose set_artwork builds label = artwork_id + md5(url). A None artwork_id here
+    # is the crash.
+    artwork_id = ARTWORK_ID_MAP.get(artwork.get("file_type"))
+    artwork_type_str = ARTWORK_TYPE_MAP.get(artwork.get("file_type"))
+    uploader = PlexUploader(MagicMock(), artwork_type_str, artwork_id)
+    uploader.set_artwork(artwork)
+    assert isinstance(uploader.label, str) and uploader.label
+
+
+# --------------------------- allow_artist_updates ---------------------------
+
+@pytest.mark.unit
+def test_attempt_forces_allow_artist_updates_off(monkeypatch, history):
+    """The webhook must never inherit allow_artist_updates from the global config.
+
+    set_options resolves the flag as `self.options.allow_artist_updates or
+    globals.config.allow_artist_updates`, so handing it a bare Options() is not enough: a user with
+    the option on globally would have it on here too. Radarr and Sonarr send "Download" on an upgrade
+    as well as a first import, so the item may already carry artwork the user locked, and the webhook
+    picks its artists from its own configured list rather than from the scrape.
+
+    This drives _attempt itself rather than re-stating the assignment, so deleting the guard from
+    services/webhook_service.py fails the test.
+    """
+    import processors.upload_processor as upload_processor_module
+    from core import globals as app_globals
+
+    seen = {}
+
+    class _FakeProcessor:
+        def __init__(self, _plex):
+            # Whatever set_options would have resolved from the global config.
+            self.allow_artist_updates = True
+
+        def set_options(self, _options):
+            self.allow_artist_updates = True      # the inheritance the guard has to undo
+
+        def process_movie_artwork(self, _item):
+            seen["at_upload"] = self.allow_artist_updates
+            return ["done"]
+
+    monkeypatch.setattr(upload_processor_module, "UploadProcessor", _FakeProcessor)
+    monkeypatch.setattr(app_globals, "plex", MagicMock())
+
+    service = WebhookService()
+    event = parse_event({"eventType": "Download",
+                         "movie": {"title": "Dune", "year": 2021, "tmdbId": 438631}})
+    service._attempt(event, ("movie", 438631), _now(), _tally(),
+                     artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    assert seen.get("at_upload") is False, \
+        "the webhook reached the uploader with allow_artist_updates still on"
+
+
+# ------------------------------- run history -------------------------------
+
+def _applying_service(monkeypatch, results):
+    """A WebhookService whose uploader returns `results` for every artwork item."""
+    import processors.upload_processor as upload_processor_module
+    from core import globals as app_globals
+
+    class _FakeProcessor:
+        def __init__(self, _plex):
+            self.allow_artist_updates = True
+
+        def set_options(self, _options):
+            pass
+
+        def process_movie_artwork(self, _item):
+            return list(results)
+
+    monkeypatch.setattr(upload_processor_module, "UploadProcessor", _FakeProcessor)
+    monkeypatch.setattr(app_globals, "plex", MagicMock())
+    return WebhookService()
+
+
+def _dune():
+    return parse_event({"eventType": "Download",
+                        "movie": {"title": "Dune", "year": 2021, "tmdbId": 438631}})
+
+
+@pytest.mark.unit
+def test_an_applied_import_is_recorded_as_a_successful_webhook_run(monkeypatch, history):
+    service = _applying_service(monkeypatch, ["✅ Dune (2021) • someone | Poster updated in Movies"])
+    tally = _tally()
+
+    service._attempt(_dune(), ("movie", 438631), _now(), tally,
+                     artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    runs = history.get_runs()
+    assert len(runs) == 1
+    assert runs[0]["run_type"] == "webhook"
+    assert runs[0]["trigger"] == "radarr"
+    assert runs[0]["label"] == "Dune (2021)"
+    assert runs[0]["outcome"] == "success"
+    assert runs[0]["assets_processed"] == 1
+    assert runs[0]["success_count"] == 1
+    assert runs[0]["error_count"] == 0
+
+
+@pytest.mark.unit
+def test_a_failed_upload_is_recorded_as_a_failed_webhook_run(monkeypatch, history):
+    service = _applying_service(monkeypatch, ["❌ Dune (2021) • someone | Failed to update Poster"])
+
+    service._attempt(_dune(), ("movie", 438631), _now(), _tally(),
+                     artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    runs = history.get_runs()
+    assert runs[0]["outcome"] == "failed"
+    assert runs[0]["error_count"] == 1
+
+
+@pytest.mark.unit
+def test_artwork_that_never_appeared_in_plex_is_recorded_as_an_error(monkeypatch, history):
+    """The retry ladder is exhausted here (attempt is past its end), so the item is
+    given up on. A run that applied nothing has failed, whatever the logs said."""
+    service = _applying_service(monkeypatch, ["Poster not available on Plex"])
+
+    service._attempt(_dune(), ("movie", 438631), _now(), _tally(),
+                     attempt=99, artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    runs = history.get_runs()
+    assert runs[0]["outcome"] == "failed"
+    assert runs[0]["error_count"] == 1
+
+
+@pytest.mark.unit
+def test_a_retry_does_not_record_a_run_of_its_own(monkeypatch, history):
+    """One import is one run. The record waits for the ladder to finish, or the tab
+    fills up with a row per retry."""
+    service = _applying_service(monkeypatch, ["Poster not available on Plex"])
+
+    service._attempt(_dune(), ("movie", 438631), _now(), _tally(),
+                     attempt=0, artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    assert history.get_runs() == []
+
+
+@pytest.mark.unit
+def test_a_retry_carries_the_log_file_the_first_attempt_opened(monkeypatch, history, tmp_path):
+    """Each attempt runs on its own Timer thread, and a thread starts with no log file. The
+    first attempt hands its file to the retry, and the retry records that file, so one import
+    is one log the way it is one history row."""
+    import utils.notifications as notifications
+    from core import globals as app_globals
+
+    monkeypatch.setattr(notifications, "DEFAULT_LOG_PATH", str(tmp_path / "logs"))
+    app_globals.run_log.path = None
+    scheduled = {}
+
+    class _FakeTimer:
+        def __init__(self, interval, function, args=()):
+            scheduled["args"] = args
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", _FakeTimer)
+    pending = _applying_service(monkeypatch, ["Poster not available on Plex"])
+    pending._attempt(_dune(), ("movie", 438631), _now(), _tally(),
+                     attempt=0, artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    log_file = scheduled["args"][-1]
+    assert log_file and log_file == notifications.current_log_file()
+    app_globals.run_log.path = None       # the retry lands on a fresh thread
+
+    applied = _applying_service(monkeypatch, ["✅ Poster uploaded"])
+    applied._attempt(*scheduled["args"])
+
+    runs = history.get_runs()
+    assert len(runs) == 1
+    assert runs[0]["log_file"] == os.path.basename(log_file)
+    assert notifications.current_log_file() is None
+
+
+@pytest.mark.unit
+def test_an_import_with_no_cached_artwork_is_recorded_as_skipped(monkeypatch, history):
+    from core import globals as app_globals
+
+    monkeypatch.setattr(app_globals, "config", MagicMock(webhook_tpdb_users=[]))
+    service = WebhookService()
+
+    service._attempt(_dune(), ("movie", 438631), _now(), _tally())
+
+    runs = history.get_runs()
+    assert len(runs) == 1
+    assert runs[0]["outcome"] == "skipped"
+    assert runs[0]["assets_processed"] == 0
+
+
+# ------------------- editions: two Plex rows with the same title and year -------------------
+
+ALIEN_GUID = "plex://movie/5d776825880197001ec967c6"
+
+
+class _Field:
+    def __init__(self, name, locked):
+        self.name = name
+        self.locked = locked
+
+
+class _PlexMovie:
+    """A plexapi Movie as far as the lookup and the uploader read it."""
+
+    def __init__(self, rating_key, folder, locked, file="Alien (1979) Bluray-1080p.mkv"):
+        self.ratingKey = rating_key
+        self.title = "Alien"
+        self.year = 1979
+        self.guid = ALIEN_GUID
+        self.librarySectionTitle = "Movies"
+        self.media = [SimpleNamespace(parts=[SimpleNamespace(file=f"/data/movies/{folder}/{file}")])]
+        self.fields = [_Field("thumb", locked)]
+        self.labels = []
+        self.uploaded = []
+
+    def uploadPoster(self, url=None, filepath=None):
+        self.uploaded.append(url or filepath)
+
+    def addLabel(self, label):
+        self.labels.append(str(label))
+
+    def removeLabel(self, label, *args):
+        self.labels = [existing for existing in self.labels if existing != str(label)]
+
+    def reload(self):
+        pass
+
+
+class _MovieSection:
+    """A movie library where getGuid, like plexapi's, returns only the first row with the guid."""
+
+    def __init__(self, rows):
+        self.title = "Movies"
+        self.rows = rows
+
+    def getGuid(self, guid):
+        return self.rows[0]
+
+    def search(self, guid=None, **kwargs):
+        return [row for row in self.rows if row.guid == guid]
+
+
+@pytest.fixture
+def edition_library(monkeypatch, tmp_path, index, history):
+    """Alien (1979) twice in one Plex library: the 35mm edition row first, poster locked, and the
+       row Radarr's upgrade just created, unlocked. One configured user has a cached poster."""
+    import processors.upload_processor as upload_processor_module
+    import utils.notifications as notifications
+    from core import globals as app_globals
+    from core.config import Config
+    from plex.plex_connector import PlexConnector
+
+    edition = _PlexMovie(81522, "Alien (1979) {edition-35mm Film Scan}", locked=True)
+    plain = _PlexMovie(89650, "Alien (1979)", locked=False)
+
+    config = Config()
+    config.skip_locked_artwork = True
+    config.webhook_tpdb_users = ["someuser"]
+    monkeypatch.setattr(app_globals, "config", config)
+    monkeypatch.setattr(upload_processor_module.Config, "load", lambda self: None)
+
+    connector = PlexConnector()
+    connector.plex = object()
+    connector.movie_libraries = [_MovieSection([edition, plain])]
+    monkeypatch.setattr(connector, "connect", lambda: None)
+    monkeypatch.setattr(app_globals, "plex", connector)
+
+    # The TMDb ID comes from the poster page, which is a web request. Hand it over directly.
+    def resolve(self, artwork, description, kind):
+        artwork["tmdb_id"] = 348
+        return False
+    monkeypatch.setattr(upload_processor_module.UploadProcessor, "_resolve_tmdb_id", resolve)
+    monkeypatch.setattr("plex.plex_uploader.time.sleep", lambda *a: None)
+    monkeypatch.setattr(notifications, "DEFAULT_LOG_PATH", str(tmp_path / "logs"))
+    app_globals.run_log.path = None
+
+    _rec(index, "someuser", 5001, "Alien", 1979, "movie_poster")
+    monkeypatch.setattr(webhook_service_module, "AssetIndex", lambda: index)
+    return SimpleNamespace(edition=edition, plain=plain)
+
+
+def _alien_import(folder):
+    return parse_event({"eventType": "Download",
+                        "movie": {"title": "Alien", "year": 1979, "tmdbId": 348,
+                                  "folderPath": f"/movies/{folder}"},
+                        "movieFile": {"path": f"/movies/{folder}/Alien (1979) Bluray-1080p.mkv"}})
+
+
+@pytest.mark.unit
+def test_an_import_applies_to_the_row_in_its_folder_not_a_locked_edition(edition_library, history):
+    """getGuid returns the locked 35mm edition first. The poster goes to the row holding the
+    imported file instead, and the edition is left alone."""
+    event = _alien_import("Alien (1979)")
+
+    WebhookService()._attempt(event, WebhookService._dedupe_key(event), _now(), _tally())
+
+    plain, edition = edition_library.plain, edition_library.edition
+    assert len(plain.uploaded) == 1 and "/api/assets/5001" in plain.uploaded[0]
+    assert plain.labels == ["PID:" + utils.calculate_md5("https://theposterdb.com/api/assets/5001")]
+    assert edition.uploaded == [] and edition.labels == []
+    runs = history.get_runs()
+    assert runs[0]["outcome"] == "success" and runs[0]["locked_count"] == 0
+
+
+@pytest.mark.unit
+def test_an_edition_import_leaves_the_plain_row_alone(edition_library, history):
+    event = _alien_import("Alien (1979) {edition-35mm Film Scan}")
+
+    WebhookService()._attempt(event, WebhookService._dedupe_key(event), _now(), _tally())
+
+    assert edition_library.edition.uploaded == []          # locked, so skipped
+    assert edition_library.plain.uploaded == []            # not the row that was imported
+    assert history.get_runs()[0]["locked_count"] == 1
+
+
+@pytest.mark.unit
+def test_an_import_whose_folder_plex_has_not_scanned_waits_for_it(edition_library, history, monkeypatch):
+    """Before Plex scans the new file in, the only row with the guid is another edition. That is
+    not the item the event is about, so the apply retries rather than landing on it."""
+    scheduled = {}
+
+    class _FakeTimer:
+        def __init__(self, interval, function, args=()):
+            scheduled["args"] = args
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", _FakeTimer)
+    edition_library.edition.fields = [_Field("thumb", False)]   # would take the poster if matched
+    event = _alien_import("Alien (1979) {edition-Director's Cut}")
+
+    WebhookService()._attempt(event, WebhookService._dedupe_key(event), _now(), _tally())
+
+    assert "args" in scheduled                             # a retry is queued
+    assert edition_library.edition.uploaded == [] and edition_library.plain.uploaded == []
+    assert history.get_runs() == []
+
+
+@pytest.mark.unit
+def test_an_upgrade_waits_for_plex_to_scan_the_new_file(edition_library, history, monkeypatch):
+    """Radarr fires the upgrade webhook before Plex rescans, so the row in the folder still holds
+    the old file. That row goes when Plex scans, so the apply retries rather than landing on it."""
+    scheduled = {}
+
+    class _FakeTimer:
+        def __init__(self, interval, function, args=()):
+            scheduled["args"] = args
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", _FakeTimer)
+    edition_library.plain.media[0].parts[0].file = "/data/movies/Alien (1979)/Alien (1979) Remux-2160p EPSiLON.mkv"
+    event = _alien_import("Alien (1979)")
+
+    WebhookService()._attempt(event, WebhookService._dedupe_key(event), _now(), _tally())
+
+    assert "args" in scheduled                             # a retry is queued
+    assert edition_library.edition.uploaded == [] and edition_library.plain.uploaded == []
+    assert history.get_runs() == []
+
+
+@pytest.mark.unit
+def test_an_import_with_no_path_applies_to_every_row_with_the_guid(edition_library, history):
+    event = parse_event({"eventType": "Download",
+                         "movie": {"title": "Alien", "year": 1979, "tmdbId": 348}})
+
+    WebhookService()._attempt(event, WebhookService._dedupe_key(event), _now(), _tally())
+
+    assert history.get_runs()[0]["locked_count"] == 1       # the locked edition is skipped
+    assert len(edition_library.plain.uploaded) == 1         # the plain release is not masked by it
+    assert edition_library.edition.uploaded == []
+
+
+def _row(*files):
+    return SimpleNamespace(media=[SimpleNamespace(parts=[SimpleNamespace(file=f) for f in files])])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("row,folder,file,matched", [
+    (_row("/data/movies/Alien (1979)/Alien (1979).mkv"), "Alien (1979)", (), True),
+    # a folder whose name only starts with the imported one is a different edition
+    (_row("/data/movies/Alien (1979) {edition-35mm Film Scan}/Alien (1979).mkv"), "Alien (1979)", (), False),
+    (_row("D:\\Movies\\Alien (1979)\\Alien (1979).mkv"), "Alien (1979)", (), True),         # Plex on Windows
+    (_row("/data/movies/Alien (1979)/BDMV/STREAM/00001.m2ts"), "Alien (1979)", (), True),   # nested disc layout
+    (_row("/data/movies/Alien (1979).mkv"), "Alien (1979)", (), False),                    # a file name is not a folder
+    (_row("/data/other/x.mkv", "/data/movies/Alien (1979)/cd2.mkv"), "Alien (1979)", (), True),  # any part will do
+    (_row(None), "Alien (1979)", (), False),
+    (SimpleNamespace(media=[]), "Alien (1979)", (), False),
+    # with the file named, only the item holding that file matches
+    (_row("/data/movies/Alien (1979)/Alien (1979) new.mkv"), "Alien (1979)", ("Alien (1979) new.mkv",), True),
+    (_row("/data/movies/Alien (1979)/Alien (1979) old.mkv"), "Alien (1979)", ("Alien (1979) new.mkv",), False),
+    (_row("D:\\Movies\\Alien (1979)\\Alien (1979) new.mkv"), "Alien (1979)", ("Alien (1979) new.mkv",), True),
+    (_row("/data/movies/Alien (1979)/Extras/Alien.mkv"), "Alien (1979)", ("Extras", "Alien.mkv"), True),
+    (_row("/data/movies/Other/Alien (1979) new.mkv"), "Alien (1979)", ("Alien (1979) new.mkv",), False),
+])
+def test_items_holding(row, folder, file, matched):
+    from plex.plex_connector import PlexConnector
+    assert PlexConnector._items_holding([row], folder, file) == ([row] if matched else [])
+
+
+@pytest.mark.unit
+def test_a_guid_search_that_finds_nothing_still_checks_the_row_getguid_returned(edition_library, history, monkeypatch):
+    """If the search by guid comes back empty, the row getGuid found is still checked against
+    the folder rather than the library being treated as not holding the film."""
+    from core import globals as app_globals
+
+    section = app_globals.plex.movie_libraries[0]
+    section.rows = [edition_library.plain, edition_library.edition]
+    monkeypatch.setattr(section, "search", lambda **kwargs: [])
+    event = _alien_import("Alien (1979)")
+
+    WebhookService()._attempt(event, WebhookService._dedupe_key(event), _now(), _tally())
+
+    assert len(edition_library.plain.uploaded) == 1
+    assert edition_library.edition.uploaded == []

@@ -73,7 +73,7 @@ class RecordingCallbacks:
         return ProcessingCallbacks(
             on_status_update=lambda *a: self.status_calls.append(a),
             on_log_update=lambda msg: self.log_calls.append(msg),
-            on_progress_update=lambda cur, total: self.progress_calls.append((cur, total)),
+            on_progress_update=lambda cur, total, *a: self.progress_calls.append((cur, total)),
             on_debug=lambda msg, ctx: self.debug_calls.append((msg, ctx)),
         )
 
@@ -113,12 +113,11 @@ class TestSuccessPath:
     def test_movie_artwork_processed_and_counted(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title="Some Title", zip_author="Some Author",
             zip_source="tpdb", options=Options(),
-            callbacks=recorder.as_processing_callbacks(),
         )
 
         stub = _stub_upload_processor["instance"]
@@ -131,11 +130,11 @@ class TestSuccessPath:
     def test_collection_artwork_dispatches_to_collection_processor(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path, media="Collection", title="Some Saga", year=None)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
         stub = _stub_upload_processor["instance"]
         assert len(stub.collection_calls) == 1
@@ -143,11 +142,11 @@ class TestSuccessPath:
     def test_tv_show_artwork_dispatches_to_tv_processor(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path, media="TV Show", title="Some Show", season=1, episode=2)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
         stub = _stub_upload_processor["instance"]
         assert len(stub.tv_calls) == 1
@@ -155,7 +154,7 @@ class TestSuccessPath:
     def test_multiple_results_only_checkmark_and_recycle_count_as_success(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         # Patch the stub's movie_result after construction via the factory hook
         def make_results(_artwork):
@@ -172,18 +171,18 @@ class TestSuccessPath:
         with mock.patch.object(mod, "UploadProcessor", factory):
             processor.process_uploaded_files(
                 [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-                options=Options(), callbacks=recorder.as_processing_callbacks(),
+                options=Options(),
             )
         assert any("2 asset(s) updated" in msg for msg in recorder.log_calls)
 
     def test_override_title_applied_to_artwork(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path, title="Original Title")
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
             override_title="Overridden Title",
         )
         stub = _stub_upload_processor["instance"]
@@ -194,13 +193,13 @@ class TestUnavailableMediaType:
     def test_unavailable_logs_warning_and_cleans_up_temp_file(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path, media="unavailable", title="Ghost Movie", year=1999)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
-        assert any("Not available on Plex" in msg for msg in recorder.log_calls)
+        assert any("not available on Plex" in msg for msg in recorder.log_calls)
         assert not os.path.exists(artwork["path"])
         stub = _stub_upload_processor["instance"]
         assert stub.movie_calls == []
@@ -208,12 +207,15 @@ class TestUnavailableMediaType:
         assert stub.tv_calls == []
 
     def test_unavailable_with_no_callbacks_does_not_crash(self, tmp_path, _stub_upload_processor):
+        # ProcessingCallbacks() with every field at its default (None) - process_uploaded_files
+        # always calls self.callbacks.log/debug/etc, so a real (if inert) instance is required;
+        # self.callbacks itself is never None.
         artwork = _make_temp_artwork(tmp_path, media="unavailable", title="Ghost Movie")
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=ProcessingCallbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=None,
+            options=Options(),
         )
         assert not os.path.exists(artwork["path"])
 
@@ -227,11 +229,11 @@ class TestUnavailableMediaType:
             on_log_update=None,
             on_debug=lambda msg, ctx: recorder.debug_calls.append((msg, ctx)),
         )
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=callbacks)
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=callbacks,
+            options=Options(),
         )
         stub = _stub_upload_processor["instance"]
         assert stub.movie_calls == []
@@ -243,11 +245,11 @@ class TestUnknownMediaType:
     def test_unknown_media_type_logged_and_skipped(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path, media="Sculpture")
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
         assert any("Unknown media type: Sculpture" in msg for msg in recorder.log_calls)
         # Unknown media type does NOT get its temp file cleaned up (continues before dispatch)
@@ -265,7 +267,7 @@ class TestExceptionHandling:
     def test_known_exceptions_logged_with_expected_prefix(self, tmp_path, _stub_upload_processor, exc_cls, expected_prefix):
         artwork = _make_temp_artwork(tmp_path)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         import services.artwork_processor as mod
         import unittest.mock as mock
@@ -281,16 +283,19 @@ class TestExceptionHandling:
         with mock.patch.object(mod, "UploadProcessor", factory):
             processor.process_uploaded_files(
                 [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-                options=Options(), callbacks=recorder.as_processing_callbacks(),
+                options=Options(),
             )
         matching = [msg for msg in recorder.log_calls if msg.startswith(expected_prefix) and "boom" in msg]
         assert len(matching) == 1
         assert not os.path.exists(artwork["path"])
 
-    def test_unexpected_exception_logs_error_and_updates_status(self, tmp_path, _stub_upload_processor):
+    def test_unexpected_exception_logs_error(self, tmp_path, _stub_upload_processor):
+        # process_uploaded_files's inline exception handling logs an unhandled exception but,
+        # unlike _process_single_artwork (used by the normal scrape path), does not also call
+        # status() - there is no per-run "sticky" status to clear here.
         artwork = _make_temp_artwork(tmp_path)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         import services.artwork_processor as mod
         import unittest.mock as mock
@@ -306,10 +311,9 @@ class TestExceptionHandling:
         with mock.patch.object(mod, "UploadProcessor", factory):
             processor.process_uploaded_files(
                 [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-                options=Options(), callbacks=recorder.as_processing_callbacks(),
+                options=Options(),
             )
-        assert any("Unexpected during process_uploaded_artwork" in msg and "kaboom" in msg for msg in recorder.log_calls)
-        assert any(call[0].startswith("Error:") and call[1] == "danger" for call in recorder.status_calls)
+        assert any(msg == "❌ kaboom" for msg in recorder.log_calls)
         assert not os.path.exists(artwork["path"])
 
 
@@ -317,11 +321,11 @@ class TestProgressAndSummary:
     def test_progress_updates_fire_per_item_and_at_start_end(self, tmp_path, _stub_upload_processor):
         artworks = [_make_temp_artwork(tmp_path), _make_temp_artwork(tmp_path)]
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             artworks, skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
         assert (0, 2) in recorder.progress_calls
         assert (1, 2) in recorder.progress_calls
@@ -329,21 +333,21 @@ class TestProgressAndSummary:
 
     def test_empty_file_list_logs_no_files_message(self, _stub_upload_processor):
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [], skipped=0, zip_title=None, zip_author=None, zip_source=None,
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
         assert any(msg == "No files to process in uploaded ZIP file" for msg, ctx in recorder.debug_calls)
 
     def test_skipped_count_included_in_summary_log(self, tmp_path, _stub_upload_processor):
         artwork = _make_temp_artwork(tmp_path)
         recorder = RecordingCallbacks()
-        processor = ArtworkProcessor(plex=object())
+        processor = ArtworkProcessor(plex=object(), callbacks=recorder.as_processing_callbacks())
 
         processor.process_uploaded_files(
             [artwork], skipped=3, zip_title="Title", zip_author="Author", zip_source="mediux",
-            options=Options(), callbacks=recorder.as_processing_callbacks(),
+            options=Options(),
         )
         assert any("Skipping 3 asset(s)" in msg for msg in recorder.log_calls)

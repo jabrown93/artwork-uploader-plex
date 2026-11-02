@@ -1,0 +1,143 @@
+"""
+Service for checking application updates from GitHub.
+
+Extracted from artwork_uploader.py to reduce file size and improve
+maintainability.
+"""
+
+import os, uuid, threading, time, requests
+from typing import Optional, Callable
+from packaging import version
+from models.instance import Instance
+from utils.notifications import debug_me
+
+
+class UpdateService:
+    """Handles checking for application updates from GitHub."""
+
+    def __init__(
+        self,
+        github_repo: str,
+        current_version: str,
+        check_interval: int = 3600
+    ) -> None:
+        """
+        Initialize the update service.
+
+        Args:
+            github_repo: GitHub repository (e.g., "user/repo")
+            current_version: Current version of the application
+            check_interval: Seconds between update checks (default: 3600 = 1 hour)
+        """
+        self.github_repo:str = github_repo
+        self.current_version:str = current_version
+        self.check_interval: int = check_interval
+        self.update_thread: Optional[threading.Thread] = None
+        self.is_running:bool = False
+        self.instance: Instance = Instance(uuid.uuid4(), mode="cli")  # Create a CLI instance for logging purposes
+        self.update_found: str = None
+
+    def get_latest_version(self) -> Optional[str]:
+        """
+        Fetch the latest release version from GitHub.
+
+        Returns:
+            Latest version tag if found, None otherwise
+        """
+        if self.update_found:
+            debug_me(f"Returning cached latest version: {self.update_found}")
+            return self.update_found
+                    
+        # The use of a token is only needed for development purposes, for testing
+        # the app update feature and make sure you don't hit rate limits
+        token = os.getenv("GITHUB_TOKEN")
+        headers = {}
+        if token:
+            headers = {"Authorization": f"token {token}"}
+            debug_me("Using GitHub token for authenticated requests.")
+        else:
+            debug_me("No GitHub token found. Using unauthenticated requests.")
+
+        url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                return response.json()["tag_name"]
+            else:
+                debug_me(f"Failed to fetch latest version. GitHub API returned status code: {response.status_code}")
+        except Exception:
+            pass
+        return None
+
+    def check_for_update(self) -> Optional[str]:
+        """
+        Check if a newer version is available.
+
+        Returns:
+            New version string if available, None if up to date or check failed
+        """
+        latest_version = self.get_latest_version()
+        if latest_version:
+            # Normalize versions by removing 'v' prefix for comparison
+            latest_normalized = latest_version.lstrip('v')
+            current_normalized = self.current_version.lstrip('v')
+
+            if version.parse(latest_normalized) > version.parse(current_normalized):
+                debug_me(f"Update available! Current version: {self.current_version}. Latest version: {latest_version}")
+                self.update_found = latest_version
+                return latest_version
+            else:
+                debug_me(f"No update available.")
+        else:
+            debug_me("Could not determine latest version.")
+        return None
+
+    def start_periodic_check(
+        self,
+        on_update_available: Callable[[str], None]
+    ) -> bool:
+        """
+        Start periodic update checking in a background thread.
+
+        Args:
+            on_update_available: Callback function called with version string
+                                when update is available
+
+        Returns:
+            True if started, False if already running
+        """
+        if self.update_thread is None or not self.update_thread.is_alive():
+            self.is_running = True
+            self.update_thread = threading.Thread(
+                target=self._check_periodically,
+                args=(on_update_available,),
+                daemon=True
+            )
+            self.update_thread.start()
+            return True
+        return False
+
+    def stop_periodic_check(self) -> None:
+        """Stop the periodic update checking."""
+        self.is_running = False
+        if self.update_thread:
+            self.update_thread.join(timeout=2)
+
+    def _check_periodically(
+        self,
+        on_update_available: Callable[[str], None]
+    ) -> None:
+        """
+        Internal method that runs in the update checking thread.
+
+        Args:
+            on_update_available: Callback function for update notifications
+        """
+        while self.is_running and not self.update_found:
+            new_version = self.check_for_update()
+            if new_version:
+                on_update_available(new_version)
+                debug_me(f"An update has been found, exiting periodic check thread")
+                break
+            debug_me(f"No update found, next check in {self.check_interval} seconds.")
+            time.sleep(self.check_interval)

@@ -1,16 +1,16 @@
-from typing import Callable, Optional
+from typing import Optional
 from urllib.parse import urlparse
-
-from core.constants import TPDB_BASE_URL, MEDIUX_BASE_URL, SOURCE_THEPOSTERDB, SOURCE_MEDIUX
-from core.exceptions import ScraperException
-from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 from models.options import Options
-from scrapers.mediux_scraper import MediuxScraper
+from models.callbacks import ProcessingCallbacks
+from core.exceptions import ScraperException
+from core.enums import ScraperSource
 from scrapers.theposterdb_scraper import ThePosterDBScraper
+from scrapers.mediux_scraper import MediuxScraper
 from utils.notifications import debug_me
-
+from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 
 class Scraper:
+
     """
     A class to scrape one of the supported providers
 
@@ -25,36 +25,41 @@ class Scraper:
         scrape_html():          Scrapes a local HTML file using the Poster DB scraper
     """
 
-    def __init__(self, url: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
+    def __init__(self, url: str, callbacks: Optional[ProcessingCallbacks]) -> None:
         self.url: str = url
         self.options: Options = Options()
-        self.progress_callback: Optional[Callable[[int, int], None]] = progress_callback
+        self.callbacks: Optional[ProcessingCallbacks] = callbacks
         self.movie_artwork: MovieArtworkList = []
         self.tv_artwork: TVArtworkList = []
         self.collection_artwork: CollectionArtworkList = []
         self.source: Optional[str] = None
         self.title: Optional[str] = None
         self.author: Optional[str] = None
+        self.artist_assets: Optional[dict] = None
         self.skipped: int = 0
         self.exclusions: int = 0
         self.filtered: int = 0
+        self.errored: int = 0
         self.total: int = 0
 
         # Set source based on the contents of the URL
         parsed_url = urlparse(url)
         host = parsed_url.hostname
-        if host == urlparse(TPDB_BASE_URL).hostname:
-            self.source = SOURCE_THEPOSTERDB
-        elif host == urlparse(MEDIUX_BASE_URL).hostname and ("/sets/" in url or "/boxsets/" in url):
-            self.source = SOURCE_MEDIUX
+        if host == "theposterdb.com":
+            self.source = ScraperSource.THEPOSTERDB.value
+        elif host == "mediux.pro" and ("/sets/" in url or "/boxsets/" in url):
+            self.source = ScraperSource.MEDIUX.value
         elif ".html" in url:
             self.source = "html"
+
 
     # Set options - otherwise will use defaults of False
     def set_options(self, options: Options) -> None:
         self.options = options
 
+
     def scrape(self) -> None:
+
         """
         Runs the correct scraper based on the source of the URL (as set in the __init__ function)
 
@@ -62,41 +67,44 @@ class Scraper:
             None
         """
         try:
-            debug_me(f"Scraping from {self.source}", "Scraper/scrape")
-            if self.source == SOURCE_THEPOSTERDB:
+            debug_me(f"Scraping from {self.source}")
+            if self.source == ScraperSource.THEPOSTERDB.value:
                 self.scrape_theposterdb()
-            elif self.source == SOURCE_MEDIUX:
+            elif self.source == ScraperSource.MEDIUX.value:
                 self.scrape_mediux()
             elif self.source == "html":
                 return self.scrape_html()
             else:
-                raise ScraperException(
-                    f"Invalid source provided ({self.source if self.source else 'empty source'})")
-        except Exception:
+                raise ScraperException(f"Invalid source provided ({self.source if self.source else 'empty source'})")
+        except Exception as e:
             raise
 
     def scrape_theposterdb(self) -> None:
         try:
-            theposterdb_scraper = ThePosterDBScraper(self.url)
+            theposterdb_scraper = ThePosterDBScraper(url=self.url, callbacks=self.callbacks)
             theposterdb_scraper.set_options(self.options)
             theposterdb_scraper.scrape()
 
             self.title = theposterdb_scraper.title
             self.author = theposterdb_scraper.author
+            self.artist_assets = theposterdb_scraper.artist_assets
             self.movie_artwork = theposterdb_scraper.movie_artwork
             self.tv_artwork = theposterdb_scraper.tv_artwork
             self.collection_artwork = theposterdb_scraper.collection_artwork
             self.skipped = theposterdb_scraper.skipped
             self.exclusions = theposterdb_scraper.exclusions
             self.filtered = theposterdb_scraper.filtered
+            self.errored = theposterdb_scraper.errored
             self.total = theposterdb_scraper.total
 
-        except ScraperException:
+        except ScraperException as scraper_exception:
             raise
         except Exception as e:
             raise Exception(f"Unexpected error: {e}")
 
+
     def scrape_mediux(self) -> None:
+
         """
         Scrape mediux.pro - this could be anything from a backdrop, posters or episode cards
 
@@ -108,7 +116,7 @@ class Scraper:
 
         try:
 
-            mediux_scraper = MediuxScraper(self.url, progress_callback=self.progress_callback)
+            mediux_scraper = MediuxScraper(url=self.url, callbacks=self.callbacks)
             mediux_scraper.set_options(self.options)
             mediux_scraper.scrape()
 
@@ -120,6 +128,7 @@ class Scraper:
             self.skipped = mediux_scraper.skipped
             self.exclusions = mediux_scraper.exclusions
             self.filtered = mediux_scraper.filtered
+            self.errored = mediux_scraper.errored
             self.total = mediux_scraper.total
 
         except ScraperException:
@@ -127,7 +136,9 @@ class Scraper:
         except Exception as e:
             raise Exception(f"Unexpected error: {e}")
 
+
     def scrape_html(self) -> None:
+
         """
         Scrapes a local HTML file.  Not sure what this option is actually used for!
 
@@ -139,3 +150,4 @@ class Scraper:
         """
 
         self.scrape_theposterdb()
+

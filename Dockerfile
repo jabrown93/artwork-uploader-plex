@@ -30,6 +30,10 @@ RUN chmod +x /entrypoint.sh
 # Expose web UI port
 EXPOSE 4567
 
+# Health check configuration
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:4567/api/health').getcode() == 200 else 1)"
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh", "python", "/app/src/artwork_uploader.py"]
 
 CMD ["--debug"]

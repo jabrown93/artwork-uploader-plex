@@ -64,23 +64,6 @@ class TestTlsConfig:
         assert config.tls_is_enabled() is False
 
 
-class TestSessionCookieSecureWithTls:
-
-    def test_auto_secure_when_tls_enabled(self, config):
-        config.tls_cert_file = "/certs/tls.crt"
-        config.tls_key_file = "/certs/tls.key"
-        assert config.session_cookie_is_secure() is True
-
-    def test_auto_insecure_without_tls_or_https_url(self, config):
-        assert config.session_cookie_is_secure() is False
-
-    def test_never_wins_over_tls(self, config):
-        config.tls_cert_file = "/certs/tls.crt"
-        config.tls_key_file = "/certs/tls.key"
-        config.session_cookie_secure = "never"
-        assert config.session_cookie_is_secure() is False
-
-
 class TestResolveTlsFiles:
 
     def test_returns_ssl_kwargs_for_valid_pair(self, tmp_path):
