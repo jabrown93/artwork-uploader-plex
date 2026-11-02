@@ -176,10 +176,9 @@ class UploadProcessor:
         """
         Resolve the TMDb ID for a TPDb artwork item before matching it to the library.
 
-        With local_library_matching enabled (the default), the title and year from the scrape are
-        matched against an in-memory index of the Plex libraries first, so items that aren't in the
-        library are skipped without any web request, and items that are get their TMDb ID from
-        Plex's own guids. Only an ambiguous local match falls back to fetching the poster page.
+        With local_library_matching enabled, the title and year are matched against an
+        in-memory Plex index first. Ambiguous matches and matches without a TMDb GUID
+        fall back to fetching the poster page.
 
         Returns True when the artwork was matched locally - the caller then attaches a
         confirm_match hook so the poster page is still checked before anything is written.
@@ -202,9 +201,11 @@ class UploadProcessor:
                     raise ShowNotFound(f'{description} | Show not available on Plex')
             elif status == "matched":
                 tmdb_id = match.get("tmdb_id")
-                debug_me(f"Matched '{artwork.get('title')} ({artwork.get('year')})' locally as TMDb ID '{tmdb_id}'")
-                artwork["tmdb_id"] = tmdb_id
-                return True
+                if tmdb_id is not None:
+                    debug_me(f"Matched '{artwork.get('title')} ({artwork.get('year')})' locally as TMDb ID '{tmdb_id}'")
+                    artwork["tmdb_id"] = tmdb_id
+                    return True
+                debug_me(f"Local match for '{artwork.get('title')}' has no TMDb GUID, fetching the poster page")
             else:
                 debug_me(f"'{artwork.get('title')} ({artwork.get('year')})' is ambiguous locally, fetching the poster page")
 

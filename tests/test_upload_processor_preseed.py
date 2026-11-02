@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -163,6 +164,49 @@ def _processor(configured, arr, options=None):
     proc = UploadProcessor(FakePlex(items=None, libraries=None), arr=arr)
     proc.set_options(options or Options(kometa=True))
     return proc
+
+
+@pytest.mark.parametrize("kind", ["movie", "tv"])
+def test_local_match_without_tmdb_guid_resolves_page_and_saves(
+        kind, configured, monkeypatch):
+    configured.local_library_matching = True
+    configured.save()
+    monkeypatch.setattr(globals, "docker", False)
+    monkeypatch.setattr(
+        "utils.soup_utils.cook_soup",
+        lambda url: BeautifulSoup('<div data-media-id="603"></div>', "html.parser"))
+    response = SimpleNamespace(
+        headers={"Content-Type": "image/jpeg"},
+        raise_for_status=lambda: None,
+        iter_content=lambda size: [b"poster data"],
+    )
+    monkeypatch.setattr("kometa.kometa_saver.requests.get", lambda *args, **kwargs: response)
+    monkeypatch.setattr("kometa.kometa_saver.time.sleep", lambda seconds: None)
+
+    if kind == "movie":
+        item = SimpleNamespace(
+            title="The Matrix", guids=[SimpleNamespace(id="imdb://tt0133093")],
+            media=[SimpleNamespace(parts=[SimpleNamespace(file="/movies/The Matrix (1999)/movie.mkv")])])
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+        library = "Movies"
+    else:
+        item = FakeShow("Breaking Bad", [
+            FakeSeason(1, [FakeEpisode(1, "/tv/Breaking Bad (2008)/Season 01/S01E01.mkv")])])
+        item.guids = [SimpleNamespace(id="tvdb://81189")]
+        artwork = _tv_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+        library = "TV Shows"
+
+    plex = FakePlex(items=[item], libraries=[library],
+                    index_status="matched", index_match={"tmdb_id": None})
+    proc = UploadProcessor(plex, arr=FakeArr())
+    proc.set_options(Options(kometa=True, force=True))
+    results = proc.process_movie_artwork(artwork) if kind == "movie" else proc.process_tv_artwork(artwork)
+
+    assert results[0].startswith("✅")
+    assert artwork["tmdb_id"] == 603
+    filename = "poster.jpg" if kind == "movie" else "Season01.jpg"
+    folder = "The Matrix (1999)" if kind == "movie" else "Breaking Bad (2008)"
+    assert (Path(configured.kometa_base) / library / folder / filename).read_bytes() == b"poster data"
 
 
 class TestMoviePreseed:
