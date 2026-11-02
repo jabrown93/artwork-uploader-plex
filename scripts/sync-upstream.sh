@@ -55,7 +55,7 @@ restore_fork_owned() {
 }
 
 start() {
-  local ref=${1:-upstream/main} last target short branch base
+  local ref=${1:-upstream/main} last target short branch base out conflicts f
   require_clean
   fetch
   # From the fetched origin/main, not the checkout: a stale local main would graft an
@@ -77,14 +77,27 @@ start() {
 
   # The fork keeps its code under src/ while upstream is flat; directory-rename
   # detection maps upstream's core/x.py onto src/core/x.py during the merge.
-  if git -c merge.conflictStyle=zdiff3 -c merge.directoryRenames=true merge --no-commit --no-ff "$target" >/dev/null 2>&1; then
+  if out=$(git -c merge.conflictStyle=zdiff3 -c merge.directoryRenames=true merge --no-commit --no-ff "$target" 2>&1); then
     restore_fork_owned
     echo "Merged cleanly. Review, run the tests, then: scripts/sync-upstream.sh --finish"
     return 0
   fi
+  # A merge that never started (an untracked file in upstream's way, say) leaves no
+  # MERGE_HEAD. Treating it as a conflict would let --finish advance the marker
+  # without upstream's changes, dropping them from every later sync.
+  if ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+    rm -f "$STATE_FILE"
+    die "merge did not start:
+$out"
+  fi
   restore_fork_owned
+  conflicts=$(git diff --name-only --diff-filter=U 2>/dev/null)
+  if [[ -z $conflicts ]]; then
+    echo "Merged cleanly; conflicts were only in fork-owned paths. Review, run the tests, then: scripts/sync-upstream.sh --finish"
+    return 0
+  fi
   echo "Conflicts in:"
-  git diff --name-only --diff-filter=U 2>/dev/null | sed 's/^/  /'
+  while IFS= read -r f; do echo "  $f"; done <<< "$conflicts"
   echo "Resolve per FORK.md, git add, then: scripts/sync-upstream.sh --finish"
   return 1
 }
