@@ -10,7 +10,7 @@ The routes are organized into:
 - Helper functions for file uploads and processing
 """
 
-import errno, os, logging, flask.cli, sys, re, base64, hmac, shutil, socket, tempfile, zipfile, subprocess, threading, uuid, requests
+import errno, os, logging, flask.cli, sys, re, base64, hmac, shutil, socket, tempfile, zipfile, subprocess, threading, uuid, requests, json, time
 import unicodedata
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -211,12 +211,36 @@ def socket_login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def oidc_scope_list(scopes) -> list:
+    """Fork: the config key is a list upstream but a space-separated string in older fork
+    configs; accept both, and always include openid."""
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    scopes = [s for s in (scopes or []) if s]
+    if "openid" not in scopes:
+        scopes.append("openid")
+    return scopes
+
+
 def get_oidc_redirect_uri(config):
     if config.external_url:
         base_url = config.external_url.rstrip("/")
         return f"{base_url}/login/oidc/callback"
     
     return url_for("oidc_callback", _external=True)
+
+def _decode_id_token_claims(id_token):
+    """Fork: decode (without verifying the signature) the claims of an OIDC ID token. The
+    token arrived directly from the token endpoint over TLS in the authorization-code flow,
+    so OIDC Core 3.1.3.7 permits the client to skip signature verification here; callers
+    still check iss/aud/exp before trusting the result. Returns None if the token is not a
+    decodable JWT."""
+    try:
+        payload_segment = id_token.split(".")[1]
+        padded = payload_segment + "=" * (-len(payload_segment) % 4)
+        return json.loads(base64.urlsafe_b64decode(padded))
+    except (IndexError, ValueError, TypeError, AttributeError, UnicodeDecodeError):
+        return None
 
 # Fork: a placeholder sent back in place of a stored secret. redact_config() substitutes it on
 # the way out; save_config_web treats an echoed placeholder as "keep the stored value" so the
@@ -319,9 +343,7 @@ def setup_routes(web_app, config: Config):
 
             elif oidc_login:
                 debug_me(f"Logging in with OIDC")
-                scopes = config.oidc_scopes
-                if "openid" not in scopes:
-                    scopes.append("openid")
+                scopes = oidc_scope_list(config.oidc_scopes)
 
                 redirect_uri = get_oidc_redirect_uri(config)
 
@@ -366,7 +388,7 @@ def setup_routes(web_app, config: Config):
         redirect_uri = get_oidc_redirect_uri(config)
         debug_me(f"Obtained redirect URI as {redirect_uri}")
 
-        scopes = config.oidc_scopes
+        scopes = oidc_scope_list(config.oidc_scopes)
 
         oauth = OAuth2Session(
             client_id=config.oidc_client_id,
@@ -393,17 +415,42 @@ def setup_routes(web_app, config: Config):
                 code_verifier=code_verifier
             )
 
+            token_data = oauth.token
+
+            # Fork: some providers only put `groups` (or other identity claims) in the ID
+            # token, not the userinfo response upstream relies on alone. iss/aud/exp are
+            # validated before the claims are trusted (see _decode_id_token_claims).
+            id_token_claims = {}
+            if "id_token" in token_data:
+                id_token_claims = _decode_id_token_claims(token_data["id_token"])
+                if id_token_claims is None:
+                    debug_me("OIDC ID token could not be decoded")
+                    return render_template("login.html", error="OIDC authentication failed: invalid ID token.")
+                issuer = disc_res.get("issuer")
+                if issuer and id_token_claims.get("iss") != issuer:
+                    debug_me(f"OIDC ID token issuer mismatch: {id_token_claims.get('iss')!r} != {issuer!r}")
+                    return render_template("login.html", error="OIDC authentication failed: invalid ID token issuer.")
+                audience = id_token_claims.get("aud")
+                audience_set = set(audience) if isinstance(audience, list) else {audience}
+                if config.oidc_client_id not in audience_set:
+                    debug_me(f"OIDC ID token audience mismatch: {audience!r}")
+                    return render_template("login.html", error="OIDC authentication failed: invalid ID token audience.")
+                expires_at = id_token_claims.get("exp")
+                if not isinstance(expires_at, (int, float)) or expires_at <= time.time():
+                    debug_me("OIDC ID token is expired")
+                    return render_template("login.html", error="OIDC authentication failed: expired ID token.")
+                session["id_token"] = token_data["id_token"]
+
             # Retrieve user information
             user_info = oauth.get(userinfo_endpoint, timeout=OIDC_REQUEST_TIMEOUT).json() if userinfo_endpoint else {}
 
-            username = user_info.get("preferred_username") or user_info.get("sub") or "OIDC User"
-            groups_claim = config.oidc_groups_claim or "groups"
-            user_groups = user_info.get(groups_claim, [])
+            # Fork: ID token claims form the base, userinfo overrides where both carry a claim.
+            claims = {**id_token_claims, **user_info}
 
-            token_data = oauth.token
-            if "id_token" in token_data:
-                session["id_token"] = token_data["id_token"]
-            
+            username = claims.get("preferred_username") or claims.get("sub") or "OIDC User"
+            groups_claim = config.oidc_groups_claim or "groups"
+            user_groups = claims.get(groups_claim, [])
+
             # Validate allowed groups if configured
             if config.oidc_allowed_groups:
                 allowed_set = set(config.oidc_allowed_groups)

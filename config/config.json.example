@@ -118,7 +118,7 @@
     "_oidc_client_secret": "Artwork Uploader's client secret (must be created at the OIDC provider)",
     
     "oidc_scopes": ["email", "groups", "openid", "profile"],
-    "oidc_scopes": "List of OIDC scopes to fetch",
+    "_oidc_scopes": "List of OIDC scopes to fetch",
 
     "oidc_groups_claim": "groups",
     "_oidc_groups_claim": "Name of the claim that carries group membership for users (this is typically 'groups')",

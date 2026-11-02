@@ -10,8 +10,10 @@ coverage from those files is kept here.
 
 import base64
 import hashlib
+import json
 import os
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -46,12 +48,31 @@ DISCOVERY = {
     "token_endpoint": "https://idp.example.com/token",
     "userinfo_endpoint": "https://idp.example.com/userinfo",
     "end_session_endpoint": "https://idp.example.com/logout",
+    "issuer": "https://idp.example.com",
 }
 USER_INFO = {"preferred_username": "jared", "groups": ["media"]}
 
 
 def _fake_oauth_get(self, url, **kwargs):
     return _Response(USER_INFO if url.endswith("/userinfo") else DISCOVERY)
+
+
+def _make_id_token(claims):
+    """Build a minimally-shaped JWT (header.payload.signature) carrying `claims` in its
+    payload segment - the only part web_routes._decode_id_token_claims reads."""
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    return f"header.{payload}.signature"
+
+
+def _valid_id_token_claims(**overrides):
+    claims = {
+        "iss": "https://idp.example.com",
+        "aud": "artwork-uploader",
+        "exp": time.time() + 300,
+        "sub": "jared",
+    }
+    claims.update(overrides)
+    return claims
 
 
 class TestPasswordLogin:
@@ -195,7 +216,7 @@ class TestOidcPkce:
 
         def fake_fetch_token(self, **kwargs):
             calls.update(kwargs)
-            self.token = {"id_token": "an-id-token"}
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims())}
             return self.token
 
         monkeypatch.setattr(web_routes.OAuth2Session, "get", _fake_oauth_get)
@@ -217,7 +238,7 @@ class TestOidcPkce:
         self._configure_oidc(web_harness.config)
 
         def fake_fetch_token(self, **kwargs):
-            self.token = {"id_token": "an-id-token"}
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims())}
             return self.token
 
         monkeypatch.setattr(web_routes.OAuth2Session, "get", _fake_oauth_get)
@@ -234,6 +255,101 @@ class TestOidcPkce:
         with client.session_transaction() as session:
             assert session["authenticated"] is True
             assert session["username"] == "jared"
+
+    def test_groups_claim_only_in_the_id_token_still_allows_login(self, web_harness, monkeypatch):
+        """Fork: a provider may put `groups` in the ID token only, not userinfo - the case
+        upstream's userinfo-only lookup denied every such user."""
+        self._configure_oidc(web_harness.config)
+        web_harness.config.oidc_allowed_groups = ["media"]
+
+        def fake_oauth_get(self, url, **kwargs):
+            # No groups in userinfo at all - only the ID token carries it.
+            return _Response({"preferred_username": "jared"} if url.endswith("/userinfo") else DISCOVERY)
+
+        def fake_fetch_token(self, **kwargs):
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims(groups=["media"]))}
+            return self.token
+
+        monkeypatch.setattr(web_routes.OAuth2Session, "get", fake_oauth_get)
+        monkeypatch.setattr(web_routes.OAuth2Session, "fetch_token", fake_fetch_token)
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["oauth_state"] = "a-state"
+            session["oidc_code_verifier"] = "a-verifier"
+
+        response = client.get("/login/oidc/callback?state=a-state&code=an-auth-code")
+
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/")
+        with client.session_transaction() as session:
+            assert session["authenticated"] is True
+            assert session["username"] == "jared"
+
+    def test_groups_claim_only_in_userinfo_still_allows_login(self, web_harness, monkeypatch):
+        """The ID token carries no `groups` claim; userinfo (upstream's only source) still
+        satisfies the allowed-groups check."""
+        self._configure_oidc(web_harness.config)
+        web_harness.config.oidc_allowed_groups = ["media"]
+
+        def fake_fetch_token(self, **kwargs):
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims())}
+            return self.token
+
+        monkeypatch.setattr(web_routes.OAuth2Session, "get", _fake_oauth_get)
+        monkeypatch.setattr(web_routes.OAuth2Session, "fetch_token", fake_fetch_token)
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["oauth_state"] = "a-state"
+            session["oidc_code_verifier"] = "a-verifier"
+
+        response = client.get("/login/oidc/callback?state=a-state&code=an-auth-code")
+
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/")
+        with client.session_transaction() as session:
+            assert session["authenticated"] is True
+
+    def test_id_token_with_wrong_audience_is_rejected(self, web_harness, monkeypatch):
+        self._configure_oidc(web_harness.config)
+
+        def fake_fetch_token(self, **kwargs):
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims(aud="someone-else"))}
+            return self.token
+
+        monkeypatch.setattr(web_routes.OAuth2Session, "get", _fake_oauth_get)
+        monkeypatch.setattr(web_routes.OAuth2Session, "fetch_token", fake_fetch_token)
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["oauth_state"] = "a-state"
+            session["oidc_code_verifier"] = "a-verifier"
+
+        response = client.get("/login/oidc/callback?state=a-state&code=an-auth-code")
+
+        assert response.status_code == 200
+        assert b"invalid ID token audience" in response.data
+        with client.session_transaction() as session:
+            assert "authenticated" not in session
+
+    def test_expired_id_token_is_rejected(self, web_harness, monkeypatch):
+        self._configure_oidc(web_harness.config)
+
+        def fake_fetch_token(self, **kwargs):
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims(exp=time.time() - 60))}
+            return self.token
+
+        monkeypatch.setattr(web_routes.OAuth2Session, "get", _fake_oauth_get)
+        monkeypatch.setattr(web_routes.OAuth2Session, "fetch_token", fake_fetch_token)
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["oauth_state"] = "a-state"
+            session["oidc_code_verifier"] = "a-verifier"
+
+        response = client.get("/login/oidc/callback?state=a-state&code=an-auth-code")
+
+        assert response.status_code == 200
+        assert b"expired ID token" in response.data
+        with client.session_transaction() as session:
+            assert "authenticated" not in session
 
 
 @pytest.fixture
@@ -437,3 +553,17 @@ class TestSaveConfigReconfiguresArr:
         client.emit("save_config", {"instance_id": "abc", "config": payload})
 
         assert reconfigured_with == [app_globals.config]
+
+
+class TestOidcScopeList:
+    """Fork: older fork configs store oidc_scopes as a space-separated string; upstream's
+    handler called .append on it and crashed before redirecting to the provider."""
+
+    def test_string_scopes_are_split_and_openid_added(self):
+        assert web_routes.oidc_scope_list("profile email") == ["profile", "email", "openid"]
+
+    def test_list_scopes_are_kept_without_duplicating_openid(self):
+        assert web_routes.oidc_scope_list(["openid", "groups"]) == ["openid", "groups"]
+
+    def test_empty_scopes_still_request_openid(self):
+        assert web_routes.oidc_scope_list("") == ["openid"]

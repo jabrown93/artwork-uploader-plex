@@ -4,6 +4,10 @@ A provider that accepts the connection and then goes quiet blocks the worker thr
 so these assert the timeout reaches the request rather than that the login works.
 """
 
+import base64
+import json
+import time
+
 import pytest
 
 import web_routes
@@ -17,6 +21,14 @@ DISCOVERY = {
 }
 
 USER_INFO = {"preferred_username": "boss"}
+
+
+def _valid_id_token():
+    """A minimally-shaped JWT (header.payload.signature) that passes
+    web_routes._decode_id_token_claims's aud/exp checks for this fixture's client_id."""
+    claims = {"aud": "artwork-uploader", "exp": time.time() + 300, "sub": "boss"}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    return f"header.{payload}.signature"
 
 
 class _Response:
@@ -33,7 +45,7 @@ class _StubOAuthSession:
     calls = []
 
     def __init__(self, **kwargs):
-        self.token = {"id_token": "an-id-token"}
+        self.token = {"id_token": _valid_id_token()}
 
     def get(self, url, **kwargs):
         _StubOAuthSession.calls.append((url, kwargs))
