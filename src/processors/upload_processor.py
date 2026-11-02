@@ -547,7 +547,14 @@ class UploadProcessor:
                         # TV fallback is enabled - a season Sonarr knows about but Plex hasn't
                         # imported yet is still processed (in Kometa mode) rather than skipped.
                         sonarr_seasons = self._get_sonarr_seasons_if_needed(tv_show, artwork, artwork['season'])
-                        via_sonarr = sonarr_seasons is not None and artwork['season'] in sonarr_seasons
+                        # Fork: Sonarr knowledge alone must not bypass stage_specials for season 0 -
+                        # the show may lack season 0 in both Plex and the staged state, so the
+                        # "stage specials" toggle still governs whether Specials are eligible here.
+                        via_sonarr = (
+                            sonarr_seasons is not None
+                            and artwork['season'] in sonarr_seasons
+                            and (season != "Specials" or self.stage_specials)
+                        )
 
                         if self.local_assets and is_season_available:
                             item_path = normalize_path(self._get_season_episodes(tv_show, artwork['season'])[0].media[0].parts[0].file)

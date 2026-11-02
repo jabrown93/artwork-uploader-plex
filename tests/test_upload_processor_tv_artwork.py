@@ -260,6 +260,36 @@ class TestSpecialsStagingForExistingShow:
         assert "Specials not available in TV Shows" in results[0]
         assert not capture_kometa_saves
 
+    def test_specials_via_sonarr_blocked_when_stage_specials_disabled(self, configured, capture_kometa_saves):
+        """Season 0 missing from Plex but known to Sonarr: via_sonarr alone must not bypass
+           stage_specials=False (regression for the specials/stage_specials gate)."""
+        configured.stage_specials = False
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(sonarr=FakeSonarr(series=arr_series)))
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("⚠️")
+        assert "Specials not available in TV Shows" in results[0]
+        assert not capture_kometa_saves
+
+    def test_specials_via_sonarr_allowed_when_stage_specials_enabled(self, configured, capture_kometa_saves):
+        """Season 0 missing from Plex but known to Sonarr: via_sonarr still stages specials
+           when stage_specials=True."""
+        configured.stage_specials = True
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(sonarr=FakeSonarr(series=arr_series)))
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("✅")
+        assert capture_kometa_saves[0]["dest_file_name"] == "Season00"
+        assert "pre-seeded via Sonarr" in capture_kometa_saves[0]["description"]
+
 
 
 class TestEpisodeTitleCardInPlex:
@@ -307,6 +337,42 @@ class TestEpisodeTitleCardInPlex:
         results = proc.process_tv_artwork(_tv_artwork(season=2, episode=3, file_type="title_card"))
 
         assert results[0].startswith("✅")
+        assert "pre-seeded via Sonarr" in capture_kometa_saves[0]["description"]
+
+    def test_specials_episode_via_sonarr_blocked_when_stage_specials_disabled(self, configured, capture_kometa_saves):
+        """Season 0 episode missing from Plex but known to Sonarr: via_sonarr alone must not
+           bypass stage_specials=False (regression for the specials/stage_specials gate)."""
+        configured.stage_specials = False
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(
+            FakePlex(items=[show], libraries=["TV Shows"]),
+            arr=FakeArr(sonarr=FakeSonarr(series=arr_series)),
+        )
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=1, file_type="title_card"))
+
+        assert results[0].startswith("⚠️")
+        assert "Specials not available in TV Shows" in results[0]
+        assert not capture_kometa_saves
+
+    def test_specials_episode_via_sonarr_allowed_when_stage_specials_enabled(self, configured, capture_kometa_saves):
+        """Season 0 episode missing from Plex but known to Sonarr: via_sonarr still stages the
+           title card when stage_specials=True."""
+        configured.stage_specials = True
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(
+            FakePlex(items=[show], libraries=["TV Shows"]),
+            arr=FakeArr(sonarr=FakeSonarr(series=arr_series)),
+        )
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=1, file_type="title_card"))
+
+        assert results[0].startswith("✅")
+        assert capture_kometa_saves[0]["dest_file_name"] == "S00E01"
         assert "pre-seeded via Sonarr" in capture_kometa_saves[0]["description"]
 
 
