@@ -1347,9 +1347,9 @@ if __name__ == "__main__":
             web_app = Flask(__name__, template_folder="templates")
 
             # Configure session for authentication
-            import secrets
             from datetime import timedelta
-            web_app.config['SECRET_KEY'] = secrets.token_hex(32)
+            from web_routes import session_secret_key
+            web_app.config['SECRET_KEY'] = session_secret_key()  # Fork: SESSION_SECRET env
             web_app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
             globals.web_socket = SocketIO(web_app, cors_allowed_origins="*", async_mode="threading")

@@ -325,3 +325,19 @@ class TestSaveConfigKeepsSecretsUnlessChanged:
         client.emit("save_config", {"instance_id": "abc", "config": payload})
 
         assert app_globals.config.token == ""
+
+
+class TestSessionSecretKey:
+    """Fork: SESSION_SECRET pins the session signing key across restarts."""
+
+    def test_env_value_is_used_verbatim(self, monkeypatch):
+        monkeypatch.setenv("SESSION_SECRET", "  pinned-key  ")
+        assert web_routes.session_secret_key() == "pinned-key"
+
+    def test_unset_or_blank_env_generates_a_fresh_key(self, monkeypatch):
+        monkeypatch.setenv("SESSION_SECRET", "   ")
+        first = web_routes.session_secret_key()
+        monkeypatch.delenv("SESSION_SECRET")
+        second = web_routes.session_secret_key()
+        assert first != second
+        assert len(first) == 64 and len(second) == 64

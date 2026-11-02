@@ -136,6 +136,18 @@ def is_dual_stack_supported():
         return False
 
 
+def session_secret_key() -> str:
+    """
+    Fork: the Flask session signing key, from SESSION_SECRET when set.
+
+    Upstream generates a fresh key per process, which logs every user out on
+    restart. Deployments that want sessions to survive a restart supply the key
+    via the environment; it never touches the config file.
+    """
+    import secrets
+    return os.environ.get("SESSION_SECRET", "").strip() or secrets.token_hex(32)
+
+
 def resolve_tls_files(tls_cert_file: str, tls_key_file: str) -> dict:
     """
     Validate the TLS file pair and return the SSL kwargs for SocketIO.run.
