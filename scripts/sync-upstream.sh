@@ -58,8 +58,10 @@ start() {
   local ref=${1:-upstream/main} last target short branch base
   require_clean
   fetch
-  [[ -s $MARKER ]] || die "$MARKER missing"
-  last=$(tr -d '[:space:]' < "$MARKER")
+  # From the fetched origin/main, not the checkout: a stale local main would graft an
+  # older parent and replay upstream changes a merged sync already integrated.
+  last=$(git show origin/main:"$MARKER" 2>/dev/null | tr -d '[:space:]') || die "$MARKER missing on origin/main"
+  [[ -n $last ]] || die "$MARKER empty on origin/main"
   target=$(git rev-parse --verify "$ref^{commit}")
   if git merge-base --is-ancestor "$target" "$last"; then
     echo "Already synced through $(git rev-parse --short "$last")."
@@ -94,7 +96,10 @@ finish() {
   [[ -z "$(git diff --name-only --diff-filter=U)" ]] || die "unresolved conflicts remain"
   prev=$(git show origin/main:"$MARKER" 2>/dev/null | tr -d '[:space:]' || true)
   printf '%s\n' "$target" > "$MARKER"
-  git add -A
+  # Tracked files only: the merge already staged upstream's additions, and -A would
+  # sweep unrelated untracked files (an un-ignored .env, say) into the sync commit.
+  git add -u
+  git add -- "$MARKER"
   tree=$(git write-tree)
   msg="chore(sync): merge upstream mscodemonkey/artwork-uploader-plex through $(git rev-parse --short "$target")
 
