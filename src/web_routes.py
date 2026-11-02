@@ -713,8 +713,10 @@ def setup_socket_handlers(
             )
             notify_web(Instance(broadcast=True), "backend_restarting", {})
 
-            # Restart the app
-            os.execlp(python_cmd, python_cmd, "artwork_uploader.py")
+            # Restart the app. Fork: the entrypoint lives in src/, so resolve it from this
+            # file rather than the working directory (run.sh runs from the repo root).
+            entrypoint = os.path.join(os.path.dirname(os.path.abspath(__file__)), "artwork_uploader.py")
+            os.execlp(python_cmd, python_cmd, entrypoint)
 
         except Exception as e:
             update_status(Instance(broadcast=True), "Update failed, restarting the app...", "danger")

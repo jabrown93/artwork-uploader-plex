@@ -302,6 +302,11 @@ class PlexConnector:
                                 search_results = library.search(**search_kwargs)
                                 if search_results:
                                     break
+                        if search_results and artwork.get('media_folder'):
+                            # Same constraint as the GUID path: an import names the file it
+                            # brought in, and an older copy or another edition must not receive
+                            # its artwork. No holder means Plex has not scanned it yet.
+                            search_results = self._items_holding(search_results, artwork['media_folder'], artwork.get('media_file', ()))
                         if search_results:
                             library_item = search_results[0]
                             items.append(library_item)

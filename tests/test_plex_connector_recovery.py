@@ -109,6 +109,30 @@ def test_find_in_library_falls_back_to_title_year_search_when_guid_lookup_misses
     assert libs == ["Movies A"]
 
 
+def _holder(path):
+    return SimpleNamespace(title="Alien", year=1979, media=[SimpleNamespace(parts=[SimpleNamespace(file=path)])])
+
+
+def test_title_fallback_applies_the_imported_file_constraint():
+    """A Radarr import names the file it brought in; the title fallback must not hand the
+    artwork to an older copy or another edition, and must report nothing (so the webhook
+    retries) while Plex has not scanned the new file yet."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    library = Mock(title="Movies")
+    library.getGuid.side_effect = PlexAPINotFound("not found")
+    old = _holder("/data/movies/Alien (1979)/Alien (1979) old.mkv")
+    new = _holder("/data/movies/Alien (1979)/Alien (1979) new.mkv")
+    connector.movie_libraries = [library]
+    artwork = {**_artwork(), "tmdb_id": None, "media_folder": "Alien (1979)", "media_file": ("Alien (1979) new.mkv",)}
+
+    library.search.return_value = [old, new]
+    assert connector.find_in_library(MediaType.MOVIE, artwork) == ([new], ["Movies"])
+
+    library.search.return_value = [old]
+    assert connector.find_in_library(MediaType.MOVIE, artwork) == (None, None)
+
+
 def test_find_in_library_title_fallback_hit_after_guid_error_is_partial():
     """A hit found only via the title/year fallback still can't be trusted as a confirmed,
     cacheable result if an earlier library's GUID lookup errored transiently - some other
