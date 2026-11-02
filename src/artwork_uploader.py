@@ -1357,7 +1357,9 @@ if __name__ == "__main__":
             web_app.config['SECRET_KEY'] = session_secret_key()  # Fork: SESSION_SECRET env
             web_app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
-            globals.web_socket = SocketIO(web_app, cors_allowed_origins="*", async_mode="threading")
+            # Fork: same-origin only. A wildcard lets any page the user visits drive an
+            # authenticated session through the Socket.IO API with the session cookie.
+            globals.web_socket = SocketIO(web_app, async_mode="threading")
 
             # Start update checker using UpdateService
             def on_update_available(version: str):

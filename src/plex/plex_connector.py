@@ -160,22 +160,24 @@ class PlexConnector:
             True if at least one library is set by the time this returns. Never raises, so the
             caller decides what an empty result means.
         """
-        if self.has_libraries():
-            return True
-
         config = config if config is not None else globals.config
         if config is None:
-            return False
+            return self.has_libraries()
 
-        try:
-            self.set_tv_libraries(config.tv_library)
-        except Exception as e:
-            debug_me(f"Could not resolve the TV libraries: {e}")
+        # Fork: each configured type is retried on its own. A partial start-up failure (TV
+        # down, movies up) would otherwise be final: movies being held made the whole set
+        # look resolved and every later run searched an empty TV list.
+        if config.tv_library and not self.tv_libraries:
+            try:
+                self.set_tv_libraries(config.tv_library)
+            except Exception as e:
+                debug_me(f"Could not resolve the TV libraries: {e}")
 
-        try:
-            self.set_movie_libraries(config.movie_library)
-        except Exception as e:
-            debug_me(f"Could not resolve the movie libraries: {e}")
+        if config.movie_library and not self.movie_libraries:
+            try:
+                self.set_movie_libraries(config.movie_library)
+            except Exception as e:
+                debug_me(f"Could not resolve the movie libraries: {e}")
 
         return self.has_libraries()
 

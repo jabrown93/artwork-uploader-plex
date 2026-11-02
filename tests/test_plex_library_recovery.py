@@ -29,6 +29,7 @@ def connector():
 def test_libraries_already_held_are_not_resolved_again(connector, monkeypatch):
     """The happy path runs on every single run, so it has to cost nothing."""
     connector.tv_libraries = [object()]
+    connector.movie_libraries = [object()]
 
     def _fail(_names):
         raise AssertionError("libraries were re-resolved when some were already held")
@@ -37,6 +38,21 @@ def test_libraries_already_held_are_not_resolved_again(connector, monkeypatch):
     monkeypatch.setattr(connector, "set_movie_libraries", _fail)
 
     assert connector.ensure_libraries(_FakeConfig(["TV Shows"], ["Movies"])) is True
+
+
+@pytest.mark.unit
+def test_a_type_that_failed_at_startup_is_retried_while_the_other_is_held(connector, monkeypatch):
+    """Fork: TV down and movies up at start-up must not leave TV empty forever."""
+    connector.movie_libraries = [object()]
+
+    def _fail(_names):
+        raise AssertionError("held movie libraries were re-resolved")
+
+    monkeypatch.setattr(connector, "set_movie_libraries", _fail)
+    monkeypatch.setattr(connector, "set_tv_libraries", lambda names: connector.tv_libraries.extend(names))
+
+    assert connector.ensure_libraries(_FakeConfig(["TV Shows"], ["Movies"])) is True
+    assert connector.tv_libraries == ["TV Shows"]
 
 
 @pytest.mark.unit
