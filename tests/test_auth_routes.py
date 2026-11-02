@@ -555,6 +555,21 @@ class TestSaveConfigReconfiguresArr:
         assert reconfigured_with == [app_globals.config]
 
 
+class TestOidcGroups:
+    """Fork: the groups claim may be a dotted path and may arrive as a string."""
+
+    def test_nested_claim_path_is_traversed(self):
+        claims = {"resource_access": {"artwork": {"roles": ["media", "admin"]}}}
+        assert web_routes.oidc_groups(claims, "resource_access.artwork.roles") == ["media", "admin"]
+
+    def test_space_separated_string_is_split(self):
+        assert web_routes.oidc_groups({"groups": "media admin"}, "groups") == ["media", "admin"]
+
+    def test_missing_path_yields_no_groups(self):
+        assert web_routes.oidc_groups({"resource_access": {}}, "resource_access.artwork.roles") == []
+        assert web_routes.oidc_groups({}, "") == []
+
+
 class TestOidcScopeList:
     """Fork: older fork configs store oidc_scopes as a space-separated string; upstream's
     handler called .append on it and crashed before redirecting to the provider."""

@@ -211,6 +211,24 @@ def socket_login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def oidc_groups(claims: dict, groups_claim: str) -> list:
+    """Fork: the groups claim may be a dotted path into nested claims
+    (e.g. "resource_access.artwork.roles") and some providers send a space-separated
+    string instead of a list."""
+    value = claims
+    for part in (groups_claim or "groups").split("."):
+        if not isinstance(value, dict):
+            return []
+        value = value.get(part)
+        if value is None:
+            return []
+    if isinstance(value, str):
+        return value.split()
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    return []
+
+
 def oidc_scope_list(scopes) -> list:
     """Fork: the config key is a list upstream but a space-separated string in older fork
     configs; accept both, and always include openid."""
@@ -448,8 +466,7 @@ def setup_routes(web_app, config: Config):
             claims = {**id_token_claims, **user_info}
 
             username = claims.get("preferred_username") or claims.get("sub") or "OIDC User"
-            groups_claim = config.oidc_groups_claim or "groups"
-            user_groups = claims.get(groups_claim, [])
+            user_groups = oidc_groups(claims, config.oidc_groups_claim)
 
             # Validate allowed groups if configured
             if config.oidc_allowed_groups:
@@ -2284,7 +2301,9 @@ def extract_and_list_zip(
 
     # Final clean-up in an effort to leave as few assets as possible unidentified
     final_file_list = []
-    tv_sq_art = 0
+    # Fork: numbered per show, not per archive; the processor treats only _0 as the primary
+    # square art, so a shared counter would demote every show's first asset but one.
+    tv_sq_art: dict[tuple, int] = {}
     for artwork in file_list:
         # Fork: a resolved "unavailable" is left as-is here - resolve_cache already gives every
         # entry the chance to resolve on its own, and retroactively borrowing a later entry's
@@ -2298,8 +2317,9 @@ def extract_and_list_zip(
         # We tag the square_art assets sequentially in their "season" field so that
         # the UploadProcessor can process the first one and decide what to do with the rest
         if artwork["season"] == "SquareArt":
-            artwork["season"] = f"SquareArt_{tv_sq_art}"
-            tv_sq_art += 1
+            show_key = (artwork.get("tmdb_id"), artwork.get("title"), artwork.get("year"))
+            artwork["season"] = f"SquareArt_{tv_sq_art.get(show_key, 0)}"
+            tv_sq_art[show_key] = tv_sq_art.get(show_key, 0) + 1
         
         final_file_list.append(artwork)
 

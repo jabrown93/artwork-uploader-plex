@@ -368,6 +368,29 @@ class TestResolvePlexTitleMemoization:
         assert show_library.calls == 2
 
 
+class TestSquareArtNumbering:
+    def test_square_art_is_numbered_per_show(self, tmp_path):
+        """Fork: only SquareArt_0 is a show's primary square asset, so the sequence must restart
+        for every show rather than run across the whole archive."""
+        plex_stub = StubPlexConnector(responses_by_title={
+            "Show A": ("TV Show", 1, "Show A", 2020),
+            "Show B": ("TV Show", 2, "Show B", 2021),
+        })
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Show A (2020) - S1 OST.jpg": b"a1",
+                "Show A (2020) - S2 OST.jpg": b"a2",
+                "Show B (2021) - S1 OST.jpg": b"b1",
+            },
+            plex_stub=plex_stub, orientation="square",
+        )
+        seasons = {(a["title"], a["path"].rsplit("/", 1)[-1]): a["season"] for a in file_list}
+        assert seasons[("Show A", "Show A (2020) - S1 OST.jpg")] == "SquareArt_0"
+        assert seasons[("Show A", "Show A (2020) - S2 OST.jpg")] == "SquareArt_1"
+        assert seasons[("Show B", "Show B (2021) - S1 OST.jpg")] == "SquareArt_0"
+
+
 class TestOrientationReclassification:
     def test_tv_show_cover_flips_to_backdrop_on_landscape(self, tmp_path):
         plex_stub = StubPlexConnector(default=("TV Show", 1, "Some Show", 2020))
