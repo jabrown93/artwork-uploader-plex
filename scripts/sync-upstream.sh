@@ -103,11 +103,16 @@ $out"
 }
 
 finish() {
-  local target prev tree msg commit
+  local target base prev tree msg commit
   [[ -s $STATE_FILE ]] || die "no sync in progress"
   target=$(cat "$STATE_FILE")
   [[ -z "$(git diff --name-only --diff-filter=U)" ]] || die "unresolved conflicts remain"
-  prev=$(git show origin/main:"$MARKER" 2>/dev/null | tr -d '[:space:]' || true)
+  # HEAD is the grafted base; its first parent is the origin/main this sync started
+  # from. origin/main may have moved since, and parenting on the newer commit with a
+  # tree built from the older one would silently revert whatever landed in between.
+  git rev-parse -q --verify HEAD^2 >/dev/null || die "HEAD is not a sync base"
+  base=$(git rev-parse HEAD^1)
+  prev=$(git show "$base:$MARKER" 2>/dev/null | tr -d '[:space:]' || true)
   printf '%s\n' "$target" > "$MARKER"
   # Tracked files only: the merge already staged upstream's additions, and -A would
   # sweep unrelated untracked files (an un-ignored .env, say) into the sync commit.
@@ -119,14 +124,17 @@ finish() {
 Upstream range: ${prev:-unknown}..$target"
   # Sign when a key is configured; CI branches are squash-merged (and signed) by GitHub.
   if [[ -n "$(git config user.signingkey || true)" ]]; then
-    commit=$(git commit-tree -S -p origin/main -m "$msg" "$tree")
+    commit=$(git commit-tree -S -p "$base" -m "$msg" "$tree")
   else
-    commit=$(git commit-tree -p origin/main -m "$msg" "$tree")
+    commit=$(git commit-tree -p "$base" -m "$msg" "$tree")
   fi
   git merge --quit 2>/dev/null || true
   git reset -q "$commit"
   rm -f "$STATE_FILE"
-  echo "Committed $(git rev-parse --short "$commit") on $(git branch --show-current) (parent: origin/main only)."
+  echo "Committed $(git rev-parse --short "$commit") on $(git branch --show-current) (parent: $(git rev-parse --short "$base"), the origin/main this sync started from)."
+  if [[ "$base" != "$(git rev-parse origin/main)" ]]; then
+    echo "origin/main has moved since; rebase or re-run the sync before opening the PR."
+  fi
 }
 
 case "${1:-}" in
