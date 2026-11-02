@@ -113,7 +113,7 @@ pytest-mock==3.17.0
     # via -r requirements-dev.in
 python-engineio==4.15.1
     # via python-socketio
-python-socketio==5.17.0
+python-socketio==5.17.1
     # via flask-socketio
 pyyaml==6.0.3
     # via apprise
