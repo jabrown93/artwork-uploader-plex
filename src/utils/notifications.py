@@ -1,4 +1,4 @@
-import threading, inspect, os
+import threading, inspect, os, re
 from datetime import datetime
 from typing import Optional
 from core import globals
@@ -210,6 +210,13 @@ def resume_log_file(path: Optional[str]) -> None:
     """
     globals.run_log.path = path or None
 
+# Labels can contain path separators and characters invalid in filenames.
+_UNSAFE_LOG_LABEL_CHARS = re.compile(r'[\\/\x00-\x1f<>:"|?*]+')
+
+def _safe_log_label(label: str) -> str:
+    """Return a filename-safe label without changing the displayed run title."""
+    return _UNSAFE_LOG_LABEL_CHARS.sub("_", label).strip(" .") or "run"
+
 def log_to_file(label: str) -> Optional[str]:
     """Open a log file for the run on this thread, named from `label`, and return its path.
     A run that already has one keeps it."""
@@ -240,7 +247,8 @@ def log_to_file(label: str) -> Optional[str]:
             # directories nothing creates, so the run would quietly get no log at all.
             log_label = "_".join(parts)
 
-    log_label = log_label.lower()
+    # Apply after URL and bulk-name handling so every caller uses the same path.
+    log_label = _safe_log_label(log_label.lower())
     timestamp = datetime.now()
     log_filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_{log_label}"
     globals.run_log.path = os.path.join(DEFAULT_LOG_PATH, f"{log_filename}.log")

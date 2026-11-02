@@ -308,6 +308,27 @@ def test_an_applied_import_is_recorded_as_a_successful_webhook_run(monkeypatch, 
 
 
 @pytest.mark.unit
+def test_webhook_title_with_slash_keeps_a_readable_log(monkeypatch, history, tmp_path):
+    import utils.notifications as notifications
+    from core import globals as app_globals
+
+    log_dir = tmp_path / "logs"
+    monkeypatch.setattr(notifications, "DEFAULT_LOG_PATH", str(log_dir))
+    app_globals.run_log.path = None
+    service = _applying_service(monkeypatch, ["✅ Poster uploaded"])
+    event = parse_event({"eventType": "Download",
+                         "movie": {"title": "Face/Off", "year": 1997, "tmdbId": 754}})
+
+    service._attempt(event, ("movie", 754), _now(), _tally(),
+                     artwork=[{"id": 1, "file_type": "movie_poster"}])
+
+    run = history.get_runs()[0]
+    assert run["label"] == "Face/Off (1997)"
+    assert run["log_file"].endswith("_webhook_face_off_1997.log")
+    assert "Poster uploaded" in (log_dir / run["log_file"]).read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
 def test_a_failed_upload_is_recorded_as_a_failed_webhook_run(monkeypatch, history):
     service = _applying_service(monkeypatch, ["❌ Dune (2021) • someone | Failed to update Poster"])
 

@@ -103,6 +103,22 @@ def test_a_run_keeps_the_file_it_opened_first(log_dir):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("label,suffix", [
+    ("webhook_Face/Off_1997", "webhook_face_off_1997"),
+    ("webhook_Face\\Off_1997", "webhook_face_off_1997"),
+    ('title<>:"|?*\x00\x1f', "title_"),
+    ("normal title", "normal title"),
+])
+def test_run_labels_produce_writable_log_files(log_dir, label, suffix):
+    path = log_to_file(label)
+    update_log(Instance(mode="cli"), "run output")
+
+    assert os.path.dirname(path) == str(log_dir)
+    assert os.path.basename(path).endswith(f"_{suffix}.log")
+    assert "run output" in (log_dir / os.path.basename(path)).read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
 def test_resume_carries_a_run_onto_the_thread_that_continues_it(log_dir, history):
     """A webhook retry and a later upload chunk each run on a fresh thread, which starts with
     no log file. Resuming the path there keeps the whole run in one file."""
