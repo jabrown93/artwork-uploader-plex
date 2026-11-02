@@ -108,3 +108,6 @@ Dated so a later sync can revisit them.
     miss reaches the Radarr/Sonarr branch.
   - `find_in_library` keeps the fork's title/year fallback after a TMDb GUID miss (uploads can
     carry no `tmdb_id`), with the same partial-result semantics.
+  - `PlexLibraryIndex.normalize_title` keeps non-Latin letters (upstream folds to ASCII, which
+    erases e.g. Japanese titles and makes them unmatchable); the ZIP resolver treats upstream's
+    `"unavailable"` miss sentinel as a miss so the title-variant cascade still runs.

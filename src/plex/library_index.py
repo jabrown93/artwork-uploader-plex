@@ -10,7 +10,9 @@ from utils.utils import elapsed_time
 def normalize_title(title: str) -> str:
     """Lowercase, strip accents and punctuation so titles compare equal regardless of styling,
        e.g. 'Mission: Impossible' vs 'Mission - Impossible', 'Léon' vs 'Leon', 'Mad Max 2' vs 'Mad Max 2!'"""
-    title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    # Fork: drop combining marks only. Forcing ASCII erases titles written in non-Latin
+    # scripts entirely, so an exact lookup for them could never match.
+    title = "".join(c for c in unicodedata.normalize("NFKD", title) if not unicodedata.combining(c))
     title = title.casefold().replace("&", " and ")
     title = re.sub(r"[^\w\s]", " ", title)
     return re.sub(r"\s+", " ", title).strip()

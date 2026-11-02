@@ -1942,7 +1942,9 @@ def _resolve_plex_title(
         """
         nonlocal errored
         try:
-            return globals.plex.movie_or_show(candidate, lookup_year)
+            result = globals.plex.movie_or_show(candidate, lookup_year)
+            # Upstream reports a miss as "unavailable"; the cascade below keys on None.
+            return (None, None, None, None) if result[0] == "unavailable" else result
         except PlexLookupError as e:
             errored = True
             hit_media_type, hit_tmdb_id, hit_title, hit_year = e.partial_result

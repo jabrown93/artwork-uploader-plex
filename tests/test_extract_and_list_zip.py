@@ -174,6 +174,19 @@ class TestPlexTitleResolutionCascade:
         assert file_list[0]["media"] == "Movie"
         assert file_list[0]["title"] == "World's End"
 
+    def test_upstream_unavailable_sentinel_still_allows_the_cascade(self, tmp_path):
+        """movie_or_show() reports a miss as "unavailable"; the resolver must treat it as a
+        miss and keep trying variants rather than stop at the first one."""
+        plex_stub = StubPlexConnector(
+            default=("unavailable", None, None, None),
+            responses_by_title={"Example Film": ("Movie", 9, "Example Film", 2020)},
+        )
+        file_list, *_ = _extract(
+            tmp_path, "export.zip", {"Example Film extra subtitle (2020).jpg": b"fake"}, plex_stub=plex_stub,
+        )
+        assert file_list[0]["media"] == "Movie"
+        assert file_list[0]["tmdb_id"] == 9
+
     def test_no_match_marks_unavailable(self, tmp_path):
         plex_stub = StubPlexConnector(default=(None, None, None, None))
         file_list, skipped, *_ = _extract(

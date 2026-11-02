@@ -131,3 +131,24 @@ def test_an_entry_with_a_tmdb_id_is_never_fetched():
     assert status == "matched"
     assert match["tmdb_id"] == 95480
     assert library.fetched == []
+
+
+@pytest.mark.unit
+def test_a_non_latin_title_is_still_matched_exactly():
+    """Fork: stripping to ASCII erased titles in non-Latin scripts, so even an exact
+    title/year lookup for them came back not_found."""
+    item = _FakeItem(7, "千と千尋の神隠し", 2001, guids=("tmdb://129",))
+    index, _ = _index_with(item)
+
+    status, match = index.lookup("千と千尋の神隠し", 2001, MediaType.TV_SHOW)
+
+    assert status == "matched"
+    assert match["tmdb_id"] == 129
+
+
+@pytest.mark.unit
+def test_accents_and_punctuation_still_fold():
+    item = _FakeItem(8, "Léon: The Professional", 1994, guids=("tmdb://101",))
+    index, _ = _index_with(item)
+
+    assert index.lookup("Leon - The Professional!", 1994, MediaType.TV_SHOW)[0] == "matched"
