@@ -191,15 +191,22 @@ class UploadProcessor:
             self.plex._initialize_index()
             status, match = self.plex._index.lookup(artwork.get("title"), artwork.get("year"), kind)
             if status == "not_found":
-                if kind == MediaType.MOVIE:
-                    raise MovieNotFound(f'{description} | Movie not available on Plex')
-                raise ShowNotFound(f'{description} | Show not available on Plex')
-            if status == "matched":
+                # Fork: when the arr pre-seed fallback is enabled for this kind, a local "not
+                # found" isn't terminal - the TMDb ID is still needed to look the title up in
+                # Radarr/Sonarr, so fall through to the poster page fetch below instead of
+                # raising here.
+                arr_fallback_enabled = self._arr_movie_fallback if kind == MediaType.MOVIE else self._arr_tv_fallback
+                if not arr_fallback_enabled:
+                    if kind == MediaType.MOVIE:
+                        raise MovieNotFound(f'{description} | Movie not available on Plex')
+                    raise ShowNotFound(f'{description} | Show not available on Plex')
+            elif status == "matched":
                 tmdb_id = match.get("tmdb_id")
                 debug_me(f"Matched '{artwork.get('title')} ({artwork.get('year')})' locally as TMDb ID '{tmdb_id}'")
                 artwork["tmdb_id"] = tmdb_id
                 return True
-            debug_me(f"'{artwork.get('title')} ({artwork.get('year')})' is ambiguous locally, fetching the poster page")
+            else:
+                debug_me(f"'{artwork.get('title')} ({artwork.get('year')})' is ambiguous locally, fetching the poster page")
 
         self._fetch_tmdb_id_from_tpdb(artwork, description)
         return False

@@ -79,14 +79,55 @@ def test_find_in_library_all_misses_without_errors_returns_none_uncached():
     connector.plex = Mock()
     library_a = Mock(title="Movies A")
     library_a.getGuid.side_effect = PlexAPINotFound("not found")
+    library_a.search.return_value = []
     library_b = Mock(title="Movies B")
     library_b.getGuid.side_effect = PlexAPINotFound("not found")
+    library_b.search.return_value = []
     connector.movie_libraries = [library_a, library_b]
 
     items, libs = connector.find_in_library(MediaType.MOVIE, _artwork())
 
     assert items is None
     assert libs is None
+
+
+def test_find_in_library_falls_back_to_title_year_search_when_guid_lookup_misses():
+    """Fork: when the TMDb GUID lookup finds nothing (here because tmdb_id is missing, as
+    movie_or_show() can return a title match without one), find_in_library must still try a
+    title/year search before reporting a miss."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    library = Mock(title="Movies A")
+    library.getGuid.side_effect = PlexAPINotFound("not found")
+    movie = Mock(title="The Matrix", year=1999)
+    library.search.return_value = [movie]
+    connector.movie_libraries = [library]
+
+    items, libs = connector.find_in_library(MediaType.MOVIE, {**_artwork(), "tmdb_id": None})
+
+    assert items == [movie]
+    assert libs == ["Movies A"]
+
+
+def test_find_in_library_title_fallback_hit_after_guid_error_is_partial():
+    """A hit found only via the title/year fallback still can't be trusted as a confirmed,
+    cacheable result if an earlier library's GUID lookup errored transiently - some other
+    untried library might have held a better match."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    library_a = Mock(title="Movies A")
+    library_a.getGuid.side_effect = RuntimeError("connection reset")
+    library_a.search.return_value = []
+    library_b = Mock(title="Movies B")
+    library_b.getGuid.side_effect = PlexAPINotFound("not found")
+    movie = Mock(title="The Matrix", year=1999)
+    library_b.search.return_value = [movie]
+    connector.movie_libraries = [library_a, library_b]
+
+    with pytest.raises(PlexLookupError) as exc_info:
+        connector.find_in_library(MediaType.MOVIE, _artwork())
+
+    assert exc_info.value.partial_result == ([movie], ["Movies B"])
 
 
 def test_reconnect_bumps_state_generation():

@@ -100,3 +100,11 @@ Dated so a later sync can revisit them.
     adapted.
   - Kometa: the fork's multi-extension stale-asset cleanup in `kometa_saver.py` was dropped (no
     test). Revisit if stale assets reappear.
+  - Scheduler: upstream restores a persisted interval `next_run` verbatim, so a stale one fires
+    on the first tick after restart and bypasses `catch_up_window_minutes`. Patched to advance it
+    to the next future occurrence (`# Fork:` in `scheduler_service.py`); worth offering upstream.
+  - `local_library_matching` (upstream) treats a local index miss as terminal; with the arr
+    pre-seed enabled for that kind it falls through to the TPDb lookup instead, so the later Plex
+    miss reaches the Radarr/Sonarr branch.
+  - `find_in_library` keeps the fork's title/year fallback after a TMDb GUID miss (uploads can
+    carry no `tmdb_id`), with the same partial-result semantics.

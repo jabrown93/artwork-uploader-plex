@@ -2,7 +2,7 @@
 config.json schedule migration, missed-run catch-up logic and the overlap guard."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -63,6 +63,57 @@ def test_interval_schedule_in_days(service):
     sched = BulkSchedule(file="bulk_a.txt", interval_value=2, interval_unit="days")
     job_id = service.add_schedule(sched, lambda f: None)
     assert service.schedule_meta[job_id]["interval_unit"] == "days"
+
+
+@pytest.mark.unit
+def test_restoring_a_past_interval_next_run_advances_to_the_future(service):
+    """Fork: a persisted next_run that is already in the past must not be restored
+    verbatim, or schedule.run_pending() fires it on the very next tick, bypassing
+    the catch-up window policy in catch_up_missed_schedules (which only recomputes
+    never_run schedules). It should instead be advanced to the next future
+    occurrence on the interval grid."""
+    stale_next_run = datetime.now() - timedelta(hours=18)  # 3 intervals of 6h ago
+    sched = BulkSchedule(
+        file="bulk_a.txt",
+        interval_value=6,
+        interval_unit="hours",
+        next_run=stale_next_run.isoformat(),
+    )
+
+    job_id = service.add_schedule(sched, lambda f: None)
+
+    job = service.scheduled_jobs[job_id]
+    assert job.next_run > datetime.now()
+    elapsed = job.next_run - stale_next_run
+    assert elapsed.total_seconds() % timedelta(hours=6).total_seconds() == 0
+
+
+@pytest.mark.unit
+def test_restoring_a_future_interval_next_run_keeps_it_as_is(service):
+    future_next_run = datetime.now() + timedelta(hours=2)
+    sched = BulkSchedule(
+        file="bulk_a.txt",
+        interval_value=6,
+        interval_unit="hours",
+        next_run=future_next_run.isoformat(),
+    )
+
+    job_id = service.add_schedule(sched, lambda f: None)
+
+    job = service.scheduled_jobs[job_id]
+    assert job.next_run == future_next_run
+
+
+@pytest.mark.unit
+def test_restoring_a_never_run_interval_schedule_is_unaffected(service):
+    """A schedule with no persisted next_run keeps whatever next_run the `schedule`
+    library assigned it, which is already in the future."""
+    sched = BulkSchedule(file="bulk_a.txt", interval_value=6, interval_unit="hours")
+
+    job_id = service.add_schedule(sched, lambda f: None)
+
+    job = service.scheduled_jobs[job_id]
+    assert job.next_run > datetime.now()
 
 
 @pytest.mark.unit

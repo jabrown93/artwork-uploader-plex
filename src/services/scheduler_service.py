@@ -85,7 +85,19 @@ class SchedulerService:
             job = interval_job.do(run_job)
             if sched.next_run:
                 try:
-                    job.next_run = datetime.fromisoformat(sched.next_run)
+                    restored_next_run = datetime.fromisoformat(sched.next_run)
+                    # Fork: a persisted next_run that is already in the past would
+                    # otherwise make `schedule.run_pending()` fire this job on the
+                    # very first tick after restart, bypassing the catch-up window
+                    # policy in `catch_up_missed_schedules` (which only recomputes
+                    # `never_run` schedules). Advance by whole intervals instead so
+                    # the restored job's next_run lands in the future; any run that
+                    # was actually missed is handled separately by catch-up.
+                    delta = timedelta(**{sched.interval_unit: sched.interval_value})
+                    now = datetime.now()
+                    while restored_next_run <= now:
+                        restored_next_run += delta
+                    job.next_run = restored_next_run
                 except (ValueError, TypeError):
                     pass
             else:

@@ -281,6 +281,37 @@ class PlexConnector:
                 # no longer trustworthy as a definitive answer.
                 errored = True
                 debug_me(f"Unable to find '{artwork.get('title')} ({artwork.get('year')})' as TMDb ID '{artwork.get('tmdb_id')}' in '{library.title}': {e}")
+        if not items:
+            # Fork: the TMDb GUID lookup found nothing in any library - either tmdb_id is
+            # missing (movie_or_show() can return a title match without one) or none of the
+            # libraries' GUIDs carry a tmdb:// scheme. Fall back to a title/year search before
+            # giving up.
+            title = artwork.get('title')
+            year = artwork.get('year')
+            if title:
+                for library in libraries:
+                    try:
+                        search_kwargs: dict[str, Union[str, int]] = {'title': title}
+                        if year is not None:
+                            search_kwargs['year'] = int(year)
+                        search_results = library.search(**search_kwargs)
+                        if not search_results and year is not None:
+                            # Retry with +/-1 year in case the source's release year is off by one.
+                            for adjusted_year in (int(year) - 1, int(year) + 1):
+                                search_kwargs['year'] = adjusted_year
+                                search_results = library.search(**search_kwargs)
+                                if search_results:
+                                    break
+                        if search_results:
+                            library_item = search_results[0]
+                            items.append(library_item)
+                            lib_names.append(library.title)
+                            debug_me(f"Found '{title} ({year})' as '{library_item.title} ({library_item.year})' in '{library.title}' via title search")
+                    except Exception as e:
+                        # Fork: an empty search() result is a genuine miss; any exception here
+                        # is transient, same as a GUID lookup failure above.
+                        errored = True
+                        debug_me(f"Title search for '{title} ({year})' failed in '{library.title}': {e}")
         if items:
             if errored:
                 raise PlexLookupError(

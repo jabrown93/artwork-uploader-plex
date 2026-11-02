@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
 from plexapi.exceptions import NotFound
 
 from core import globals
 from core.config import Config
+from core.enums import ScraperSource
 from core.exceptions import MovieNotFound, ShowNotFound
 from kometa.kometa_saver import KometaSaver
 from models.options import Options
@@ -15,14 +17,20 @@ pytestmark = pytest.mark.unit
 
 
 class FakePlex:
-    """Stub PlexConnector: find_in_library always reports 'not found' unless overridden."""
+    """Stub PlexConnector: find_in_library always reports 'not found' unless overridden.
+    index_status/index_match stub the local-library-matching index consulted by
+    UploadProcessor._resolve_tmdb_id when config.local_library_matching is on."""
 
-    def __init__(self, items=None, libraries=None):
+    def __init__(self, items=None, libraries=None, index_status=None, index_match=None):
         self._items = items
         self._libraries = libraries
+        self._index = SimpleNamespace(lookup=lambda title, year, kind: (index_status, index_match))
 
     def find_in_library(self, item_type, artwork):
         return self._items, self._libraries
+
+    def _initialize_index(self):
+        pass
 
 
 class FakeRadarr:
@@ -234,6 +242,53 @@ class TestMoviePreseed:
         proc.process_movie_artwork(_movie_artwork())
 
         assert capture_kometa_saves[0]["library"] == "4K Movies"
+
+    def test_local_not_found_with_arr_fallback_falls_through_to_preseed(
+            self, configured, capture_kometa_saves, monkeypatch):
+        """Fork: local_library_matching's 'not_found' must not be terminal when the arr
+        pre-seed fallback is enabled - the TMDb ID is still needed to look the title up in
+        Radarr, so _resolve_tmdb_id falls through to the poster page fetch instead of
+        raising, and the later Plex miss reaches the pre-seed branch."""
+        configured.local_library_matching = True
+        configured.save()
+        monkeypatch.setattr(
+            "utils.soup_utils.cook_soup",
+            lambda url: BeautifulSoup('<div data-media-id="603"></div>', "html.parser"))
+        arr = FakeArr(radarr=FakeRadarr(movie=_arr_movie()))
+        plex = FakePlex(items=None, libraries=None, index_status="not_found")
+        proc = UploadProcessor(plex, arr=arr)
+        proc.set_options(Options(kometa=True))
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+
+        results = proc.process_movie_artwork(artwork)
+
+        assert len(results) == 1
+        assert results[0].startswith("✅")
+        assert artwork["tmdb_id"] == 603  # resolved from the poster page, not skipped
+        assert "pre-seeded via Radarr" in capture_kometa_saves[0]["description"]
+
+    def test_local_not_found_with_arr_fallback_disabled_still_raises_movie_not_found(
+            self, configured, capture_kometa_saves, monkeypatch):
+        """Without the arr fallback enabled, a confirmed local 'not_found' is still terminal:
+        no poster page fetch, no Radarr lookup, same message as before this fix."""
+        configured.local_library_matching = True
+        configured.save()
+        fetch_calls = []
+        monkeypatch.setattr(
+            "utils.soup_utils.cook_soup",
+            lambda url: fetch_calls.append(url))
+        arr = FakeArr(radarr=FakeRadarr(movie=_arr_movie()), movie_enabled=False)
+        plex = FakePlex(items=None, libraries=None, index_status="not_found")
+        proc = UploadProcessor(plex, arr=arr)
+        proc.set_options(Options(kometa=True))
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+
+        with pytest.raises(MovieNotFound) as exc_info:
+            proc.process_movie_artwork(artwork)
+
+        assert "Movie not available on Plex" in str(exc_info.value)
+        assert not fetch_calls
+        assert not capture_kometa_saves
 
 
 class TestTvPreseed:
