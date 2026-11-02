@@ -209,15 +209,20 @@ class ArtworkProcessor:
         except ShowNotFound as e:
             self.callbacks.log(f"⚠️ {str(e)}")
 
+        # Fork: an item that blew up before producing a result is a failure of the run, or
+        # the summary, notifications and run history report success with zero errors.
         except ScraperException as e:
+            self.callbacks.failed(1)
             self.callbacks.log(f"❌ {str(e)}")
             self.callbacks.debug(f"ScraperException: {str(e)}")
 
         except PlexConnectorException as e:
+            self.callbacks.failed(1)
             self.callbacks.log(f"❌ {str(e)}")
             self.callbacks.debug(f"PlexConnectorException: {str(e)}")
 
         except Exception as e:
+            self.callbacks.failed(1)
             self.callbacks.log(f"❌ {str(e)}")
             self.callbacks.debug(f"Error processing {artwork["title"]} ({artwork["year"]}):{str(e)}")
             self.callbacks.status(
@@ -355,6 +360,9 @@ class ArtworkProcessor:
                     self.callbacks.log(f"⏩ {str(e)}")
 
                 except Exception as e:
+                    # Fork: counted, so the summary and run history see the failure.
+                    failed_counter += 1
+                    self.callbacks.failed(1)
                     self.callbacks.log(f"❌ {str(e)}")
             try:
                 os.remove(artwork['path'])  # Remove the temporary file after processing

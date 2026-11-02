@@ -351,3 +351,32 @@ class TestProgressAndSummary:
             options=Options(),
         )
         assert any("Skipping 3 asset(s)" in msg for msg in recorder.log_calls)
+
+
+class TestExceptionCounting:
+    def test_unexpected_exception_is_counted_as_a_failure(self, tmp_path, _stub_upload_processor):
+        """Fork: the summary line and run history read failed_counter; an item that raised
+        before producing a result must land there."""
+        artwork = _make_temp_artwork(tmp_path)
+        recorder = RecordingCallbacks()
+        failed = [0]
+        callbacks = recorder.as_processing_callbacks()
+        callbacks.failed_counter = failed
+        processor = ArtworkProcessor(plex=object(), callbacks=callbacks)
+
+        import services.artwork_processor as mod
+        import unittest.mock as mock
+
+        def factory(plex):
+            stub = StubUploadProcessor(plex)
+            stub.movie_result = lambda _artwork: (_ for _ in ()).throw(RuntimeError("kaboom"))
+            return stub
+
+        with mock.patch.object(mod, "UploadProcessor", factory):
+            processor.process_uploaded_files(
+                [artwork], skipped=0, zip_title=None, zip_author=None, zip_source=None,
+                options=Options(),
+            )
+
+        assert failed[0] == 1
+        assert any("1 asset(s) failed" in msg for msg in recorder.log_calls)

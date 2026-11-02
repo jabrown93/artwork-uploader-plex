@@ -10,7 +10,7 @@ The routes are organized into:
 - Helper functions for file uploads and processing
 """
 
-import os, logging, flask.cli, sys, re, base64, hmac, shutil, socket, tempfile, zipfile, subprocess, threading, uuid, requests
+import errno, os, logging, flask.cli, sys, re, base64, hmac, shutil, socket, tempfile, zipfile, subprocess, threading, uuid, requests
 import unicodedata
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -808,12 +808,17 @@ def setup_socket_handlers(
     def get_log_file(data):
         """Get the contents of a log file and send them back to the frontend"""
         instance = Instance(data.get("instance_id"), "web")
-        log_file_name = data.get("log_file_name")
-        full_path = os.path.join(DEFAULT_LOG_PATH, log_file_name)
+        log_file_name = data.get("log_file_name") or ""
+        log_dir = os.path.realpath(DEFAULT_LOG_PATH)
+        full_path = os.path.realpath(os.path.join(log_dir, log_file_name))
         log_file_contents = ""
         error = ""
 
         try:
+            # Fork: the name comes from the client; an absolute path or a `..` component
+            # would otherwise read any file the server can (the config, for one).
+            if os.path.dirname(full_path) != log_dir or not full_path.endswith(".log"):
+                raise OSError(errno.EACCES, "not a run log")
             with open(full_path, "r", encoding="utf-8") as log_file:
                 log_file_contents = log_file.read()
             debug_me(f"Successfully obtained contents of log file '{log_file_name}'")
@@ -1520,7 +1525,7 @@ def setup_socket_handlers(
             globals.main_bar["active"] = False
 
             if instance:
-                resume_log_file(globals.upload_run_metadata.get("log_file"))   # the watchdog fires on its own thread
+                resume_log_file(upload_info.get("log_file"))   # the watchdog fires on its own thread
                 update_log(instance, f"⚠️ {file_name} • Upload timed out after {UPLOAD_CHUNK_TIMEOUT} seconds (connection lost)")
                 update_status(instance, "Upload timed out", color=StatusColor.DANGER.value)
                 notify_web(instance, "scrape_state", {
@@ -1606,7 +1611,9 @@ def setup_socket_handlers(
                 globals.scrapes_running += 1
                 globals.scrape_type = "upload"
 
-                globals.upload_run_metadata = {}
+                # Fork: stored on the per-upload entry (keyed by sid+file_name) rather than a
+                # shared global, so two concurrent uploads never clobber each other's run label,
+                # start time, or log file.
                 run_label = file_name.split(".zip")[0].strip()
                 clean_file_name = run_label.replace(" (", "_").replace(")", "").replace(" - ", "_").replace(" • ", "_").replace(" ", "_")
                 log_label = f"upload_{clean_file_name}"
@@ -1614,16 +1621,17 @@ def setup_socket_handlers(
                     datetime.fromtimestamp(start_time / 1000.0, tz=timezone.utc).isoformat()
                     if start_time else datetime.now(timezone.utc).isoformat()
                 )
-                globals.upload_run_metadata["run_label"] = run_label
-                globals.upload_run_metadata["start_time"] = run_start
-                globals.upload_run_metadata["log_file"] = log_to_file(log_label)
+                with upload_chunks_lock:
+                    upload["run_label"] = run_label
+                    upload["start_time"] = run_start
+                    upload["log_file"] = log_to_file(log_label)
 
                 update_log(instance, f"📤 {file_name} • Upload initiated")
                 debug_me(f"Uploading '{file_name}")
                 notify_web(instance, "scrape_state", { "running": True, "type": globals.scrape_type })
             else:
                 # Every chunk arrives on its own handler thread, so pick the run's log file back up
-                resume_log_file(globals.upload_run_metadata.get("log_file"))
+                resume_log_file(upload.get("log_file"))
 
             if globals.cancel_scrape:
                 debug_me(f"File upload canceled by user")
@@ -1635,8 +1643,8 @@ def setup_socket_handlers(
                 if canceled_upload is not None:
                     RunHistory().add_run(
                         run_type=RunType.UPLOAD.value,
-                        label=globals.upload_run_metadata.get("run_label", "unknown"),
-                        started_at=globals.upload_run_metadata.get("start_time", datetime.now(timezone.utc).isoformat()),
+                        label=canceled_upload.get("run_label", "unknown"),
+                        started_at=canceled_upload.get("start_time", datetime.now(timezone.utc).isoformat()),
                         ended_at=datetime.now(timezone.utc).isoformat(),
                         trigger=RunTrigger.MANUAL.value,
                         outcome=RunOutcome.STOPPED.value
@@ -1727,7 +1735,9 @@ def setup_socket_handlers(
         file_name = os.path.basename(data.get("fileName") or "")
         upload_key = (request.sid, file_name)
         # This handler runs on its own thread too, and the processing that follows records the run
-        resume_log_file(globals.upload_run_metadata.get("log_file"))
+        with upload_chunks_lock:
+            peek_upload = upload_chunks.get(upload_key)
+        resume_log_file(peek_upload.get("log_file") if peek_upload else None)
 
         notify_web(instance, "progress_bar", { "percent": 100, "message": f"{file_name} • Upload complete!", "bar_speed": "fast"} )
 
@@ -1791,7 +1801,9 @@ def setup_socket_handlers(
                 temp_path,
                 filename_pattern,
                 check_image_orientation,
-                sort_key
+                sort_key,
+                upload.get("run_label"),
+                upload.get("start_time"),
             )
         finally:
             # save_uploaded_file moves the temp file into place itself; this only catches the
@@ -1813,7 +1825,12 @@ def save_uploaded_file(
     temp_upload_path: str,
     filename_pattern: re.Pattern,
     check_image_orientation_func,
-    sort_key_func
+    sort_key_func,
+    # Fork: metadata from the per-upload entry (see handle_upload_chunk), so this run's
+    # RunHistory label/start_time stay tied to the upload that produced it even when another
+    # upload is in flight concurrently.
+    run_label: str = None,
+    start_time: str = None
 ):
     """
     Process the uploaded file from temp storage.
@@ -1867,8 +1884,8 @@ def save_uploaded_file(
             update_status(instance, f"ZIP file parsing canceled by user", color=StatusColor.WARNING.value)
             RunHistory().add_run(
                 run_type=RunType.UPLOAD.value,
-                label=globals.upload_run_metadata.get("run_label", "unknown"),
-                started_at=globals.upload_run_metadata.get("start_time", datetime.now(timezone.utc).isoformat()),
+                label=run_label or "unknown",
+                started_at=start_time or datetime.now(timezone.utc).isoformat(),
                 ended_at=datetime.now(timezone.utc).isoformat(),
                 trigger=RunTrigger.MANUAL.value,
                 outcome=RunOutcome.STOPPED.value
@@ -1888,7 +1905,7 @@ def save_uploaded_file(
         except OSError as e:
             debug_me(f"Error deleting temporary ZIP file: {e}")
 
-        process_uploaded_artwork(instance, extracted_files, skipped, zip_title, zip_author, zip_source, options, filters, plex_title, plex_year)
+        process_uploaded_artwork(instance, extracted_files, skipped, zip_title, zip_author, zip_source, options, filters, plex_title, plex_year, run_label=run_label, start_time=start_time)
 
         if globals.cancel_scrape:
             update_status(instance, "Uploaded file processing canceled by user", color=StatusColor.WARNING.value)

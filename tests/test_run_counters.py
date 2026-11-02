@@ -62,6 +62,25 @@ def test_locked_results_are_counted_and_successes_still_are():
     assert success[0] == 1
 
 
+@pytest.mark.parametrize("exc", [
+    __import__("core.exceptions", fromlist=["ScraperException"]).ScraperException("poster page timed out"),
+    __import__("core.exceptions", fromlist=["PlexConnectorException"]).PlexConnectorException("plex gone"),
+    RuntimeError("kaboom"),
+])
+def test_an_item_that_raises_counts_as_a_failure(exc):
+    """Fork: a processing exception produces no result string to tally, so the handler
+    must count it itself or the run reports success with zero errors."""
+    failed = [0]
+    processor = ArtworkProcessor(plex=None, callbacks=ProcessingCallbacks(failed_counter=failed))
+
+    def raiser(artwork):
+        raise exc
+
+    processor._process_single_artwork({"title": "X", "year": 2020}, raiser)
+
+    assert failed[0] == 1
+
+
 def test_failed_counter_increments():
     failed = [0]
     callbacks = ProcessingCallbacks(failed_counter=failed)

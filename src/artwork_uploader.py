@@ -654,7 +654,12 @@ def process_uploaded_artwork(
         options,
         filters,
         plex_title = None,
-        plex_year = None
+        plex_year = None,
+        # Fork: passed explicitly from the per-upload entry (web_routes.handle_upload_chunk),
+        # so RunHistory records the run that produced this call even when another upload is
+        # concurrently in flight.
+        run_label = None,
+        start_time = None
     ):
     """
     Process uploaded artwork files and upload to Plex or save to Kometa asset directory.
@@ -723,8 +728,8 @@ def process_uploaded_artwork(
     finally:
         RunHistory().add_run(
             run_type=RunType.UPLOAD.value,
-            label=globals.upload_run_metadata.get("run_label", zip_title if zip_title else "Uploaded artwork"),
-            started_at=globals.upload_run_metadata.get("start_time", datetime.now(timezone.utc).isoformat()),
+            label=run_label or (zip_title if zip_title else "Uploaded artwork"),
+            started_at=start_time or datetime.now(timezone.utc).isoformat(),
             ended_at=datetime.now(timezone.utc).isoformat(),
             trigger=RunTrigger.MANUAL.value,
             outcome=outcome,

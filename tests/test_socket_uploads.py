@@ -69,7 +69,6 @@ def upload_handlers(monkeypatch, tmp_path):
     globals.cancel_scrape = False
     globals.scrape_type = "stopped"
     globals.main_bar = {"active": False}
-    globals.upload_run_metadata = {}
     socket = FakeSocket()
     globals.web_socket = socket
 
@@ -356,3 +355,47 @@ def test_duplicate_chunk_index_is_rejected(upload_handlers):
     temp_file = created_files[0]
     assert temp_file.closed
     assert not os.path.exists(temp_file.name)
+
+
+def test_concurrent_uploads_keep_separate_run_metadata(upload_handlers, monkeypatch):
+    """Fork: run_label/start_time/log_file live on the per-upload entry (keyed by
+    sid+file_name), not a shared global. Two concurrent uploads of different ZIPs must each
+    keep their own run metadata even though the second upload's first chunk lands before the
+    first upload completes."""
+    emit, _ = upload_handlers
+    captured = []
+
+    def save_uploaded_file(*args):
+        captured.append({"file_name": args[1], "run_label": args[10]})
+
+    monkeypatch.setattr(web_routes, "save_uploaded_file", save_uploaded_file)
+
+    def payload(file_name):
+        return {
+            "instance_id": "browser-instance",
+            "fileName": file_name,
+            "chunkData": base64.b64encode(b"data").decode(),
+            "chunkIndex": 0,
+            "totalChunks": 1,
+        }
+
+    def complete(file_name):
+        return {
+            "instance_id": "browser-instance",
+            "fileName": file_name,
+            "options": [],
+            "filters": [],
+            "plex_title": None,
+            "plex_year": None,
+        }
+
+    # client-a starts uploading first.zip...
+    emit("upload_artwork_chunk", "client-a", payload("first.zip"))
+    # ...then client-b starts a concurrent upload of second.zip before client-a finishes.
+    emit("upload_artwork_chunk", "client-b", payload("second.zip"))
+
+    emit("upload_complete", "client-a", complete("first.zip"))
+    emit("upload_complete", "client-b", complete("second.zip"))
+
+    labels = {entry["file_name"]: entry["run_label"] for entry in captured}
+    assert labels == {"first.zip": "first", "second.zip": "second"}

@@ -27,7 +27,6 @@ bulk_bar: dict = {}
 # shared path could not: a webhook import finishing mid bulk import would record the bulk
 # run's file as its own and switch that run's logging off underneath it.
 run_log = threading.local()
-upload_run_metadata = {}
 
 # Single-flight guard for bulk imports (scheduled or manual). A second bulk import that starts
 # while one is already running is refused rather than queued - see process_bulk_import_from_ui.
