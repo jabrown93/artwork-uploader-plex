@@ -595,6 +595,46 @@ def test_an_upgrade_waits_for_plex_to_scan_the_new_file(edition_library, history
 
 
 @pytest.mark.unit
+def test_upgrade_is_not_deduplicated_against_pending_old_file(edition_library, history, monkeypatch):
+    from core import globals as app_globals
+
+    scheduled = []
+
+    class FakeTimer:
+        def __init__(self, interval, function, args=()):
+            self.function, self.args = function, args
+            self.daemon = False
+
+        def start(self):
+            scheduled.append(self)
+
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", FakeTimer)
+    old = _alien_import("Alien (1979)")
+    upgrade = parse_event({
+        "eventType": "Download",
+        "movie": {"title": "Alien", "year": 1979, "tmdbId": 348,
+                  "folderPath": "/movies/Alien (1979)"},
+        "movieFile": {"path": "/movies/Alien (1979)/Alien (1979) Remux.mkv"},
+    })
+    service = WebhookService()
+    service.enqueue(old)
+    service.enqueue(old)
+    service.enqueue(upgrade)
+    assert len(scheduled) == 2
+
+    edition_library.plain.media[0].parts[0].file = "/data/movies/Alien (1979)/unscanned.mkv"
+    scheduled[0].function(*scheduled[0].args)
+    assert len(scheduled) == 3  # old import is waiting for Plex
+    assert edition_library.plain.uploaded == []
+
+    app_globals.run_log.path = None  # the queued upgrade runs on its own thread
+    edition_library.plain.media[0].parts[0].file = "/data/movies/Alien (1979)/Alien (1979) Remux.mkv"
+    scheduled[1].function(*scheduled[1].args)
+    assert len(edition_library.plain.uploaded) == 1
+    assert history.get_runs()[0]["outcome"] == "success"
+
+
+@pytest.mark.unit
 def test_an_import_with_no_path_applies_to_every_row_with_the_guid(edition_library, history):
     event = parse_event({"eventType": "Download",
                          "movie": {"title": "Alien", "year": 1979, "tmdbId": 348}})

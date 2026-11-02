@@ -179,10 +179,9 @@ class WebhookService:
 
     @staticmethod
     def _dedupe_key(event: WebhookEvent):
-        # An edition in its own folder shares the plain release's TMDb ID, so the folder keeps
-        # an import of each apart.
+        # Editions and replacement files need separate retry chains even when they share an ID.
         identity = event.tmdb_id or event.tvdb_id or normalize_title(event.title)
-        return (event.kind, identity, event.seasons, event.media_folder)
+        return (event.kind, identity, event.seasons, event.media_folder, event.media_file)
 
     def _release(self, key) -> None:
         with self._lock:
