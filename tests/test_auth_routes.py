@@ -109,6 +109,33 @@ class TestPasswordLogin:
             assert "authenticated" not in session
 
 
+class TestLoginMethodGating:
+    """Fork: a direct POST cannot use a login method the config has turned off, even when a
+    stale credential for it is still stored."""
+
+    def test_password_post_is_refused_when_only_oidc_is_enabled(self, web_harness):
+        web_harness.config.auth_enabled = False
+        web_harness.config.oidc_enabled = True
+        web_harness.config.auth_username = "jared"
+        web_harness.config.auth_password_hash = AuthenticationService.hash_password("hunter2")
+        client = web_harness.http_client()
+
+        response = client.post("/login", data={"username": "jared", "password": "hunter2"})
+
+        assert response.status_code == 200
+        with client.session_transaction() as session:
+            assert not session.get("authenticated")
+
+    def test_oidc_post_is_refused_when_only_password_is_enabled(self, web_harness, monkeypatch):
+        web_harness.config.auth_enabled = True
+        web_harness.config.oidc_enabled = False
+        monkeypatch.setattr(web_routes.OAuth2Session, "get", lambda *a, **k: pytest.fail("discovery must not run"))
+
+        response = web_harness.http_client().post("/login", data={"oidc-login": "1"})
+
+        assert response.status_code == 200
+
+
 class TestOidcPkce:
     """The authorization-code flow runs through requests_oauthlib.OAuth2Session with PKCE
     (S256): a code_verifier is generated and stashed in session, its S256 hash goes out as

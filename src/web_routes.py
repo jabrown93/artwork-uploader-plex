@@ -289,7 +289,16 @@ def setup_routes(web_app, config: Config):
             oidc_login = request.form.get("oidc-login", None)
             basic_Login = request.form.get('username', None)
 
-            if basic_Login:
+            # Fork: each branch is gated on its own enabled flag. The form only shows the
+            # enabled method, but a direct POST must not reach a method the config turned off -
+            # a leftover password hash would otherwise bypass OIDC and its group restriction.
+            if basic_Login and not config.auth_enabled:
+                error = "Password login is disabled"
+                update_log(Instance(broadcast=True), "⛔ Password login attempted while disabled")
+            elif oidc_login and not config.oidc_enabled:
+                error = "OIDC login is disabled"
+                update_log(Instance(broadcast=True), "⛔ OIDC login attempted while disabled")
+            elif basic_Login:
                 debug_me(f"Logging in with basic authentication")
 
                 username = request.form.get('username', '')

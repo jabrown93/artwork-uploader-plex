@@ -86,3 +86,23 @@ def test_404_is_not_retried(tmp_path, monkeypatch):
     assert result.startswith("❌")
     assert calls["n"] == 1
     assert "attempt(s)" not in result
+
+
+def test_forced_replacement_removes_stale_assets_with_other_extensions(tmp_path, monkeypatch):
+    """Fork: a forced save over poster.jpg with a PNG must not leave the JPG beside it, or
+    Kometa sees competing posters and the next unforced save skips as 'already exists'."""
+    (tmp_path / "poster.jpg").write_bytes(b"old")
+    (tmp_path / "poster.webp").write_bytes(b"older")
+    source = tmp_path / "upload.png"
+    source.write_bytes(b"new")
+    saver = _saver(tmp_path)
+    saver.set_options(Options(force=True))
+    saver.set_artwork({"id": "Upload", "path": str(source), "source": "upload"})
+
+    result = saver.save_to_kometa()
+
+    assert result.startswith("♻️")
+    assert (tmp_path / "poster.png").read_bytes() == b"new"
+    assert not (tmp_path / "poster.jpg").exists()
+    assert not (tmp_path / "poster.webp").exists()
+    assert not (tmp_path / "poster.png.tmp").exists()

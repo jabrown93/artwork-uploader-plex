@@ -43,6 +43,19 @@ class KometaSaver:
         if isinstance(options, Options):
             self.options = options
         
+    @staticmethod
+    def _install_new_asset(temp_file: str, dest_file: str, existing_files: list[str]) -> None:
+        """Fork: move the new asset into place, then drop stale copies with another extension.
+        Removal happens after the replacement has landed so a failed write never destroys the
+        current artwork."""
+        os.replace(temp_file, dest_file)
+        for stale_file in existing_files:
+            if stale_file != dest_file:
+                try:
+                    os.remove(stale_file)
+                except OSError:
+                    pass
+
     def save_to_kometa(self) -> str:
 
         headers = {
@@ -61,18 +74,20 @@ class KometaSaver:
         }
 
         replaced_file: bool = False
-        existing_file: Optional[str] = None
+        # Fork: every existing extension is collected so a forced replacement removes all of
+        # them once the new file has landed; a single leftover would leave Kometa with
+        # competing poster files.
+        existing_files: list[str] = []
 
-        # Check if an asset already exists for this item, skip if so (unless force is specified, in which case delete existing asset first)
+        # Check if an asset already exists for this item, skip if so (unless force is specified)
         try:
             for check_ext in IMAGE_EXTENSIONS:
                 existing_file = os.path.join(self.dest_dir, f"{self.dest_file_name}{check_ext}")
-                if os.path.exists(existing_file) and not self.options.force:
-                    return f"⏩ {self.description} | {self.artwork_type} skipped (already exists) for {self.library}"
-                elif os.path.exists(existing_file) and self.options.force:
-                    #os.remove(existing_file)
+                if os.path.exists(existing_file):
+                    if not self.options.force:
+                        return f"⏩ {self.description} | {self.artwork_type} skipped (already exists) for {self.library}"
                     replaced_file = True
-                    break
+                    existing_files.append(existing_file)
         except OSError as e:
             return f"❌ {self.description} | Error checking existing {self.artwork_type.lower()} asset: {e}"
 
@@ -84,11 +99,13 @@ class KometaSaver:
             source_file = self.artwork['path']
             self.dest_file_ext = os.path.splitext(source_file)[1]  # Use the original file extension
             dest_file = os.path.join(self.dest_dir, f"{self.dest_file_name}{self.dest_file_ext}")
+            temp_file = f"{dest_file}.tmp"
             try:
                 os.makedirs(self.dest_dir, exist_ok=True)
                 with open(source_file, 'rb') as src_f:
-                    with open(dest_file, 'wb') as dest_f:
+                    with open(temp_file, 'wb') as dest_f:
                         dest_f.write(src_f.read())
+                self._install_new_asset(temp_file, dest_file, existing_files)
                 if replaced_file:
                     return f"♻️ {self.description} | {self.artwork_type} replaced at '{dest_file}' in {self.library}"
                 else:
@@ -143,9 +160,7 @@ class KometaSaver:
             with open(temp_file, 'wb') as f:
                 for chunk in r.iter_content(1024):
                     f.write(chunk)
-            if replaced_file and existing_file != dest_file:
-                os.remove(existing_file)
-            os.replace(temp_file, dest_file)
+            self._install_new_asset(temp_file, dest_file, existing_files)
             if self.artwork['source'] == ScraperSource.THEPOSTERDB:
                 time.sleep(1)
             if replaced_file:
