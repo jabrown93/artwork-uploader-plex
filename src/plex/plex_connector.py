@@ -104,15 +104,18 @@ class PlexConnector:
         elif not isinstance(tv_libraries, list):
             raise PlexConnectorException("tv_libraries must be either a string or a list")
 
-        self.tv_libraries = []
+        # Fork: resolve into a local list and publish only on success. A half-filled list would
+        # look resolved to ensure_libraries(), so the libraries after the failure would never
+        # be retried.
+        resolved = []
         for tv_library in tv_libraries:
             try:
-                plex_tv = self.plex.library.section(tv_library)
-                self.tv_libraries.append(plex_tv)
+                resolved.append(self.plex.library.section(tv_library))
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'TV library named "{tv_library}" not found. Please check the "tv_library" in config.json or provide one.',
                     f'TV library named "{tv_library}" not found.')
+        self.tv_libraries = resolved
         debug_me(f"The following TV libraries have been set: {[library.title for library in self.tv_libraries]}")
         return self.tv_libraries
 
@@ -126,15 +129,15 @@ class PlexConnector:
         elif not isinstance(movie_libraries, list):
             raise PlexConnectorException("movie_libraries must be either a string or a list")
 
-        self.movie_libraries = []
+        resolved = []  # Fork: published only once every library resolved (see set_tv_libraries)
         for movie_library in movie_libraries:
             try:
-                plex_movies = self.plex.library.section(movie_library)
-                self.movie_libraries.append(plex_movies)
+                resolved.append(self.plex.library.section(movie_library))
             except plexapi.exceptions.NotFound:
                 raise LibraryNotFound(
                     f'Movie library named "{movie_library}" not found. Please check the "movie_library" in config.json or provide one.',
                     f'Movie library named "{movie_library}" not found')
+        self.movie_libraries = resolved
         debug_me(f"The following movie libraries have been set: {[library.title for library in self.movie_libraries]}")
         return self.movie_libraries
 

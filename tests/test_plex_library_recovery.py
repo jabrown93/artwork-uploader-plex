@@ -113,3 +113,26 @@ def test_no_config_at_all_reports_no_libraries(connector, monkeypatch):
     monkeypatch.setattr(globals, "config", None)
 
     assert connector.ensure_libraries() is False
+
+
+@pytest.mark.unit
+def test_a_failure_part_way_through_publishes_no_libraries(connector):
+    """Fork: with the first library already published, ensure_libraries() would treat the
+    list as resolved and never retry the ones after the failure."""
+    from unittest.mock import Mock
+    import requests
+
+    connector.plex = Mock()
+
+    def section(name):
+        if name == "Movies B":
+            raise requests.exceptions.ConnectionError("plex went away")
+        return Mock(title=name)
+
+    connector.plex.library.section.side_effect = section
+
+    with pytest.raises(requests.exceptions.ConnectionError):
+        connector.set_movie_libraries(["Movies A", "Movies B"])
+
+    assert connector.movie_libraries == []
+    assert connector.has_libraries() is False
