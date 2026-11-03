@@ -4,57 +4,52 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Login - Artwork Uploader for Plex</title>
+    <link rel="icon" href="/static/favicon.ico" sizes="32x32">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
-          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap"
-          rel="stylesheet">
+    integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <style>
         body {
-            font-family: 'Noto Sans', sans-serif;
+            font-family:system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
         }
-
         .login-container {
             max-width: 400px;
             width: 100%;
             padding: 20px;
         }
-
         .login-card {
             background: rgba(255, 255, 255, 0.95);
             border-radius: 15px;
             padding: 40px;
+            padding-bottom: 10px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
         }
-
         .login-card h1 {
             color: #333;
             margin-bottom: 10px;
             font-size: 24px;
             font-weight: 600;
         }
-
         .login-card p {
             color: #666;
             margin-bottom: 30px;
         }
-
         .form-control {
             border-radius: 8px;
             padding: 12px;
             border: 1px solid #ddd;
         }
-
         .form-control:focus {
             border-color: #667eea;
             box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
         }
-
         .btn-login {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border: none;
@@ -64,79 +59,47 @@
             width: 100%;
             margin-top: 10px;
         }
-
         .btn-login:hover {
             transform: translateY(-2px);
             box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
-
         .alert {
             border-radius: 8px;
             margin-bottom: 20px;
         }
-
         .form-label {
             color: #333;
             font-weight: 500;
             margin-bottom: 8px;
         }
-
-        .separator {
-            display: flex;
-            align-items: center;
-            color: #666;
-            margin: 20px 0;
+        #auth-separator {
+            color: #333;
+            justify-content: center;
+            font-size: small;
         }
-
-        .separator::before,
-        .separator::after {
-            content: "";
-            flex: 1;
-            border-bottom: 1px solid #ddd;
-        }
-
-        .separator::before {
-            margin-right: 10px;
-        }
-
-        .separator::after {
-            margin-left: 10px;
-        }
-
-        .local-login {
-            text-align: center;
-            margin: 20px 0 0;
-            font-size: 14px;
+        #app-version {
+            color: #333;
+            justify-content: center;
+            font-size: x-small;
         }
     </style>
 </head>
 <body>
-<div class="login-container">
-    <div class="login-card">
-        <h1>Artwork Uploader for Plex</h1>
-        <p>Please sign in to continue</p>
+    <div class="login-container">
+        <div class="login-card">
+            <h1>Artwork Uploader for Plex</h1>
+            <p>Please sign in to continue</p>
 
-        {% if error %}
+            {% if error %}
             <div class="alert alert-danger" role="alert">
                 {{ error }}
             </div>
-        {% endif %}
+            {% endif %}
 
-        {% if oidc_enabled %}
-            <a href="{{ url_for('oidc_login') }}" class="btn btn-primary btn-login">
-                <i class="bi bi-box-arrow-in-right"></i>&ensp;Sign in with {{ oidc_provider }}
-            </a>
-        {% endif %}
-
-        {% if oidc_enabled and show_password_form %}
-            <div class="separator">or</div>
-        {% endif %}
-
-        {% if show_password_form %}
-            <form method="POST" action="{{ url_for('login', local='1') }}">
+            <form id="auth-form" style="display: none;" method="POST" action="/login">
                 <div class="mb-3">
                     <label for="username" class="form-label"><i class="bi bi-person"></i>&ensp;Username</label>
-                    <input type="text" class="form-control" id="username" name="username" required autofocus>
+                    <input type="text" class="form-control" id="username" name="username" required>
                 </div>
                 <div class="mb-3">
                     <label for="password" class="form-label"><i class="bi bi-lock"></i>&ensp;Password</label>
@@ -148,18 +111,19 @@
                         Remember me for 7 days
                     </label>
                 </div>
-                <button type="submit" class="btn btn-primary btn-login">Sign In</button>
+                <button type="submit" class="btn btn-primary btn-login rounded-pill">Sign In</button>
             </form>
-        {% elif password_fallback_available %}
-            <p class="local-login">
-                <a href="{{ url_for('login', local='1') }}">Sign in with a local account</a>
-            </p>
-        {% endif %}
+            <span class="mt-2 mb-2 d-flex d-none" id="auth-separator">— or —</span>
+            <form method="POST" action="/login">
+                <input name="oidc-login" value="true" class="d-none">
+                <button type="submit" id="oidc-btn" style="display: none;" class="btn btn-primary btn-login rounded-pill">Sign In with OIDC</button>
+            </form>
+            <span id="app-version" class="mb-0 mt-2 d-flex"></span>
+        </div>
     </div>
-</div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-        integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
-        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+    <script src="/static/login.js"></script>
 </body>
 </html>

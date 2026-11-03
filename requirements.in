@@ -1,22 +1,20 @@
 # Direct runtime dependencies only. requirements.txt is GENERATED from this
 # file -- do not edit it by hand:
 #
-#   uv pip compile requirements.in -o requirements.txt
+#   uv pip compile requirements.in -o requirements.txt --python-version 3.14
 #
 # Every name below is imported somewhere under src/. Transitive dependencies
 # belong in the compiled output, not here.
 
 apprise
-APScheduler<4
-Authlib
 bcrypt
 beautifulsoup4
-eventlet
 Flask
-Flask-CORS
 Flask-SocketIO
 packaging
 pillow
 PlexAPI
 requests
+requests-oauthlib
+schedule
 Werkzeug

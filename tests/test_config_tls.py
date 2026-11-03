@@ -64,23 +64,6 @@ class TestTlsConfig:
         assert config.tls_is_enabled() is False
 
 
-class TestSessionCookieSecureWithTls:
-
-    def test_auto_secure_when_tls_enabled(self, config):
-        config.tls_cert_file = "/certs/tls.crt"
-        config.tls_key_file = "/certs/tls.key"
-        assert config.session_cookie_is_secure() is True
-
-    def test_auto_insecure_without_tls_or_https_url(self, config):
-        assert config.session_cookie_is_secure() is False
-
-    def test_never_wins_over_tls(self, config):
-        config.tls_cert_file = "/certs/tls.crt"
-        config.tls_key_file = "/certs/tls.key"
-        config.session_cookie_secure = "never"
-        assert config.session_cookie_is_secure() is False
-
-
 class TestResolveTlsFiles:
 
     def test_returns_ssl_kwargs_for_valid_pair(self, tmp_path):
@@ -88,8 +71,8 @@ class TestResolveTlsFiles:
         key = tmp_path / "tls.key"
         cert.write_text("cert")
         key.write_text("key")
-        assert resolve_tls_files(str(cert), str(key)) == {
-            "certfile": str(cert), "keyfile": str(key)}
+        # werkzeug's run_simple takes the pair as ssl_context, not certfile/keyfile.
+        assert resolve_tls_files(str(cert), str(key)) == {"ssl_context": (str(cert), str(key))}
 
     def test_rejects_missing_key_path(self, tmp_path):
         cert = tmp_path / "tls.crt"

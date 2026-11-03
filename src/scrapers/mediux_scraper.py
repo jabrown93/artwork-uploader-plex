@@ -1,44 +1,37 @@
-from typing import Optional, Any, Callable
-from pprint import pformat
-
-from logging_config import get_logger
-from utils.notifications import debug_me
-from utils import utils
-from utils import soup_utils
-from models.options import Options
-from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
+import time, re
+from typing import Optional, Any
 from core.config import Config
-from core.exceptions import ScraperException
-from core.enums import FilterType, MediaType, ScraperSource, FileType
-from core.constants import (
-    ANSI_BOLD, ANSI_RESET, BOOTSTRAP_COLORS,
-    MEDIUX_API_BASE_URL, MEDIUX_BASE_URL, MEDIUX_QUALITY_SUFFIX,
-    SEASON_COVER, SEASON_BACKDROP, SEASON_SQUARE_ART, EPISODE_COVER
-)
 from core import globals
-import time
-
-logger = get_logger(__name__)
-
+from utils import soup_utils
+from utils import utils
+from models.options import Options
+from models.callbacks import ProcessingCallbacks
+from core.exceptions import ScraperException
+from core.enums import ScraperSource, FileType
+from core.constants import MEDIUX_API_BASE_URL, MEDIUX_QUALITY_SUFFIX
+from models.artwork_types import MovieArtworkList, TVArtworkList, CollectionArtworkList
 
 class MediuxScraper:
 
-    def __init__(self, url: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> None:
+    def __init__(self, url: str, callbacks: Optional[ProcessingCallbacks]) -> None:
         self.soup: Optional[Any] = None
         self.url: str = url
         self.title: Optional[str] = None
         self.author: Optional[str] = None
         self.options: Options = Options()
-        self.config: Config = globals.config
+        self.config: Config = Config.at_active_path()  # Fork: follow CONFIG_PATH/--config
+        self.callbacks: Optional[ProcessingCallbacks] = callbacks
+        self.config.load()
         self.exclusions: int = 0
         self.filtered: int = 0
         self.skipped: int = 0
+        self.errored: int = 0
         self.total: int = 0
-        self.progress_callback: Optional[Callable[[int, int], None]] = progress_callback
 
         self.movie_artwork: MovieArtworkList = []
         self.tv_artwork: TVArtworkList = []
         self.collection_artwork: CollectionArtworkList = []
+
 
     # Set options - otherwise will use defaults of False
     def set_options(self, options: Options) -> None:
@@ -49,8 +42,7 @@ class MediuxScraper:
         try:
             self.soup = soup_utils.cook_soup(self.url)
         except Exception as e:
-            raise ScraperException(
-                f"Can't scrape from MediUX: {str(e)}") from e
+            raise ScraperException(f"Can't scrape from MediUX: {str(e)}") from e
 
         scripts = self.soup.find_all('script')
 
@@ -66,7 +58,6 @@ class MediuxScraper:
                         self.title = data_dict["boxset"]["name"]
                         self.author = data_dict["boxset"]["user_created"]["username"]
 
-                        # Build cache of full set data for boxsets
                         # Collect all unique set_ids from files
                         set_ids = set()
                         for set_data in data_dict["boxset"]["sets"]:
@@ -74,23 +65,22 @@ class MediuxScraper:
                                 if file.get("set_id") and file["set_id"].get("id"):
                                     set_ids.add(file["set_id"]["id"])
 
-                        debug_me(f"Obtained {len(set_ids)} set IDs from Boxset '{self.title}' by '{self.author}'", "MedixScraper/scrape")
+                        self.callbacks.log(f"🔄 {self.title} • {self.author} | Processing {len(set_ids)} sets in boxset")
+                        self.callbacks.debug(f"Obtained {len(set_ids)} set IDs from Boxset '{self.title}' by '{self.author}'")
+                        self.callbacks.progress(0, 1, f"Collecting assets from MediUX boxser", "main")
 
                         # Spawn and scrape a child MediuxScraper for each set in the boxset
-                        try:
-                            for n, set_id in enumerate(set_ids,1):
-                                self._scrape_set_in_boxset(set_id)
-                                movies =len(self.movie_artwork)
-                                collections = len(self.collection_artwork)
-                                shows = len(self.tv_artwork)
-                                debug_me(f"Processed {n} out of {len(set_ids)} sets. Collected {movies} movie, {collections} collection and {shows} TV show assets so far, skipped {self.skipped}", "MedixScraper/scrape")
-                                if self.progress_callback:
-                                    self.progress_callback(n, len(set_ids))
-                        except Exception:
-                            # Clear the sub-progress bar if a later set fails so it doesn't stay stuck below 100%
-                            if self.progress_callback and set_ids:
-                                self.progress_callback(len(set_ids), len(set_ids))
-                            raise
+                        collected = 0
+                        for n, set_id in enumerate(set_ids,1):
+                            if globals.cancel_scrape:
+                                break
+                            self.callbacks.progress(n, len(set_ids), f"Collecting assets from MediUX boxset • {n} of {len(set_ids)} sets • {collected} assets collected", "main")
+                            self._scrape_set_in_boxset(set_id)
+                            movies = len(self.movie_artwork)
+                            collections = len(self.collection_artwork)
+                            shows = len(self.tv_artwork)                            
+                            collected = movies + shows + collections
+                            self.callbacks.debug(f"Processed {n} out of {len(set_ids)} sets. Collected {movies} movie, {collections} collection and {shows} TV show assets so far, skipped {self.skipped}")
 
                         return
 
@@ -105,57 +95,54 @@ class MediuxScraper:
                                 self.title = data_dict["set"]["collection"]["collection_name"]
 
                             self.author = data_dict["set"]["user_created"]["username"]
-
+                            
                             # Process the single set
                             self._process_set(data_dict["set"])
                             break
 
             if not data_dict:
-                raise ScraperException(
-                    "No poster data found in MediUX set or boxset.")
+                raise ScraperException("No poster data found in MediUX set or boxset.")
 
-            self.skipped = self.exclusions + self.filtered
+            self.skipped = self.exclusions + self.filtered + self.errored
 
+            if self.errored > 0:
+                self.callbacks.debug(f"⚠️ Encountered errors scraping {self.errored} artwork items from {self.url}")
             if self.skipped > 0:
-                debug_me(f"⏩ Skipped {self.skipped} assets(s) out of {self.total} based on exclusions ({self.exclusions}) or filters ({self.filtered}).", "MediuxScraper/scrape")
+                self.callbacks.debug(f"⏩ Skipped {self.skipped} assets(s) out of {self.total} based on exclusions ({self.exclusions}), filters ({self.filtered}) or errors ({self.errored}).")
             if self.collection_artwork:
-                debug_me(f"✅ Included {len(self.collection_artwork)} collection asset(s) for {len({item['title'] for item in self.collection_artwork})} collection(s):", "MediuxScraper/scrape")
-                debug_me(f"*************************************************************")
-                debug_me(self.collection_artwork)
-                debug_me(f"*************************************************************")
+                self.callbacks.debug(f"✅ Included {len(self.collection_artwork)} collection asset(s) for {len({item['title'] for item in self.collection_artwork})} collection(s):")
+                self.callbacks.debug(self.collection_artwork)
             if self.movie_artwork:
-                debug_me(f"✅ Included {len(self.movie_artwork)} movie asset(s) for {len({item['title'] for item in self.movie_artwork})} movie(s):","MediuxScraper/scrape")
-                debug_me(f"*************************************************************")
-                debug_me(self.movie_artwork)
-                debug_me(f"*************************************************************")
+                self.callbacks.debug(f"✅ Included {len(self.movie_artwork)} movie asset(s) for {len({item['title'] for item in self.movie_artwork})} movie(s):")
+                self.callbacks.debug(self.movie_artwork)
             if self.tv_artwork:
-                debug_me(f"✅ Included {len(self.tv_artwork)} TV show asset(s) for {len({item['title'] for item in self.tv_artwork})} TV show(s):", "MediuxScraper/scrape")
-                debug_me(f"*************************************************************")
-                debug_me(self.tv_artwork)
-                debug_me(f"*************************************************************")
+                self.callbacks.debug(f"✅ Included {len(self.tv_artwork)} TV show asset(s) for {len({item['title'] for item in self.tv_artwork})} TV show(s):")
+                self.callbacks.debug(self.tv_artwork)
 
             return
 
         except ScraperException:
             raise
         except Exception as e:
-            raise ScraperException(
-                f"Can't scrape from MediUX: {str(e)}") from e
-
+            raise ScraperException(f"Can't scrape from MediUX: {str(e)}") from e
 
     def _scrape_set_in_boxset(self, set_id: str) -> None:
         """
-        Fetch full set data from MediUX for a given set ID.
-        This is used to get complete metadata for boxset files.
+        Spawns a child MediuxScraper object for each set in the boxset and processes its artwork as if it was a single set
+        appending each artwork item returned to the global artwork attributes of the parent scraper while keeping track of 
+        added and skipped artwork metrics
 
         Args:
             set_id: The set ID to fetch
+
+        Returns:
+            Dictionary containing full set data with complete metadata, or None if fetch fails
         """
         try:
-            set_url = f"{MEDIUX_BASE_URL}/sets/{set_id}"
-            debug_me(f"Fetching full set data from {set_url}", "MediuxScraper/_scrape_set_in_boxset")
+            set_url = f"https://mediux.pro/sets/{set_id}"
+            self.callbacks.debug(f"Fetching full set data from {set_url}")
 
-            child_scraper = MediuxScraper(set_url)
+            child_scraper = MediuxScraper(set_url, self.callbacks)
             child_scraper.set_options(self.options)
             child_scraper.scrape()
 
@@ -169,17 +156,16 @@ class MediuxScraper:
             self.skipped += child_scraper.skipped
             self.exclusions += child_scraper.exclusions
             self.filtered += child_scraper.filtered
+            self.errored += child_scraper.errored
             self.total += child_scraper.total
 
         except Exception as e:
-            debug_me(f"Failed to scrape set {set_id}: {str(e)}", "MediuxScraper/_scrape_set_in_boxset")
+            self.callbacks.debug(f"Failed to scrape set {set_id}: {str(e)}")
 
     def _process_set(self, set_data: dict) -> None:
         """
         Process a single set's data and extract artwork.
-        This method is used for both individual sets and sets within boxsets
-        (each boxset member is scraped independently via _scrape_set_in_boxset,
-        so every file here always carries full, non-cached metadata).
+        This method is used for both individual sets and sets within boxsets.
 
         Args:
             set_data: Dictionary containing set information (show/movie/collection and files)
@@ -192,243 +178,311 @@ class MediuxScraper:
         if not poster_data:
             return  # Skip empty sets
 
-        # Determine media type from first file with relevant IDs
-        for data in poster_data:
-            if data.get("show_id") is not None or data.get("show_id_backdrop") is not None or \
-                    data.get("episode_id") is not None or data.get("season_id") is not None:
-                media_type = MediaType.TV_SHOW.value
-                break
-        else:
-            media_type = MediaType.MOVIE.value
-
-        # Process each file in the set
         self.total = len(poster_data)
 
-        for i, data in enumerate(poster_data):
-            if media_type == MediaType.TV_SHOW.value:
-                seasons = set_data.get("show", {}).get("seasons", [])
-                show_name = set_data["show"]["name"]
-                show_id = set_data["show"].get("id", None)
-                try:
-                    year = int(set_data["show"].get("first_air_date", "")[:4])
-                except (KeyError, ValueError, TypeError, IndexError):
-                    year = None
+        if "boxset" in set_data:
+            set_data.pop("boxset", None)
 
-                classified = self._classify_tv_file(data, seasons)
-                if classified is None:
+        # Determine media type from the keys of the set_data obtained
+        show_data = set_data.get("show", None)
+        movie_data = set_data.get("movie", None)
+        collection_data = set_data.get("collection", None)
+
+        # We create a show_map dict to quickly look up a season
+        # or episode number based on the season_id and episode_id metadata
+        # so that show_data.get(season_id) returns the season number
+        # and show_data.get(episode_id) returns a tuple with the season and episode number
+        if show_data:
+            show_map = {"tmdb_id": show_data.get("id", 0), "seasons": {}, "episodes": {}}
+            show_seasons = show_data.get("seasons", [])
+            if show_seasons:
+                for s in show_seasons:
+                    season = s.get("season_number")
+                    s_id = s.get("id")
+                    show_map["seasons"][s_id] = season
+                    episodes = s.get("episodes", [])
+                    if episodes:
+                        for ep in episodes:
+                            episode = ep.get("episode_number")
+                            ep_id = ep.get("id")
+                            show_map["episodes"][ep_id] = (season, episode)
+
+        # We build a collection_map dict to quickly look up the title
+        # and release year of a movie inside a collection based on the movie_id
+        # so that collection_map.get(movie_id).get(title) returns the title
+        # and collection_map.get(movie_id).get(year) returns the year
+        elif collection_data:
+            collection_map = {
+                m.get("id"): {
+                    "title": m.get("title", "unknown"),
+                    "year": (m.get("release_date") or "")[:4]
+                } for m in collection_data.get("movies", [])
+            }
+
+        tv_sq_art = 0
+        for i, poster in enumerate(poster_data):
+            self.callbacks.debug(f"Processing data for poster {i+1}")
+            image_stub = poster.get("id", None)
+            poster_url = f"{base_url}{image_stub}{quality_suffix}{cache_buster}"
+            
+            file_type = poster.get("fileType", None)
+
+            show_id_data = poster.get("show_id", None)
+            is_show_cover = show_id_data is not None
+            
+            show_id_backdrop_data = poster.get("show_id_backdrop", None)
+            is_show_backdrop = show_id_backdrop_data is not None
+
+            tvdb_season_id = poster.get("tvdb_season_id", None)
+            season_id_data = poster.get("season_id", None) or tvdb_season_id
+            is_season_cover = season_id_data is not None
+            season_id = season_id_data.get("id", None) if season_id_data else None
+            
+            season_id_ost_data = poster.get("season_id_ost", None)
+            is_season_square_art = season_id_ost_data is not None
+            
+            tvdb_episode_id = poster.get("tvdb_episode_id", None)
+            episode_id_data = poster.get("episode_id", None) or tvdb_episode_id
+            is_title_card = episode_id_data is not None
+            episode_id = episode_id_data.get("id", None) if episode_id_data else None
+            
+            is_tv_show = is_show_cover or is_show_backdrop or is_season_cover or is_season_square_art or is_title_card
+
+            movie_id_data = poster.get("movie_id", None)
+            is_movie_poster = movie_id_data is not None
+            
+            movie_id_backdrop_data = poster.get("movie_id_backdrop", None)
+            is_movie_backdrop = movie_id_backdrop_data is not None
+            
+            movie_id_ost_data = poster.get("movie_id_ost", None)
+            is_movie_square_art = movie_id_ost_data is not None
+            
+            is_movie = is_movie_poster or is_movie_backdrop or is_movie_square_art
+            movie_id = movie_id_data.get("id", None) if movie_id_data else \
+                movie_id_backdrop_data.get("id", None) if movie_id_backdrop_data else \
+                movie_id_ost_data.get("id", None) if movie_id_ost_data else None
+
+            collection_id_data = poster.get("collection_id", None)
+            # Fork: a file can be tagged fileType "movie_poster" for a collection poster when
+            # collection_id isn't set on the file itself (MediUX sends it this way sometimes).
+            is_collection_poster = collection_id_data is not None or (
+                collection_data is not None and file_type == FileType.MOVIE_POSTER.value and movie_id_data is None
+            )
+            is_collection_backdrop = collection_id_data is None and file_type == FileType.BACKDROP.value and not is_movie_backdrop and not is_show_backdrop
+            is_collection_square_art = collection_id_data is None and file_type == FileType.ALBUM_ART.value and not is_movie_square_art and not is_season_square_art
+            is_collection = is_collection_poster or is_collection_backdrop or is_collection_square_art
+
+            if is_tv_show:
+                show_id = show_map["tmdb_id"]
+                show_name = show_data["name"]
+                year = show_data["first_air_date"][:4]
+                
+                if is_show_cover: # This is a show cover
+                    file_type = FileType.SHOW_COVER.value
+                    season = "Cover"
+                    episode = None
+                    self.callbacks.debug(f"Detected show cover")
+
+                elif is_season_cover: # This is a season cover
+                    file_type = FileType.SEASON_COVER.value
+                    episode = "Cover"
+                    if season_id in show_map["seasons"]:
+                        season = show_map["seasons"][season_id]
+                        self.callbacks.debug(f"Detected season cover for S{season:02}")
+                    elif str((season_id_data or {}).get("season_number", "")).isdigit():
+                        season = int(season_id_data["season_number"])
+                        self.callbacks.debug(f"Detected season cover for S{season:02}")
+                    elif tvdb_season_id: # Fallback for MediUX sets that use TVDb metadata
+                        poster_title = poster.get("title", None)
+                        if poster_title and "Season" in poster_title:
+                            season = int(poster_title.split("Season")[-1].strip())
+                            self.callbacks.debug(f"Detected season cover for {season} S{season:02}")
+                    else:
+                        self.callbacks.debug(f"⏩ Skipping season cover - incorrect season metadata")
+                        self.callbacks.debug(poster)
+                        self.callbacks.log(f"⚠️ {show_name} ({year}) • {self.author} | Skipping season cover - incorrect season metadata")
+                        self.errored += 1
+                        continue
+                
+                elif is_show_backdrop: # This is a show background
+                    file_type = FileType.BACKGROUND.value
+                    season = "Backdrop"
+                    episode = None
+                    self.callbacks.debug(f"Detected show backdrop")
+                
+                elif is_season_square_art: # This is a square art asset
+                    file_type = FileType.SQUARE_ART.value
+                    season = f"SquareArt_{tv_sq_art}" # We tag each square art asset with a sequential number starting at 0
+                    episode = None
+                    tv_sq_art += 1
+                    self.callbacks.debug(f"Detected square art for season S{season:02}")
+                
+                elif is_title_card: # This is a title card
+                    file_type = FileType.TITLE_CARD.value
+                    if episode_id in show_map["episodes"]:
+                        (season, episode) = show_map["episodes"][episode_id]
+                        self.callbacks.debug(f"Detected title card for S{season:02}E{episode:02}")
+                    elif str((episode_id_data.get("season_id") or {}).get("season_number", "")).isdigit():
+                        poster_title = poster.get("title") or ""
+                        season = int(episode_id_data["season_id"]["season_number"])
+                        match = re.search(r'S(\d+)\s*E(\d+)', poster_title, re.IGNORECASE)
+                        episode = 0
+                        if match:
+                            episode = int(match.group(2))
+
+                    else:
+                        self.callbacks.debug(f"⏩ Skipping title card - incorrect episode metadata")
+                        self.callbacks.debug(poster)
+                        self.callbacks.log(f"⚠️ {show_name} ({year}) • {self.author} | Skipping title card - incorrect episode metadata")
+                        self.errored += 1
+                        continue
+                
+                else:
+                    self.callbacks.debug(f"⏩ Skipping TV Show asset - missing metadata")
+                    self.callbacks.debug(poster)
+                    self.callbacks.log(f"⚠️ {show_name} ({year}) • {self.author} | Skipping TV Show asset - missing metadata")
+                    self.errored += 1
                     continue
-                season, episode, file_type = classified
 
-                image_stub = data["id"]
-                poster_url = f"{base_url}{image_stub}{quality_suffix}{cache_buster}"
-                suffix = self._season_episode_suffix(season, episode)
-
-                if self._passes_filters(file_type):
+                # Apply filters and exclusions
+                if (self.options.has_no_filters() and file_type in self.config.mediux_filters) or self.options.has_filter(file_type):
                     if not self.options.is_excluded(image_stub, season if isinstance(season, int) else None, episode if isinstance(episode, int) else None):
-                        debug_me(
-                            f"{i+1}. ✅ Including {file_type.replace('_', ' ')} for '{show_name} ({year})'{suffix}.",
-                            "MediuxScraper/_process_set"
+                        self.callbacks.debug(
+                            f"{i+1}. ✅ Including {file_type.replace('_', ' ')} for '{show_name} ({year})'"
+                            + (f", Season {season}" if isinstance(season, int) else "")
+                            + (f", Episode {episode}" if isinstance(episode, int) else "")
+                            + "."
                         )
-                        self.tv_artwork.append({
-                            "title": show_name,
-                            "season": season,
-                            "episode": episode,
-                            "url": poster_url,
-                            "source": ScraperSource.MEDIUX.value,
-                            "year": year,
-                            "id": image_stub,
-                            "type": file_type,
-                            "author": self.author,
-                            "tmdb_id": show_id,
-                        })
+                        tv_artwork = {}
+                        tv_artwork["title"] = show_name
+                        tv_artwork["season"] = season
+                        tv_artwork["episode"] = episode
+                        tv_artwork["url"] = poster_url
+                        tv_artwork["source"] = ScraperSource.MEDIUX.value
+                        tv_artwork["year"] = int(year)
+                        tv_artwork["id"] = image_stub
+                        tv_artwork["file_type"] = file_type
+                        tv_artwork["author"] = self.author
+                        tv_artwork["tmdb_id"] = show_id
+                        self.tv_artwork.append(tv_artwork)
                     else:
                         self.exclusions += 1
-                        debug_me(
-                            f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{show_name} ({year})'{suffix} based on exclusions.",
-                            "MediuxScraper/_process_set"
+                        self.callbacks.debug(
+                            f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{show_name} ({year})'"
+                            + (f", Season {season}" if isinstance(season, int) else "")
+                            + (f", Episode {episode}" if isinstance(episode, int) else "")
+                            + " based on exclusions."
                         )
                 else:
                     self.filtered += 1
-                    debug_me(
-                        f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{show_name} ({year})'{suffix} based on filters.",
-                        "MediuxScraper/_process_set"
+                    self.callbacks.debug(
+                        f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{show_name} ({year})'"
+                        + (f", Season {season}" if isinstance(season, int) else "")
+                        + (f", Episode {episode}" if isinstance(episode, int) else "")
+                        + " based on filters."
                     )
 
-            elif media_type == MediaType.MOVIE.value:
-                classified = self._classify_movie_file(data, set_data)
-                if classified is None:
-                    continue
-                title, year, file_type, is_collection, movie_id = classified
+            elif is_movie:
+                # If it's a movie set, we obtain title and year directly from the set metadata
+                if movie_data:
+                    title = movie_data["title"]
+                    year = movie_data["release_date"][:4]
+                
+                # If it's a collection set, we obtain movie title and year from the collection map we built earlier
+                elif collection_data:
+                    # A set can include artwork for a related movie that is not part of the
+                    # collection itself, in which case it won't be in the collection map
+                    movie_info = collection_map.get(movie_id)
+                    if movie_info is None:
+                        self.callbacks.debug(f"⏩ Skipping movie asset - movie {movie_id} is not part of this collection")
+                        self.callbacks.log(f"⚠️ {self.title} • {self.author} | Skipping movie asset - not part of this collection")
+                        self.errored += 1
+                        continue
+                    title = movie_info["title"]
+                    year = movie_info["year"]
 
-                image_stub = data["id"]
-                poster_url = f"{base_url}{image_stub}{quality_suffix}{cache_buster}"
-                label = title if is_collection else f"{title} ({year})"
+                else:
+                    self.callbacks.debug(f"⏩ Skipping asset - missing metadata")
+                    self.callbacks.debug(poster)
+                    self.callbacks.log(f"⚠️ {self.title} • {self.author} | Skipping asset - missing metadata")
+                    self.errored += 1
+                    continue        
+                
+                if is_movie_poster: # This is a movie poster
+                    file_type = FileType.MOVIE_POSTER.value
+                    self.callbacks.debug("Detected movie poster")
+                
+                elif is_movie_backdrop: # This is a movie bacground
+                    file_type = FileType.BACKGROUND.value
+                    self.callbacks.debug("Detected movie backdrop")
 
-                if self._passes_filters(file_type):
+                elif is_movie_square_art: # This is a movie square asset
+                    file_type = FileType.SQUARE_ART.value
+                    self.callbacks.debug("Decteted movie square art")
+
+                else:
+                    self.callbacks.debug(f"⏩ Skipping movie asset - missing metadata")
+                    self.callbacks.debug(poster)
+                    self.callbacks.log(f"⚠️ {title} ({year}) • {self.author} | Skipping movie asset - missing metadata")
+                    self.errored += 1
+                    continue                    
+
+                if (self.options.has_no_filters() and file_type in self.config.mediux_filters) or self.options.has_filter(file_type):
                     if not self.options.is_excluded(image_stub):
-                        debug_me(f"{i+1}. ✅ Including {file_type.replace('_', ' ')} for '{label}'.", "MediuxScraper/_process_set")
-                        if is_collection:
-                            self.collection_artwork.append({
-                                "title": title,
-                                "url": poster_url,
-                                "id": image_stub,
-                                "source": ScraperSource.MEDIUX.value,
-                                "type": file_type,
-                                "year": None,
-                                "author": self.author,
-                            })
-                        else:
-                            self.movie_artwork.append({
-                                "title": title,
-                                "year": int(year),
-                                "url": poster_url,
-                                "source": ScraperSource.MEDIUX.value,
-                                "id": image_stub,
-                                "type": file_type,
-                                "author": self.author,
-                                "tmdb_id": movie_id,
-                            })
+                        self.callbacks.debug(f"{i+1}. ✅ Including {file_type.replace('_', ' ')} for '{title} ({year})'.")
+                        movie_artwork = {}
+                        movie_artwork["title"] = title
+                        movie_artwork["year"] = int(year)
+                        movie_artwork["url"] = poster_url
+                        movie_artwork["source"] = ScraperSource.MEDIUX.value
+                        movie_artwork["id"] = image_stub
+                        movie_artwork["file_type"] = file_type
+                        movie_artwork["author"] = self.author
+                        movie_artwork["tmdb_id"] = movie_id
+                        self.movie_artwork.append(movie_artwork)
                     else:
                         self.exclusions += 1
-                        debug_me(f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{label}' based on exclusions.", "MediuxScraper/_process_set")
+                        self.callbacks.debug(f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{title} ({year})' based on exclusions.")
                 else:
                     self.filtered += 1
-                    debug_me(f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{label}' based on filters.", "MediuxScraper/_process_set")
+                    self.callbacks.debug(f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{title} ({year})' based on filters.")                
+            
+            elif is_collection:
+                title = collection_data["collection_name"]
+                if is_collection_poster: # This is a collection poster
+                    file_type = FileType.COLLECTION_POSTER.value
+                    self.callbacks.debug("Detectec collection poster")
+                
+                elif is_collection_backdrop: # This is a collection background
+                    file_type = FileType.BACKGROUND.value
+                    self.callbacks.debug("Dectected collection backdrop")
 
-    def _passes_filters(self, file_type: str) -> bool:
-        """Check whether an artwork type should be included per global or per-URL filters."""
-        return (self.options.has_no_filters() and file_type in self.config.mediux_filters) or self.options.has_filter(file_type)
+                elif is_collection_square_art: # This is a qcollection square asset
+                    file_type = FileType.SQUARE_ART.value
+                    self.callbacks.debug("Dected collection square art")
 
-    @staticmethod
-    def _season_episode_suffix(season: Any, episode: Any) -> str:
-        """Build the ', Season N, Episode M' log suffix, omitting parts that aren't numeric."""
-        suffix = f", Season {season}" if isinstance(season, int) else ""
-        if isinstance(episode, int):
-            suffix += f", Episode {episode}"
-        return suffix
+                if (self.options.has_no_filters() and file_type in self.config.mediux_filters) or self.options.has_filter(file_type):
+                    if not self.options.is_excluded(image_stub):
+                        self.callbacks.debug(f"{i+1}. ✅ Including {file_type.replace('_', ' ')} for '{title}'.")
+                        collection_artwork = {}
+                        collection_artwork["title"] = title
+                        collection_artwork["url"] = poster_url
+                        collection_artwork["id"] = image_stub
+                        collection_artwork["source"] = ScraperSource.MEDIUX.value
+                        collection_artwork["file_type"] = file_type
+                        collection_artwork["year"] = None
+                        collection_artwork["author"] = self.author
+                        self.collection_artwork.append(collection_artwork)
+                    else:
+                        self.exclusions += 1
+                        self.callbacks.debug(f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{title}' based on exclusions.")
+                else:
+                    self.filtered += 1
+                    self.callbacks.debug(f"{i+1}. ⏩ Skipping {file_type.replace('_', ' ')} for '{title}' based on filters.")
 
-    @staticmethod
-    def _resolve_movie_in_set(set_data: dict, movie_id) -> dict:
-        """Look up a movie's metadata within a set, whether it's a single-movie set or a collection set."""
-        if set_data.get("collection") is not None:
-            movies = set_data["collection"]["movies"]
-            return [movie for movie in movies if movie["id"] == movie_id][0]
-        return set_data["movie"]
-
-    def _classify_tv_file(self, data: dict, seasons: list) -> Optional[tuple]:
-        """
-        Determine (season, episode, file_type) for a TV file entry, or None if it should be skipped.
-        """
-        file_type_raw = data["fileType"]
-
-        if file_type_raw == FileType.TITLE_CARD.value:
-            if "title" not in data:
-                debug_me(f"Skipping title card - missing episode metadata", "MediuxScraper/_process_set")
-                return None
-            season = data["episode_id"]["season_id"]["season_number"]
-            title = data["title"]
-            try:
-                episode = int(title.rsplit(" E", 1)[1])
-            except (IndexError, ValueError):
-                debug_me(f"Error getting episode number for {title}.", "MediuxScraper/_process_set")
-                episode = None
-            return season, episode, FileType.TITLE_CARD.value
-
-        if file_type_raw == FileType.BACKDROP.value:
-            show_id_backdrop = data.get("show_id_backdrop")
-            if show_id_backdrop is None:
-                debug_me(f"Skipping backdrop - missing show_id_backdrop", "MediuxScraper/_process_set")
-                return None
-            debug_me(f"Backdrop: {show_id_backdrop}", "MediuxScraper/_process_set")
-            return SEASON_BACKDROP, None, FilterType.BACKGROUND.value
-
-        if file_type_raw == FileType.POSTER.value:
-            # Posters can be show covers or season covers
-            # Note: file_show_id is just used to determine poster type, NOT for tmdb_id
-            file_show_id = data.get("show_id")
-            season_id_data = data.get("season_id")
-
-            if season_id_data:
-                debug_me(f"Season cover: {season_id_data}", "MediuxScraper/_process_set")
-                # Try to get season number from seasons array if available
-                season = None
-                season_id = season_id_data.get("id")
-                if season_id and seasons:
-                    season_data = [s for s in seasons if s["id"] == season_id]
-                    if season_data:
-                        season = season_data[0]["season_number"]
-                if season is None:
-                    season = season_id_data.get("season_number", 0)
-                return season, EPISODE_COVER, FilterType.SEASON_COVER.value
-            if file_show_id is not None:
-                debug_me(f"Show cover detected", "MediuxScraper/_process_set")
-                return SEASON_COVER, None, FilterType.SHOW_COVER.value
-            debug_me(f"Skipping poster - missing show_id and season_id", "MediuxScraper/_process_set")
-            return None
-
-        if file_type_raw == FileType.SQUARE_ART.value:
-            # Square art (e.g. soundtrack / OST) applied to the show itself
-            debug_me(f"Square art detected for set id: {(data.get('set_id') or {}).get('id', 'unknown')}",
-                     "MediuxScraper/_process_set")
-            return SEASON_SQUARE_ART, None, FilterType.SQUARE_ART.value
-
-        debug_me(f"Skipping unknown TV show file type: {data.get('fileType')}", "MediuxScraper/_process_set")
-        return None
-
-    def _classify_movie_file(self, data: dict, set_data: dict) -> Optional[tuple]:
-        """
-        Determine (title, year, file_type, is_collection, movie_id) for a movie/collection
-        file entry, or None if it should be skipped.
-        """
-        # Classify by branch, not by whether the title happens to contain the word
-        # "Collection": collection artwork never sets `year`, so routing a collection
-        # whose name lacks "Collection" into the movie branch below raised
-        # UnboundLocalError on `year`.
-        if data["movie_id"]:
-            movie_id = data["movie_id"]["id"]
-            if set_data.get("movie"):
-                # This is a movie poster
-                title = set_data["movie"]["title"]
-                year = int(set_data["movie"]["release_date"][:4])
-            elif set_data.get("collection"):
-                # This is a movie poster inside a collection set
-                movie_data = self._resolve_movie_in_set(set_data, movie_id)
-                title = movie_data["title"]
-                year = int(movie_data["release_date"][:4])
             else:
-                debug_me(f"Skipping poster - movie_id present but no movie or collection data in set",
-                         "MediuxScraper/_process_set")
-                return None
-            return title, year, FilterType.MOVIE_POSTER.value, False, movie_id
-
-        if data["collection_id"]:
-            # This is a collection poster
-            title = set_data["collection"]["collection_name"]
-            return title, None, FilterType.COLLECTION_POSTER.value, True, None
-
-        if data["fileType"] == FilterType.MOVIE_POSTER.value:
-            # This is a collection poster
-            title = set_data["collection"]["collection_name"]
-            return title, None, FilterType.COLLECTION_POSTER.value, True, None
-
-        if data["fileType"] == FileType.SQUARE_ART.value:
-            # Square art (e.g. movie soundtrack / OST)
-            if not data.get("movie_id_ost"):
-                debug_me(f"Skipping square art - missing movie_id_ost", "MediuxScraper/_process_set")
-                return None
-            movie_id = data["movie_id_ost"]["id"]
-            movie_data = self._resolve_movie_in_set(set_data, movie_id)
-            return movie_data["title"], int(movie_data["release_date"][:4]), FilterType.SQUARE_ART.value, False, movie_id
-
-        if data["fileType"] == FileType.BACKDROP.value:
-            # This is a movie background
-            if data["movie_id_backdrop"]:
-                movie_id = data["movie_id_backdrop"]["id"]
-                movie_data = self._resolve_movie_in_set(set_data, movie_id)
-                return movie_data["title"], int(movie_data["release_date"][:4]), FilterType.BACKGROUND.value, False, movie_id
-            # The only remaining artwork can be the collection background
-            title = set_data["collection"]["collection_name"]
-            return title, None, FilterType.BACKGROUND.value, True, None
-
-        debug_me(f"Skipping unrecognized movie file type: {data.get('fileType')}", "MediuxScraper/_process_set")
-        return None
+                self.callbacks.debug(f"⏩ Skipping asset - missing metadata")
+                self.callbacks.debug(poster)
+                self.callbacks.log(f"⚠️ {self.title} • {self.author} | Skipping asset - missing metadata")
+                self.errored += 1
+                continue

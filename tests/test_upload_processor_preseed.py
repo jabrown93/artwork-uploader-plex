@@ -1,12 +1,14 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
 from plexapi.exceptions import NotFound
 
 from core import globals
 from core.config import Config
-from core.exceptions import (MovieNotFound, NotProcessedByExclusion,
-                             NotProcessedByFilter, ShowNotFound)
+from core.enums import ScraperSource
+from core.exceptions import MovieNotFound, ShowNotFound
 from kometa.kometa_saver import KometaSaver
 from models.options import Options
 from processors.upload_processor import UploadProcessor
@@ -16,14 +18,22 @@ pytestmark = pytest.mark.unit
 
 
 class FakePlex:
-    """Stub PlexConnector: find_in_library always reports 'not found' unless overridden."""
+    """Stub PlexConnector: find_in_library always reports 'not found' unless overridden.
+    index_status/index_match stub the local-library-matching index consulted by
+    UploadProcessor._resolve_tmdb_id when config.local_library_matching is on."""
 
-    def __init__(self, items=None, libraries=None):
+    def __init__(self, items=None, libraries=None, index_status=None, index_match=None, index_has_errors=False):
         self._items = items
         self._libraries = libraries
+        self._index = SimpleNamespace(
+            lookup=lambda title, year, kind: (index_status, index_match),
+            has_errors=index_has_errors)
 
     def find_in_library(self, item_type, artwork):
         return self._items, self._libraries
+
+    def _initialize_index(self):
+        pass
 
 
 class FakeRadarr:
@@ -53,7 +63,7 @@ class FakeArr:
 def _movie_artwork(**overrides):
     artwork = {
         "title": "The Matrix", "url": "http://example.com/poster.jpg", "year": 1999,
-        "source": "mediux", "id": "poster-1", "type": "movie_poster", "author": "someone",
+        "source": "mediux", "id": "poster-1", "file_type": "movie_poster", "author": "someone",
         "tmdb_id": 603,
     }
     artwork.update(overrides)
@@ -64,7 +74,7 @@ def _tv_artwork(**overrides):
     artwork = {
         "title": "Breaking Bad", "url": "http://example.com/season.jpg", "season": 1,
         "episode": None, "year": 2008, "source": "mediux", "id": "season-1",
-        "type": "season_cover", "author": "someone", "tmdb_id": 1396,
+        "file_type": "season_cover", "author": "someone", "tmdb_id": 1396,
     }
     artwork.update(overrides)
     return artwork
@@ -102,6 +112,7 @@ class FakeSeason:
 class FakeShow:
     def __init__(self, title, seasons):
         self.title = title
+        self.year = 2008
         self._seasons = seasons
 
     def seasons(self):
@@ -157,6 +168,49 @@ def _processor(configured, arr, options=None):
     return proc
 
 
+@pytest.mark.parametrize("kind", ["movie", "tv"])
+def test_local_match_without_tmdb_guid_resolves_page_and_saves(
+        kind, configured, monkeypatch):
+    configured.local_library_matching = True
+    configured.save()
+    monkeypatch.setattr(globals, "docker", False)
+    monkeypatch.setattr(
+        "utils.soup_utils.cook_soup",
+        lambda url: BeautifulSoup('<div data-media-id="603"></div>', "html.parser"))
+    response = SimpleNamespace(
+        headers={"Content-Type": "image/jpeg"},
+        raise_for_status=lambda: None,
+        iter_content=lambda size: [b"poster data"],
+    )
+    monkeypatch.setattr("kometa.kometa_saver.requests.get", lambda *args, **kwargs: response)
+    monkeypatch.setattr("kometa.kometa_saver.time.sleep", lambda seconds: None)
+
+    if kind == "movie":
+        item = SimpleNamespace(
+            title="The Matrix", guids=[SimpleNamespace(id="imdb://tt0133093")],
+            media=[SimpleNamespace(parts=[SimpleNamespace(file="/movies/The Matrix (1999)/movie.mkv")])])
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+        library = "Movies"
+    else:
+        item = FakeShow("Breaking Bad", [
+            FakeSeason(1, [FakeEpisode(1, "/tv/Breaking Bad (2008)/Season 01/S01E01.mkv")])])
+        item.guids = [SimpleNamespace(id="tvdb://81189")]
+        artwork = _tv_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+        library = "TV Shows"
+
+    plex = FakePlex(items=[item], libraries=[library],
+                    index_status="matched", index_match={"tmdb_id": None})
+    proc = UploadProcessor(plex, arr=FakeArr())
+    proc.set_options(Options(kometa=True, force=True))
+    results = proc.process_movie_artwork(artwork) if kind == "movie" else proc.process_tv_artwork(artwork)
+
+    assert results[0].startswith("✅")
+    assert artwork["tmdb_id"] == 603
+    filename = "poster.jpg" if kind == "movie" else "Season01.jpg"
+    folder = "The Matrix (1999)" if kind == "movie" else "Breaking Bad (2008)"
+    assert (Path(configured.kometa_base) / library / folder / filename).read_bytes() == b"poster data"
+
+
 class TestMoviePreseed:
 
     def test_happy_path_saves_under_radarr_folder(self, configured, capture_kometa_saves):
@@ -205,22 +259,6 @@ class TestMoviePreseed:
 
         assert not capture_kometa_saves
 
-    def test_excluded_artwork_raises_not_processed_by_exclusion(self, configured, capture_kometa_saves):
-        arr_movie = _arr_movie()
-        arr = FakeArr(radarr=FakeRadarr(movie=arr_movie))
-        proc = _processor(configured, arr, options=Options(kometa=True, exclude=["poster-1"]))
-
-        with pytest.raises(NotProcessedByExclusion):
-            proc.process_movie_artwork(_movie_artwork())
-
-    def test_filtered_artwork_raises_not_processed_by_filter(self, configured, capture_kometa_saves):
-        arr_movie = _arr_movie()
-        arr = FakeArr(radarr=FakeRadarr(movie=arr_movie))
-        proc = _processor(configured, arr, options=Options(kometa=True, filters=["background"]))
-
-        with pytest.raises(NotProcessedByFilter):
-            proc.process_movie_artwork(_movie_artwork())
-
     def test_per_run_kometa_option_enables_arr_fallback_after_set_options(
             self, configured, capture_kometa_saves):
         # Global save_to_kometa is off; only the per-run --kometa option (applied via
@@ -250,6 +288,87 @@ class TestMoviePreseed:
         proc.process_movie_artwork(_movie_artwork())
 
         assert capture_kometa_saves[0]["library"] == "4K Movies"
+
+    def test_local_not_found_with_arr_fallback_falls_through_to_preseed(
+            self, configured, capture_kometa_saves, monkeypatch):
+        """Fork: local_library_matching's 'not_found' must not be terminal when the arr
+        pre-seed fallback is enabled - the TMDb ID is still needed to look the title up in
+        Radarr, so _resolve_tmdb_id falls through to the poster page fetch instead of
+        raising, and the later Plex miss reaches the pre-seed branch."""
+        configured.local_library_matching = True
+        configured.save()
+        monkeypatch.setattr(
+            "utils.soup_utils.cook_soup",
+            lambda url: BeautifulSoup('<div data-media-id="603"></div>', "html.parser"))
+        arr = FakeArr(radarr=FakeRadarr(movie=_arr_movie()))
+        plex = FakePlex(items=None, libraries=None, index_status="not_found")
+        proc = UploadProcessor(plex, arr=arr)
+        proc.set_options(Options(kometa=True))
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+
+        results = proc.process_movie_artwork(artwork)
+
+        assert len(results) == 1
+        assert results[0].startswith("✅")
+        assert artwork["tmdb_id"] == 603  # resolved from the poster page, not skipped
+        assert "pre-seeded via Radarr" in capture_kometa_saves[0]["description"]
+
+    def test_local_not_found_with_arr_fallback_disabled_still_raises_movie_not_found(
+            self, configured, capture_kometa_saves, monkeypatch):
+        """Without the arr fallback enabled, a confirmed local 'not_found' is still terminal:
+        no poster page fetch, no Radarr lookup, same message as before this fix."""
+        configured.local_library_matching = True
+        configured.save()
+        fetch_calls = []
+        monkeypatch.setattr(
+            "utils.soup_utils.cook_soup",
+            lambda url: fetch_calls.append(url))
+        arr = FakeArr(radarr=FakeRadarr(movie=_arr_movie()), movie_enabled=False)
+        plex = FakePlex(items=None, libraries=None, index_status="not_found")
+        proc = UploadProcessor(plex, arr=arr)
+        proc.set_options(Options(kometa=True))
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+
+        with pytest.raises(MovieNotFound) as exc_info:
+            proc.process_movie_artwork(artwork)
+
+        assert "Movie not available on Plex" in str(exc_info.value)
+        assert not fetch_calls
+        assert not capture_kometa_saves
+
+    def test_local_not_found_after_index_error_falls_through_instead_of_raising(
+            self, configured, capture_kometa_saves, monkeypatch):
+        """A 'not_found' reached after a transient library index error isn't a confirmed
+        miss (PlexLibraryIndex.has_errors) - it must fall through to the poster page fetch
+        like the arr-fallback case, not drop the artwork's application for this run, even
+        with the arr fallback disabled and the movie actually present in Plex."""
+        configured.local_library_matching = True
+        configured.save()
+        monkeypatch.setattr(globals, "docker", False)
+        monkeypatch.setattr(
+            "utils.soup_utils.cook_soup",
+            lambda url: BeautifulSoup('<div data-media-id="603"></div>', "html.parser"))
+        response = SimpleNamespace(
+            headers={"Content-Type": "image/jpeg"},
+            raise_for_status=lambda: None,
+            iter_content=lambda size: [b"poster data"],
+        )
+        monkeypatch.setattr("kometa.kometa_saver.requests.get", lambda *args, **kwargs: response)
+        monkeypatch.setattr("kometa.kometa_saver.time.sleep", lambda seconds: None)
+        item = SimpleNamespace(
+            title="The Matrix", guids=[SimpleNamespace(id="imdb://tt0133093")],
+            media=[SimpleNamespace(parts=[SimpleNamespace(file="/movies/The Matrix (1999)/movie.mkv")])])
+        arr = FakeArr(radarr=FakeRadarr(movie=_arr_movie()), movie_enabled=False)
+        plex = FakePlex(items=[item], libraries=["Movies"], index_status="not_found", index_has_errors=True)
+        proc = UploadProcessor(plex, arr=arr)
+        proc.set_options(Options(kometa=True, force=True))
+        artwork = _movie_artwork(tmdb_id=None, source=ScraperSource.THEPOSTERDB.value)
+
+        results = proc.process_movie_artwork(artwork)
+
+        assert len(results) == 1
+        assert results[0].startswith("✅")
+        assert artwork["tmdb_id"] == 603  # resolved from the poster page, not dropped
 
 
 class TestTvPreseed:

@@ -1,10 +1,20 @@
+"""Chunked uploads are isolated per Socket.IO client: two browser tabs uploading a file with
+the same name must never share a temp file, one client's decode must never block another's
+chunk from being accepted, and a client that disconnects mid-upload must only lose its own
+pending upload.
+
+Side-effecting plumbing (update_log/update_status/notify_web/debug_me/log_to_file/
+resume_log_file/RunHistory) is stubbed out: it is upstream's run-tracking and progress-bar
+instrumentation, orthogonal to the isolation mechanics under test here.
+"""
+
 import base64
 import os
 import re
 import sys
 import tempfile
 import threading
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from flask import Flask, request
@@ -33,6 +43,7 @@ def upload_handlers(monkeypatch, tmp_path):
     app_module = ModuleType("artwork_uploader")
     imported_names = (
         "process_scrape_url_from_web",
+        "request_scrape_stop",
         "run_bulk_import_scrape_in_thread",
         "save_bulk_import_file",
         "load_bulk_import_file",
@@ -40,6 +51,7 @@ def upload_handlers(monkeypatch, tmp_path):
         "delete_bulk_import_file",
         "add_file_to_schedule_thread",
         "update_scheduled_jobs",
+        "get_latest_version",
         "check_image_orientation",
         "sort_key",
         "process_uploaded_artwork",
@@ -52,8 +64,21 @@ def upload_handlers(monkeypatch, tmp_path):
     config = Config(config_path=str(tmp_path / "config.json"))
     config.load()
     globals.config = config
+    globals.plex = SimpleNamespace(reconnect=lambda cfg: None)
+    globals.scrapes_running = 0
+    globals.cancel_scrape = False
+    globals.scrape_type = "stopped"
+    globals.main_bar = {"active": False}
     socket = FakeSocket()
     globals.web_socket = socket
+
+    monkeypatch.setattr(web_routes, "update_log", lambda *a, **k: None)
+    monkeypatch.setattr(web_routes, "update_status", lambda *a, **k: None)
+    monkeypatch.setattr(web_routes, "notify_web", lambda *a, **k: None)
+    monkeypatch.setattr(web_routes, "debug_me", lambda *a, **k: None)
+    monkeypatch.setattr(web_routes, "log_to_file", lambda label: "test.log")
+    monkeypatch.setattr(web_routes, "resume_log_file", lambda path: None)
+    monkeypatch.setattr(web_routes, "RunHistory", lambda: SimpleNamespace(add_run=lambda **k: None))
 
     real_named_temporary_file = tempfile.NamedTemporaryFile
     created_files = []
@@ -270,6 +295,24 @@ def test_disconnect_removes_clients_pending_upload(upload_handlers):
     assert not os.path.exists(temp_file.name)
 
 
+def test_disconnect_only_affects_the_disconnecting_client(upload_handlers):
+    emit, created_files = upload_handlers
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"partial-a", total_chunks=2))
+    emit(
+        "upload_artwork_chunk",
+        "client-b",
+        {**chunk_payload(b"partial-b", total_chunks=2), "fileName": "other.zip"},
+    )
+    file_a, file_b = created_files
+
+    emit("disconnect", "client-a")
+
+    assert file_a.closed and not os.path.exists(file_a.name)
+    assert not file_b.closed
+    assert os.path.exists(file_b.name)
+    emit("disconnect", "client-b")
+
+
 def test_chunk_error_removes_pending_upload(upload_handlers, monkeypatch):
     emit, created_files = upload_handlers
     monkeypatch.setattr(
@@ -298,29 +341,202 @@ def test_first_chunk_replaces_abandoned_same_client_upload(upload_handlers):
 
     assert abandoned_file.closed
     assert not os.path.exists(abandoned_file.name)
-    emit("disconnect", "client-a")
 
 
-def test_completion_error_removes_temp_files(upload_handlers, monkeypatch, tmp_path):
+def test_duplicate_chunk_index_is_rejected(upload_handlers):
     emit, created_files = upload_handlers
-    emit("upload_artwork_chunk", "client-a", chunk_payload(b"complete"))
+
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"first", chunk_index=0, total_chunks=3))
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"second", chunk_index=1, total_chunks=3))
+    # A resend of a non-zero chunk index is not legitimate (only chunk 0 replaces an abandoned
+    # upload); it must tear the upload down rather than silently accept it.
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"dup", chunk_index=1, total_chunks=3))
+
     temp_file = created_files[0]
-    processing_folder = tmp_path / "processing"
+    assert temp_file.closed
+    assert not os.path.exists(temp_file.name)
 
-    def make_processing_folder():
-        processing_folder.mkdir()
-        return str(processing_folder)
 
-    monkeypatch.setattr(web_routes.tempfile, "mkdtemp", make_processing_folder)
-    monkeypatch.setattr(
-        web_routes,
-        "extract_and_list_zip",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("processing failed")),
-    )
+def test_concurrent_uploads_keep_separate_run_metadata(upload_handlers, monkeypatch):
+    """Fork: run_label/start_time/log_file live on the per-upload entry (keyed by
+    sid+file_name), not a shared global. Two concurrent uploads of different ZIPs must each
+    keep their own run metadata even though the second upload's first chunk lands before the
+    first upload completes."""
+    emit, _ = upload_handlers
+    captured = []
+
+    def save_uploaded_file(*args):
+        captured.append({"file_name": args[1], "run_label": args[10]})
+
+    monkeypatch.setattr(web_routes, "save_uploaded_file", save_uploaded_file)
+
+    def payload(file_name):
+        return {
+            "instance_id": "browser-instance",
+            "fileName": file_name,
+            "chunkData": base64.b64encode(b"data").decode(),
+            "chunkIndex": 0,
+            "totalChunks": 1,
+        }
+
+    def complete(file_name):
+        return {
+            "instance_id": "browser-instance",
+            "fileName": file_name,
+            "options": [],
+            "filters": [],
+            "plex_title": None,
+            "plex_year": None,
+        }
+
+    # client-a starts uploading first.zip...
+    emit("upload_artwork_chunk", "client-a", payload("first.zip"))
+    # ...then client-b starts a concurrent upload of second.zip before client-a finishes.
+    emit("upload_artwork_chunk", "client-b", payload("second.zip"))
+
+    emit("upload_complete", "client-a", complete("first.zip"))
+    emit("upload_complete", "client-b", complete("second.zip"))
+
+    labels = {entry["file_name"]: entry["run_label"] for entry in captured}
+    assert labels == {"first.zip": "first", "second.zip": "second"}
+
+
+@pytest.mark.parametrize("failure_point", ["extract", "process", "setup"])
+def test_processing_exception_releases_only_its_upload(upload_handlers, monkeypatch, failure_point):
+    emit, created_files = upload_handlers
+    events = []
+    monkeypatch.setattr(web_routes, "notify_web", lambda instance, event, data, **kw: events.append((event, data)))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("processing failed")
+
+    if failure_point == "setup":
+        monkeypatch.setattr(web_routes.tempfile, "mkdtemp", fail)
+    else:
+        monkeypatch.setattr(
+            web_routes,
+            "extract_and_list_zip",
+            fail if failure_point == "extract" else lambda *args: ([], 0, "", "", ""),
+        )
+        if failure_point == "process":
+            monkeypatch.setattr(sys.modules["artwork_uploader"], "process_uploaded_artwork", fail)
+
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+    emit("upload_artwork_chunk", "client-b", chunk_payload(b"pending", total_chunks=2))
 
     with pytest.raises(RuntimeError, match="processing failed"):
         emit("upload_complete", "client-a", complete_payload())
 
-    assert temp_file.closed
-    assert not os.path.exists(temp_file.name)
-    assert not processing_folder.exists()
+    assert globals.scrapes_running == 1
+    assert globals.scrape_type == "upload"
+    assert not any(event == "scrape_state" and not data["running"] for event, data in events)
+    assert not os.path.exists(created_files[0].name)
+
+    # Completion removed client-a's entry: its disconnect must not release client-b's run.
+    emit("disconnect", "client-a")
+    assert globals.scrapes_running == 1
+    emit("disconnect", "client-b")
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert any(event == "scrape_state" and not data["running"] for event, data in events)
+
+
+@pytest.mark.parametrize("cancel_during", ["extract", "process", None])
+def test_processing_completion_releases_one_run(upload_handlers, monkeypatch, cancel_during):
+    emit, _ = upload_handlers
+    events = []
+    monkeypatch.setattr(web_routes, "notify_web", lambda instance, event, data, **kw: events.append((event, data)))
+
+    def extract(*args):
+        if cancel_during == "extract":
+            globals.cancel_scrape = True
+        return [], 0, "", "", ""
+
+    def process(*args, **kwargs):
+        if cancel_during == "process":
+            globals.cancel_scrape = True
+
+    monkeypatch.setattr(web_routes, "extract_and_list_zip", extract)
+    monkeypatch.setattr(sys.modules["artwork_uploader"], "process_uploaded_artwork", process)
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+    emit("upload_artwork_chunk", "client-b", chunk_payload(b"pending", total_chunks=2))
+    emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 1
+    assert globals.scrape_type == "upload"
+    assert not any(event == "scrape_state" and not data["running"] for event, data in events)
+    emit("disconnect", "client-a")
+    assert globals.scrapes_running == 1
+    emit("disconnect", "client-b")
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert globals.cancel_scrape is False
+
+
+def test_last_processing_failure_clears_run_state_and_progress(upload_handlers, monkeypatch):
+    emit, created_files = upload_handlers
+    events = []
+    monkeypatch.setattr(web_routes, "notify_web", lambda instance, event, data, **kw: events.append((event, data)))
+
+    def fail(*args):
+        raise RuntimeError("invalid archive")
+
+    monkeypatch.setattr(web_routes, "extract_and_list_zip", fail)
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+    globals.cancel_scrape = True
+
+    with pytest.raises(RuntimeError, match="invalid archive"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert globals.cancel_scrape is False
+    assert globals.main_bar["active"] is False
+    assert not os.path.exists(created_files[0].name)
+    assert [data["running"] for event, data in events if event == "scrape_state"] == [True, False]
+
+    emit("upload_complete", "client-a", complete_payload())
+    emit("disconnect", "client-a")
+    assert globals.scrapes_running == 0
+    assert [data["running"] for event, data in events if event == "scrape_state"] == [True, False]
+
+
+def test_second_temp_directory_failure_removes_first_and_releases_run(upload_handlers, monkeypatch, tmp_path):
+    emit, created_files = upload_handlers
+    real_mkdtemp = tempfile.mkdtemp
+    created_dirs = []
+
+    def mkdtemp(*args, **kwargs):
+        if created_dirs:
+            raise OSError("cannot create extraction directory")
+        path = real_mkdtemp(*args, dir=tmp_path, **kwargs)
+        created_dirs.append(path)
+        return path
+
+    monkeypatch.setattr(web_routes.tempfile, "mkdtemp", mkdtemp)
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+
+    with pytest.raises(OSError, match="cannot create extraction directory"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert not os.path.exists(created_files[0].name)
+    assert not os.path.exists(created_dirs[0])
+
+
+def test_completion_log_failure_releases_run(upload_handlers, monkeypatch):
+    emit, created_files = upload_handlers
+    emit("upload_artwork_chunk", "client-a", chunk_payload(b"archive"))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("logging failed")
+
+    monkeypatch.setattr(web_routes, "update_log", fail)
+    with pytest.raises(RuntimeError, match="logging failed"):
+        emit("upload_complete", "client-a", complete_payload())
+
+    assert globals.scrapes_running == 0
+    assert globals.scrape_type == "stopped"
+    assert globals.main_bar["active"] is False
+    assert not os.path.exists(created_files[0].name)

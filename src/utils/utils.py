@@ -1,11 +1,8 @@
-import hashlib
+import hashlib, json, re
 import ipaddress
-import json
-import re
 from pathlib import PureWindowsPath, PurePosixPath
 from urllib.parse import urlsplit
 
-from core.exceptions import InvalidUrl, InvalidFlag
 from core.constants import (
     TPDB_BASE_URL, MEDIUX_BASE_URL,
     SEASON_COVER, SEASON_BACKDROP, EPISODE_COVER,
@@ -13,8 +10,8 @@ from core.constants import (
 )
 from models.options import Options
 from models.url_item import URLItem
+from core.exceptions import InvalidUrl, InvalidFlag
 from utils.notifications import debug_me
-
 
 # ---------------------- HELPER CLASSES ----------------------
 
@@ -62,6 +59,21 @@ def title_cleaner(string):
 
     return title
 
+def elapsed_time(seconds: float, precise: bool = False) -> str:
+    """ Converts seconds into 2h 31m 12s, 9m 34s or 32s format for readability"""
+    seconds = int(round(seconds)) if not precise else round(seconds, 2)
+    
+    if seconds < 60:
+        return f"{seconds}s"
+    
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+
+    if h > 0:
+        return f"{h}h {m}m {s}s"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
 def parse_string_to_dict(input_string):
     # Remove unnecessary replacements
@@ -227,18 +239,18 @@ def parse_url_and_options(line):
         raise InvalidUrl(url)
 
     # Initiate list of invalid flags for logging purposes
-    inv_flags = []
+    inv_flags=[]
 
     # Iterate through each flag provided
     for option in parts[1:]:
         # Split each option into its parts by spaces
-        option_parts = option.strip().split(" ")
+        option_parts=option.strip().split(" ")
         # The option flag is the first one
-        flag = option_parts[0].strip()
+        flag=option_parts[0].strip()
         # If it has more than one part, it's a flag with arguments (it should only be --filters, --exclude or --year)
-        if len(option_parts) > 1:
+        if len(option_parts)>1:
             # The flag arguments follow the flag
-            args = option_parts[1:]
+            args=option_parts[1:]
             if flag == "filters":
                 # Set the filters
                 options.filters = args
@@ -247,7 +259,7 @@ def parse_url_and_options(line):
                 options.exclude = args
             elif flag == "year":
                 # The --year flag should only have one argument
-                if len(args) > 1:
+                if len(args)>1:
                     inv_flags.append(f"--{flag} requires a single argument")
                     continue
                 year_str = args[0]
@@ -257,21 +269,21 @@ def parse_url_and_options(line):
                     year = None
                 options.year = year
             # If it's one of these flags it shouldn't have any arguments
-            elif flag in ["add-posters", "add-sets", "add-to-bulk", "force", "kometa", "stage", "temp", "skip-locked"]:
-                inv_flags.append(f"--{flag} has too many arguments")
-            # If we get to this point it's not a valid flag
+            elif flag in ["add-posters", "add-sets", "add-to-bulk", "force", "kometa", "stage", "temp", "skip-locked", "allow-artist-updates", "no-cache"]:
+                inv_flags.append(f"--{flag} has too many argumens")
+            # If we ge to this point it's not a valid flag
             else:
                 inv_flags.append(f"--{flag} is not a valid flag")
-        # If it only has one part, it should be one of the boolean flags
+        # If it only has one part, it should be on of the boolean flags
         else:
             if flag in ["filters", "exclude", "year"]:
                 inv_flags.append(f"--{flag} needs at least one argument")
-            elif flag not in ["add-posters", "add-sets", "add-to-bulk", "force", "kometa", "stage", "temp", "skip-locked"]:
+            elif flag not in ["add-posters", "add-sets" ,"add-to-bulk" ,"force", "kometa", "stage", "temp", "skip-locked", "allow-artist-updates", "no-cache"]:
                 inv_flags.append(f"--{flag} is not a valid flag")
             else:
-                setattr(options, flag.replace("-", "_"), True)
+                setattr(options, flag.replace("-","_"), True) # Convert add-posters into add_posters as the Options class expects
 
-    # If we've collected any invalid flags, raise exception and provide the list of invalid flags and reasons for logging purposes
+    # If we've collected any invalid flash, raise exception and provide the list of invalid flags and reasons for logging purposes    
     if inv_flags:
         error = ", ".join(inv_flags)
         raise InvalidFlag(error)
@@ -323,4 +335,29 @@ def get_path_parts(path: str) -> tuple[str, ...] | None:
     else:
         return PurePosixPath(path).parts
 
+def normalize_path(path:str) -> str:
+    return path.replace("\\", "/")
+
+def get_host_path(container_path: str) -> str:
+    """
+    Parses /proc/self/mountinfo to find the host path
+    corresponding to the given container path.
+    """
+    try:
+        with open("/proc/self/mountinfo", "r") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                target = parts[4].strip()
+                if container_path == target:
+                    host_path = parts[3]
+                    if "path=" in line:
+                        drive=line.split("path=")[1].split(";")[0].rstrip('\\')
+                        full_path = f"{drive}{host_path}".replace("/", "\\")
+                        return full_path
+                    return host_path
+    except Exception as e:
+        debug_me(f"Error reading /proc/self/mountinfo: {e}")
+    return "(not defined)"
 

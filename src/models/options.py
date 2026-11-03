@@ -17,28 +17,36 @@ class Options:
     Attributes:
         add_posters: Include additional posters from ThePosterDB set
         add_sets: Include additional sets from ThePosterDB
+        local_assets: Saves artwork locally alongside media files
         kometa: Save artwork to Kometa asset directory instead of uploading to Plex
         stage: Download artwork for seasons and episodes not yet in Plex (except Specials)
         temp: Use temporary directory instead of Kometa asset directory
         force: Force re-upload even if artwork hasn't changed
         skip_locked: Skip artwork when the target Plex field is locked (already set)
+        allow_artist_updates: Update locked artwork we applied when the same artist has posted a newer version
+        no_cache: Ignore the cached user uploads index for this run and crawl every page
         filters: List of artwork types to include (e.g., ['show_cover', 'title_card'])
         exclude: List of artwork IDs to skip
         year: Override year for Plex matching
         add_to_bulk: Add successfully processed URLs to bulk file
+        port: Port number for web server (default is 4567)
     """
 
     add_posters: bool = False
     add_sets: bool = False
+    local_assets: bool = False
     kometa: bool = False
     stage: bool = False
     temp: bool = False
     force: bool = False
     skip_locked: bool = False
+    allow_artist_updates: bool = False
+    no_cache: bool = False
     filters: List[str] = field(default_factory=list)
     exclude: Optional[List[str]] = None
     year: Optional[int] = None
     add_to_bulk: bool = False
+    port: Optional[int] = None
 
     def has_filter(self, filter_type: str) -> bool:
         """Check if a specific filter type is enabled."""
