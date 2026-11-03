@@ -282,28 +282,33 @@ def process_scrape_url_from_web(instance: Instance, url: str) -> None:
         update_status(instance, f"{scraping_error}", color=StatusColor.DANGER.value)
 
     finally:
-        # Record before the scrape_state broadcast below, not after: that broadcast is what
-        # makes the browser reload the history table, so a record written afterwards would
-        # miss its own refresh and only appear the next time somebody opened the tab.
-        RunHistory().add_run(
-            run_type=RunType.SCRAPE.value,
-            label=label,
-            started_at=started_at,
-            ended_at=datetime.now(timezone.utc).isoformat(),
-            trigger=RunTrigger.MANUAL.value,
-            outcome=outcome,
-            assets_processed=tally.assets_processed[0],
-            success_count=tally.success_counter[0],
-            cached_count=tally.cached_counter[0],
-            locked_count=tally.locked_counter[0],
-            error_count=tally.errors()
-        )
-        globals.scrapes_running -= 1
-        if globals.scrapes_running <= 0:
-            globals.scrapes_running = 0
-            globals.cancel_scrape = False
-            notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
-            globals.scrape_type = "stopped"
+        try:
+            # Record before the scrape_state broadcast below, not after: that broadcast is what
+            # makes the browser reload the history table, so a record written afterwards would
+            # miss its own refresh and only appear the next time somebody opened the tab.
+            RunHistory().add_run(
+                run_type=RunType.SCRAPE.value,
+                label=label,
+                started_at=started_at,
+                ended_at=datetime.now(timezone.utc).isoformat(),
+                trigger=RunTrigger.MANUAL.value,
+                outcome=outcome,
+                assets_processed=tally.assets_processed[0],
+                success_count=tally.success_counter[0],
+                cached_count=tally.cached_counter[0],
+                locked_count=tally.locked_counter[0],
+                error_count=tally.errors()
+            )
+        finally:
+            # Inner finally: a run-history persistence failure (full disk, unwritable
+            # directory) must not leave scrapes_running stuck positive and the frontend's
+            # scrape/upload controls permanently disabled.
+            globals.scrapes_running -= 1
+            if globals.scrapes_running <= 0:
+                globals.scrapes_running = 0
+                globals.cancel_scrape = False
+                notify_web(instance, "scrape_state", { "running": False, "type": globals.scrape_type })
+                globals.scrape_type = "stopped"
 
 def run_bulk_import_scrape_in_thread(
         instance: Instance,

@@ -194,3 +194,33 @@ def test_an_invalid_url_is_still_recorded(history, configured_plex):
     assert len(runs) == 1
     assert runs[0]["outcome"] == OUTCOME_FAILED
     assert runs[0]["label"] == "not a url at all"
+
+
+@pytest.mark.unit
+def test_scrape_state_is_released_even_when_recording_history_fails(history, configured_plex, monkeypatch):
+    """A run-history persistence failure (full disk, unwritable config dir -> HistorySaveError,
+    or anything else add_run() raises) must not leave scrapes_running stuck positive: the
+    frontend's scrape/upload controls would stay disabled forever, even after a refresh,
+    because nothing else ever decrements the counter or re-broadcasts scrape_state."""
+    from core.exceptions import HistorySaveError
+
+    broken_history = MagicMock()
+    broken_history.add_run.side_effect = HistorySaveError("run history directory is read-only")
+    monkeypatch.setattr("artwork_uploader.RunHistory", lambda: broken_history)
+
+    notifications = []
+
+    def record_notify(instance, event, data=None):
+        notifications.append((event, data))
+
+    with (
+        patch("artwork_uploader.scrape_and_upload", side_effect=_scrape(assets=1, success=1)),
+        patch("artwork_uploader.notify_web", side_effect=record_notify),
+        patch("artwork_uploader.update_status"),
+        pytest.raises(HistorySaveError),
+    ):
+        process_scrape_url_from_web(Instance(mode="cli"), URL)
+
+    assert globals.scrapes_running == 0
+    assert globals.cancel_scrape is False
+    assert ("scrape_state", {"running": False, "type": "scrape"}) in notifications

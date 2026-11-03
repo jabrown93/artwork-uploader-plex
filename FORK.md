@@ -167,3 +167,10 @@ Dated so a later sync can revisit them.
     were configured. Switched the route's own gate to `ensure_libraries()`, matching the pattern
     already used by `process_scrape_url_from_web` and `WebhookService._attempt()`.
     `src/web_routes.py`, `tests/test_arr_webhook_library_recovery.py`.
+  - `process_scrape_url_from_web`'s cleanup (`scrapes_running` decrement, `scrape_state`
+    broadcast) lived in the same `finally` block as `RunHistory().add_run()`. A history
+    persistence failure (full disk, unwritable config dir) raised past the decrement, leaving
+    `scrapes_running` stuck positive and the frontend's scrape/upload controls disabled until
+    the process restarted. Moved the run-state cleanup into its own inner `finally` so a
+    persistence failure cannot block it. `src/artwork_uploader.py`,
+    `tests/test_run_history_scrape.py`.
