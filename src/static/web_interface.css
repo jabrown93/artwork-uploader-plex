@@ -1,17 +1,9 @@
-/* body {
-    background-image: url(/static/bg.jpg);
-    background-repeat: no-repeat;
-    background-position-x: right;
-    background-size: cover
-}
-
-html, body {
-    height: 100%;
-    margin: 0;
-} */
+/* ==========================================================================
+   Base & Layout Styles
+   ========================================================================== */
 
 * {
-    font-family: "Noto Sans", serif;
+    font-family:system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     font-optical-sizing: auto;
     font-weight: 400;
     font-style: normal;
@@ -32,11 +24,20 @@ h1 {
 
 .app-logo {
     flex-shrink: 0;
+    /* Brand gold, so the header mark matches the favicon and the app icon. */
+    color: #EBA43B;
     transition: transform 0.3s ease;
 }
 
-.app-logo:hover {
-    transform: scale(1.1);
+@media (hover: hover) {
+    .app-logo:hover {
+        transform: scale(1.15);
+    }
+}
+
+.app-logo:active {
+    transform: scale(0.92);
+    transition: transform 0.1s ease;
 }
 
 .app-title {
@@ -58,10 +59,23 @@ h1 {
     font-size: 0.9rem;
 }
 
-.bg-light {
-    opacity: 0.85
+.bg-light {opacity: 0.85}
+
+/* Keeps the invisible outer overlay from blocking clicks on the UI behind it */
+#status_container {
+    pointer-events: none; /* Block clicks BY DEFAULT */
 }
 
+/* Enable pointer events on the CONTAINER only when the STATUS IS SHOWN */
+#status_container:has(#status.show) {
+    pointer-events: auto; /* Re-enable clicks for the whole bar area */
+}
+
+/* ==========================================================================
+   Custom Components & Overlays
+   ========================================================================== */
+
+/* Drop Area */
 #drop-area {
     width: 100%;
     margin: auto;
@@ -75,6 +89,85 @@ h1 {
 #drop-area.highlight {
     border-color: #00bfff;
     background: #f0f8ff;
+}
+
+/* Visual disabled state for the drop area */
+#drop-area.disabled {
+    opacity: 0.4;                     /* Dims the element */
+    filter: grayscale(100%);          /* Removes color for a greyed-out look */
+    cursor: not-allowed !important;   /* Shows a prohibited cursor on hover */
+    pointer-events: none;             /* Prevents native hover/click highlights */
+    transition: all 0.3s ease;       /* Smooth transition when toggling */
+}
+
+/* Progress Bars */
+/* The container that handles the sliding animation */
+.progress-wrapper {
+    /* Force it to take zero vertical space */
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    margin: 0 !important;
+    padding: 0 !important;
+    
+    /* Smooth transition for all properties */
+    transition: 
+        max-height 0.4s ease-out, 
+        opacity 0.4s ease, 
+        margin 0.4s ease-out;
+}
+
+.progress-wrapper.show {
+    /* Allow it to grow to its natural content size */
+    max-height: 100px; /* Needs to be larger than your bar's height */
+    opacity: 1;
+    margin-top: 1rem !important;
+    margin-bottom: 0.5rem !important;
+}
+
+/* Force the internal Bootstrap progress bar to have no margins */
+.progress-wrapper .progress {
+    margin: 0 !important;
+}
+
+.progress.position-relative {
+    position: relative; /* This is the anchor for the absolute text */
+}
+
+.progress-text-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    
+    /* Responsive Font Styling */
+    font-weight: 600;
+    font-size: 0.75rem; /* Slightly smaller to feel less "crammed" */
+    line-height: 1;
+    pointer-events: none;
+    z-index: 10;
+
+    /* Light/Dark Mode Color Logic */
+    /* This uses the standard Bootstrap text color variable */
+    color: var(--bs-body-color); 
+    
+    /* Adds a slight glow/shadow so it's readable over the blue bar */
+    text-shadow: 0 0 3px var(--bs-body-bg);
+}
+
+/* Custom progress bar background colors */
+.bg-custom {
+    background-color: #14abfd !important;
+}
+.bg-custom2 {
+    background-color: #59e179 !important;
+}
+.bg-custom3 {
+    background-color: #9e7fdc !important;
 }
 
 #progress-container {
@@ -99,51 +192,1066 @@ h1 {
     margin-right: auto;
 }
 
+/* Time Select tooltip box */
 #time_select_box {
     position: absolute;
-    top: 0;
-    right: 55px; /* Move the tooltip 20px to the right */
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+    background: var(--bs-body-bg);
+    border: 1px solid var(--bs-border-color);
     padding: 15px;
-    border-radius: 5px;
-    box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    box-shadow: 0px 8px 24px rgba(0, 0, 0, 0.25);
     display: none;
     z-index: 1100;
-    min-width: 250px;
-    overflow: visible !important;
+    width: calc(100vw - 30px);
+    max-width: 380px; /* Expanded slightly to comfortably fit 'Every' controls on 1 line */
 }
 
 /* Outer arrow (border color matches the tooltip border) */
 #tooltip_arrow {
     position: absolute;
-    top: -10px; /* Move arrow to the top */
-    right: 15px; /* Align the arrow to the right */
+    top: -10px;
     width: 0;
     height: 0;
     border-left: 10px solid transparent;
     border-right: 10px solid transparent;
-    border-bottom: 10px solid #dee2e6; /* Arrow border color */
+    border-bottom: 10px solid var(--bs-border-color);
+    transform: translateX(-50%); /* Keeps arrow tip centered on its left coordinate */
 }
 
 /* Inner arrow (matches tooltip background) */
 #tooltip_arrow::after {
     content: "";
     position: absolute;
-    top: 1px; /* Moves inner arrow down slightly */
+    top: 1px;
     left: -9px;
     width: 0;
     height: 0;
     border-left: 9px solid transparent;
     border-right: 9px solid transparent;
-    border-bottom: 9px solid #f8f9fa; /* Matches tooltip background */
+    border-bottom: 9px solid var(--bs-body-bg);
 }
-
 
 /* Class to show tooltip */
 .show-tooltip {
     display: block !important;
 }
 
+/* Ensure selected list group items show all 4 borders over adjacent items */
+#schedule_list .list-group-item.border-primary {
+    border-top: 1px solid var(--bs-primary) !important;
+    z-index: 2;
+}
+
+/* Monospace font for token input fields */
+.input-monospace,
+.input-monospace::placeholder {
+    font-family: 'JetBrains Mono', "Courier New", "Liberation Mono", Consolas, Monaco, Menlo, SFMono-Regular, monospace !important;
+    /* font-size: 0.875rem; Slightly smaller font size often looks cleaner for long token strings */
+}
+
+.text-monospace {
+    font-family: 'JetBrains Mono', "Courier New", "Liberation Mono", Consolas, Monaco, Menlo, SFMono-Regular, monospace !important;
+}
+
+/* Remove Bootstrap's validation checkmark icon on small numeric inputs */
+.was-validated .d-inline-block.form-control:valid,
+.was-validated .d-inline-block.form-control:invalid {
+    background-image: none !important;
+    padding-right: 0.5rem !important; /* Prevents text clipping */
+}
+
+/* Offset Bootstrap validation icon so it doesn't overlap inline field buttons */
+.was-validated #webhook_token.form-control:invalid,
+.was-validated #webhook_token.form-control:valid {
+    background-position: right 2.25rem center !important;
+    padding-right: 4rem !important; /* Ensures long tokens don't overlap either icon */
+}
+
+/* Standalone Inline Button (e.g., single eye icon on Plex Auth) */
+.btn-inline-icon {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: var(--bs-primary, #0d6efd);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.75;
+    transition: opacity 0.15s ease-in-out;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 4;
+}
+
+/* Base transition for the inner <i> icon */
+.btn-inline-icon i {
+    display: inline-block;
+    transition: transform 0.15s ease-in-out;
+}
+
+@media (hover: hover) {
+    [data-bs-theme="dark"] .btn-inline-icon:hover i {
+        color: #0d6efe;
+    }
+}
+
+[data-bs-theme="dark"] .btn-inline-icon:active i {
+    color: #0d6efe;
+}
+
+.inline-run-btn {
+    display: inline-block !important;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.inline-add-btn,
+.inline-remove-btn {
+    display: inline-block !important;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+    color: #0d6efe;
+}
+
+/* Hover effects */
+@media (hover: hover) {
+    .delete-schedule-btn:hover,
+    .inline-run-btn:hover,
+    .inline-add-btn:hover,
+    .btn-inline-icon:hover {
+        opacity: 1;
+    }
+
+    .delete-schedule-btn:hover,
+    .inline-run-btn:hover,
+    .inline-add-btn:hover,
+    .inline-remove-btn:hover,
+    .btn-inline-icon:hover i {
+        transform: scale(1.15); /* Scales the icon cleanly without affecting position */
+    }
+}
+@media (hover: hover) {
+    .inline-remove-btn:hover {
+        opacity: 1;
+        color: #dc3545;
+    }
+}
+
+.delete-schedule-btn:active,
+.inline-run-btn:active,
+.inline-add-btn:active,
+.btn-inline-icon:active {
+    opacity: 1;
+}
+
+.inline-remove-btn:active {
+    opacity: 1;
+    color: #dc3545 !important;
+}
+
+.delete-schedule-btn:active,
+.inline-run-btn:active,
+.inline-add-btn:active,
+.inline-remove-btn:active,
+.btn-inline-icon:active i {
+    transform: scale(0.90) !important;
+    transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+/* Dark mode color override */
+[data-bs-theme="dark"] .btn-inline-icon,
+[data-bs-theme="dark"] .inline-add-btn,
+[data-bs-theme="dark"] .inline-remove-btn {
+    color: #ffffff !important;
+}
+
+[data-bs-theme="dark"] .inline-remove-btn:active {
+    opacity: 1;
+    color: #dc3545 !important;
+}
+
+[data-bs-theme="dark"] .inline-remove-btn:hover {
+    opacity: 1;
+    color: #dc3545 !important;
+}
+
+/* Generic container for multiple inline input action buttons */
+.input-inline-actions {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    z-index: 4;
+}
+
+/* Reset absolute positioning on individual buttons when inside a action wrapper */
+.input-inline-actions .btn-inline-icon {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    transform: none !important;
+}
+
+/* Input with 2 trailing action buttons (Eye + Generate) */
+.form-control.has-two-inline-btns {
+    padding-right: 3.5rem !important;
+}
+
+/* Folder Browse Icon Hover Styling (FIXED: Preserved translateY centering) */
+@media (hover: hover) {
+    .browse-folder-btn:hover {
+        color: var(--bs-primary, #0d6efd) !important;
+    }
+
+    [data-bs-theme="dark"] .browse-folder-btn:hover {
+        color: #3d8bfd !important;
+    }
+}
+
+.browse-folder-btn:active {
+    color: var(--bs-primary, #0d6efd) !important;
+    transform: translateY(-50%) scale(0.90) !important; /* Keeps icon vertically centered */
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+[data-bs-theme="dark"] .browse-folder-btn:active {
+    color: #3d8bfd !important;
+    transform: translateY(-50%) scale(0.90) !important; /* Keeps icon vertically centered */
+    transition: transform 0.1s ease, color 0.1s ease;
+}
 
 
+/* ==========================================================================
+   Bulk Import tab button styling
+   ========================================================================== */
+
+/* Base state on the anchor wrapper */
+.bulk-btn {
+    transition: transform 0.2s ease-in-out;
+    text-decoration: none;
+    line-height: 1;
+    color: inherit;
+}
+
+/* Hover scale and color effect */
+@media (hover: hover) {
+    .bulk-btn:hover {
+        transform: scale(1.18);
+        color: var(--bs-primary);
+    }
+    /* Color override for the delete button */
+    .bulk-btn:hover #delete_icon {
+        color: #dc3545 !important;
+    }
+}
+
+/* FIXED: Replicating blue color change on active for bulk buttons */
+.bulk-btn:active {
+    transform: scale(0.90) !important; /* Shrinks slightly on touch */
+    color: var(--bs-primary) !important; /* Turns blue on tap */
+    opacity: 0.8;
+    transition: transform 0.1s ease, opacity 0.1s ease, color 0.1s ease;
+}
+
+/* Specific red override for the delete button on active */
+.bulk-btn:active #delete_icon {
+    color: #dc3545 !important;
+}
+
+
+/* TEST */
+.btn-inline-icon:active #generate_webhook_token i {
+    animation: generate_token_animation 0.6s linear;
+}
+
+@keyframes generate_token_animation {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+
+/* Generic validation icon offset for inputs with inline trailing buttons */
+.was-validated .form-control[required].has-inline-btn:invalid,
+.was-validated .form-control[required].has-inline-btn:valid {
+    background-position: right 2.25rem center !important;
+    padding-right: 4rem !important;
+}
+
+/* Offset validation icons when required & invalid/valid for 2 inline buttons */
+.was-validated .form-control[required].has-two-inline-btns:invalid,
+.was-validated .form-control[required].has-two-inline-btns:valid,
+.was-validated #webhook_token[required]:invalid,
+.was-validated #webhook_token[required]:valid {
+    background-position: right 3.25rem center !important;
+    padding-right: 5rem !important;
+}
+
+/* Display invalid feedback when input inside wrapper is invalid */
+.was-validated .position-relative:has(.form-control:invalid) ~ .invalid-feedback,
+.was-validated .position-relative .form-control:invalid ~ .invalid-feedback {
+    display: block !important;
+}
+
+/* ==========================================================================
+   Apprise URL Repeater Inline Icons
+   ========================================================================== */
+
+/* The floating flex container holding the action buttons */
+.apprise-row-actions {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%); /* Handles vertical centering for BOTH icons */
+    display: flex;
+    align-items: center;
+    gap: 0.5rem; /* Keeps + and X side-by-side with clean spacing */
+    z-index: 2; /* FIXED: Lowered z-index so dropdowns stay on top */
+}
+
+/* Reset button positioning inside the flex container so they don't stack */
+.apprise-row-actions .btn-inline-icon {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    transform: none !important; /* Prevents transform inheritance conflicts */
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: var(--bs-primary, #0d6efd);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.75;
+    transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out, color 0.15s ease-in-out;
+}
+
+/* Custom Apprise Events Panel */
+.apprise-events-panel {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 1050;
+    background-color: var(--bs-body-bg);
+    min-width: 220px;
+}
+
+.apprise-events-panel.show {
+    display: block !important;
+}
+
+/* Base caret arrow setup */
+.apprise-events-panel::before {
+    content: "";
+    position: absolute;
+    top: -6px;
+    width: 10px;
+    height: 10px;
+    background-color: var(--bs-body-bg);
+    border-top: 1px solid var(--bs-border-color);
+    border-left: 1px solid var(--bs-border-color);
+    transform: rotate(45deg);
+    z-index: 1051;
+}
+
+/* Caret offset for rows with 2 inline buttons (Wrench + Cross) */
+.apprise-url-input-wrap:has(.has-two-inline-btns) .apprise-events-panel::before,
+.apprise-url-input-wrap:has(.has-three-inline-btns) .apprise-events-panel::before {
+    right: 38px;
+}
+
+/* Hover effect: Scale without breaking vertical alignment */
+@media (hover: hover) {
+    .apprise-row-actions .btn-inline-icon:hover {
+        opacity: 1;
+    }
+
+    .apprise-row-actions .btn-inline-icon:hover i {
+        transform: scale(1.15) !important;
+    }
+
+    [data-bs-theme="dark"] .apprise-row-actions .btn-inline-icon:hover {
+        color: #3d8bfd;
+    }
+}
+
+.apprise-row-actions .btn-inline-icon:active {
+    opacity: 1;
+}
+
+.apprise-row-actions .btn-inline-icon:active i {
+    transform: scale(0.90) !important;
+    transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+[data-bs-theme="dark"] .apprise-row-actions .btn-inline-icon:active {
+    color: #3d8bfd;
+}
+
+/* Hide PLUS button on all rows by default */
+.apprise-url-row .add-apprise-url-btn {
+    display: none !important;
+}
+
+/* ONLY show PLUS button on the last row */
+.apprise-url-row:last-child .add-apprise-url-btn {
+    display: inline-flex !important;
+}
+
+/* Apprise URL Input Right Padding for Inline Action Buttons */
+.apprise-url-row .apprise-url-input.has-two-inline-btns {
+    padding-right: 3.5rem !important; /* Fits Wrench + Cross with breathing room */
+}
+
+.apprise-url-row .apprise-url-input.has-three-inline-btns {
+    padding-right: 5rem !important; /* Fits Wrench + Plus + Cross cleanly */
+}
+
+/* Hover color for delete icon (HIGH SPECIFICITY to beat dark mode defaults) */
+@media (hover: hover) {
+    .btn-inline-icon.remove-apprise-url-btn:hover,
+    .btn-inline-icon.remove-apprise-url-btn:hover i,
+    [data-bs-theme="dark"] .btn-inline-icon.remove-apprise-url-btn:hover,
+    [data-bs-theme="dark"] .btn-inline-icon.remove-apprise-url-btn:hover i,
+    .apprise-row-actions .remove-apprise-url-btn:hover,
+    .apprise-row-actions .remove-apprise-url-btn:hover i,
+    [data-bs-theme="dark"] .apprise-row-actions .remove-apprise-url-btn:hover,
+    [data-bs-theme="dark"] .apprise-row-actions .remove-apprise-url-btn:hover i {
+        color: #dc3545 !important; /* Bootstrap Danger Red */
+    }
+}
+
+.btn-inline-icon.remove-apprise-url-btn:active,
+.btn-inline-icon.remove-apprise-url-btn:active i,
+[data-bs-theme="dark"] .btn-inline-icon.remove-apprise-url-btn:active,
+[data-bs-theme="dark"] .btn-inline-icon.remove-apprise-url-btn:active i,
+.apprise-row-actions .remove-apprise-url-btn:active,
+.apprise-row-actions .remove-apprise-url-btn:active i,
+[data-bs-theme="dark"] .apprise-row-actions .remove-apprise-url-btn:active,
+[data-bs-theme="dark"] .apprise-row-actions .remove-apprise-url-btn:active i {
+    color: #dc3545 !important;
+    transform: scale(0.90) !important;
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+/* Dark mode default color for Apprise buttons (when NOT hovered) */
+[data-bs-theme="dark"] .apprise-row-actions .btn-inline-icon:not(:hover) {
+    color: #ffffff !important;
+}
+
+
+/* ==========================================================================
+   TomSelect Controls (Base Styles)
+   ========================================================================== */
+
+/* Inline alignment and input layout sizing for TomSelect */
+.ts-control {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+}
+
+.ts-control > input {
+    width: auto !important;
+    min-width: 50px !important;
+    max-width: 100% !important;
+    flex: 1 1 auto !important;
+    display: inline-block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+
+/* Style Tom Select chips with Bootstrap Primary color */
+.ts-control .item {
+    background-color: var(--bs-primary, #0d6efd) !important;
+    color: #ffffff !important;
+    border-color: var(--bs-primary, #0d6efd) !important;
+    border-radius: 0.375rem; /* Matches Bootstrap default rounded corners */
+    padding: 2px 8px;
+}
+
+/* Style the 'x' remove button inside the chip */
+.ts-control .item .remove {
+    color: #ffffff !important;
+    border-left-color: rgba(255, 255, 255, 0.3) !important;
+    opacity: 0.8;
+}
+
+@media (hover: hover) {
+    .ts-control .item .remove:hover {
+        background-color: rgba(0, 0, 0, 0.15) !important;
+        color: #ffffff !important;
+        opacity: 1;
+    }
+}
+
+.ts-control .item .remove:active {
+    background-color: rgba(0, 0, 0, 0.25) !important;
+    color: #ffffff !important;
+    opacity: 1;
+}
+
+/* Loading state spinner */
+/* Position wrapper relative so we can anchor the spinner inside it */
+.ts-wrapper.loading .ts-control {
+    position: relative;
+    padding-right: 2.25rem !important; /* Make room for spinner */
+}
+
+/* Create the spinning loader ring */
+.ts-wrapper.loading .ts-control::after {
+    content: "";
+    position: absolute;
+    right: 0.75rem;
+    top: calc(50% - 7px);
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: var(--bs-primary, #0d6efd); /* Uses Bootstrap primary blue */
+    border-radius: 50%;
+    animation: ts-spinner 0.6s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes ts-spinner {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Red border highlight for TomSelect when Plex libraries fail to fetch */
+.ts-wrapper.is-invalid .ts-control {
+    border-color: #dc3545 !important;
+}
+
+/* Clear button plugin */
+/* Container padding so chips don't overlap icon */
+.ts-wrapper.plugin-clear_button .ts-control {
+    padding-right: 2.25rem !important;
+}
+
+/* Hide by default when empty */
+.ts-wrapper.plugin-clear_button .clear-button {
+    display: none !important;
+}
+
+/* Show & style the icon ONLY when chips exist */
+.ts-wrapper.plugin-clear_button.has-items .clear-button {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    
+    position: absolute;
+    right: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+    
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    
+    /* Icon styling */
+    color: var(--bs-primary, #0d6efd) !important; /* Switch to var(--bs-primary) if you want blue */
+    font-size: 1rem; /* Tweak size easily here */
+    line-height: 1;
+    
+    cursor: pointer;
+    opacity: 0.75;
+    transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
+}
+
+@media (hover: hover) {
+    .ts-wrapper.plugin-clear_button.has-items .clear-button:hover {
+        opacity: 1;
+        transform: translateY(-50%) scale(1.15);
+        color: #dc3545 !important;
+    }
+}
+
+.ts-wrapper.plugin-clear_button.has-items .clear-button:active {
+    opacity: 1;
+    transform: translateY(-50%) scale(0.90) !important;
+    color: #dc3545 !important;
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+/* Hide clear button while loading options (takes precedence over .has-items) */
+.ts-wrapper.loading .clear-button,
+.ts-wrapper.plugin-clear_button.has-items.loading .clear-button {
+    display: none !important;
+}
+
+/* ==========================================================================
+   Dark Mode Specific Overrides ([data-bs-theme="dark"])
+   ========================================================================== */
+
+/* Fix Tom-Select dropdown text and background in dark mode */
+[data-bs-theme="dark"] .ts-dropdown {
+    background-color: #2b3035 !important; /* Matches Bootstrap dark dropdowns */
+    border-color: #495057 !important;
+    color: #f8f9fa !important;
+}
+
+/* TomSelect Dropdown Items, Prompts & Empty State */
+[data-bs-theme="dark"] .ts-dropdown .option,
+[data-bs-theme="dark"] .ts-dropdown .create,
+[data-bs-theme="dark"] .ts-dropdown .no-results {
+    color: #777777 !important; /* Crisp readable light text */
+}
+
+/* FIXED: TomSelect selection state logic restored for touch & desktop */
+@media (hover: hover) {
+    [data-bs-theme="dark"] .ts-dropdown .option:hover {
+        background-color: #0d6efd !important; /* Bootstrap primary blue */
+        color: #ffffff !important;
+    }
+}
+
+.ts-dropdown .option.active,
+.ts-dropdown .option:active {
+    background-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+
+[data-bs-theme="dark"] .ts-dropdown .option.active,
+[data-bs-theme="dark"] .ts-dropdown .option:active {
+    background-color: #0d6efd !important;
+    color: #ffffff !important;
+}
+
+/* TomSelect Clear Button in Dark Mode */
+[data-bs-theme="dark"] .ts-wrapper.plugin-clear_button.has-items .clear-button {
+    color: #ffffff !important; 
+}
+
+.ts-dropdown {
+    z-index: 1050 !important;
+}
+
+@media (hover: hover) {
+    [data-bs-theme="dark"] .ts-wrapper.plugin-clear_button.has-items .clear-button:hover {
+        color: #dc3545 !important; 
+    }
+}
+
+[data-bs-theme="dark"] .ts-wrapper.plugin-clear_button.has-items .clear-button:active {
+    color: #dc3545 !important;
+    transform: translateY(-50%) scale(0.90) !important;
+    transition: transform 0.1s ease, color 0.1s ease;
+}
+
+/* Active typing text inside TomSelect control in Dark Mode */
+[data-bs-theme="dark"] .ts-control > input {
+    color: #f8f9fa !important; /* Crisp white text while typing */
+}
+
+/* --------------------------------------------------------------------------
+Theme Switcher Dropdown Icons (Fix dark mode SVG fills)
+-------------------------------------------------------------------------- */
+[data-bs-theme="dark"] #bd-theme + .dropdown-menu svg,
+[data-bs-theme="dark"] #bd-theme svg {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* Active item state in Theme Switcher dropdown */
+[data-bs-theme="dark"] #bd-theme + .dropdown-menu .dropdown-item.active svg {
+    fill: #ffffff !important;
+}
+
+.theme-icon-active {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* --------------------------------------------------------------------------
+   Save Config button
+   -------------------------------------------------------------------------- */
+
+/* Prevent floating button from covering content at the bottom of the page */
+#settings {
+    padding-bottom: 4rem;
+}
+
+/* Floating Save Button Styling & Animations */
+.rounded-pill {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+@media (hover: hover) {
+    .rounded-pill:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.25) !important;
+    }
+}
+
+.rounded-pill:active {
+    transform: translateY(0) scale(0.96);
+}
+
+/* Column and Row Spacing for Filter Toggles */
+.gap-y-2 {
+    row-gap: 0.5rem !important;
+}
+
+/* Fixed minimum column width for toggle alignment */
+.filter-toggle-item {
+    min-width: 11rem; /* ~176px - keeps switches perfectly aligned in columns */
+    flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Generic Collapsible Floating Action Buttons (FAB)
+   ========================================================================== */
+
+/* Base transition rules */
+.fab-collapse {
+    transition: padding 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                transform 0.2s ease, 
+                box-shadow 0.2s ease;
+}
+
+/* Label text transition (for Save / Run buttons) */
+.fab-collapse > span:not(.visually-hidden) {
+    display: inline-block;
+    max-width: 100px;
+    opacity: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Caret arrow transition (for the #bd-theme dropdown button) */
+.fab-collapse.dropdown-toggle::after {
+    transition: opacity 0.2s ease, margin 0.3s ease;
+    opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Collapsed Floating State (Icon-only FABs over content)
+   -------------------------------------------------------------------------- */
+
+.fab-collapse.collapsed {
+    padding-left: 0.60rem !important;
+    padding-right: 0.60rem !important;
+}
+
+/* Hide label text */
+.fab-collapse.collapsed > span:not(.visually-hidden) {
+    max-width: 0;
+    opacity: 0;
+    margin: 0;
+}
+
+/* Hide caret arrow on theme selector when floating */
+.fab-collapse.collapsed.dropdown-toggle::after {
+    opacity: 0;
+    margin-left: 0;
+    display: none; /* Collapses the arrow completely */
+}
+
+/* ==========================================================================
+   Smooth Caret Icon Collapse
+   ========================================================================== */
+
+/* 1. Strip Bootstrap's automatic CSS-border caret */
+.dropdown-toggle.no-caret::after,
+#bd-theme.dropdown-toggle::after {
+    display: none !important;
+    content: none !important;
+    border: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+}
+
+/* 2. Transition for the inline caret wrapper span */
+/* 1. Base state: spacing handled via margin-left instead of flex gap */
+.fab-collapse .caret-wrapper {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 20px;
+    margin-left: 0.5rem; /* Replaces the flex gap-2 spacing */
+    opacity: 1;
+    transform: scale(1);
+    transform-origin: center center;
+    white-space: nowrap;
+    overflow: hidden;
+    /* Synchronize width, spacing, and opacity */
+    transition: max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 2. Collapsed state: zero out margin and width simultaneously */
+.fab-collapse.collapsed .caret-wrapper {
+    max-width: 0 !important;
+    margin-left: 0 !important;
+    opacity: 0 !important;
+    transform: scale(0) !important;
+}
+
+/* ==========================================================================
+   Elevate Status Banner above Modals & Backdrops
+   ========================================================================== */
+
+#status,
+#status_container { /* Replace with your banner's actual class or ID */
+    z-index: 1060 !important; /* Higher than Bootstrap modal (1055) and backdrop (1050) */
+}
+
+/* ==========================================================================
+   Code Snippet Styling Inside Tooltips
+   ========================================================================== */
+
+.tooltip-inner code {
+    color: #D789B2;
+    background-color: rgba(14, 39, 47, 1); /* Match the background of the alertbox */
+    padding: 0.15em 0.35em;
+    border-radius: 0.25rem;
+}
+
+[data-bs-theme="dark"] .tooltip-inner code {
+    color: #C54282;
+    background-color: rgba(214, 243, 251, 1); /* Match the background of the alertbox in light mode*/
+    padding: 0.15em 0.35em;
+    border-radius: 0.25rem;
+}
+
+/* Optional: Slightly increase tooltip width for longer instructions */
+.wide-tooltip .tooltip-inner {
+    max-width: 320px !important;
+}
+
+/* Custom z-index for all tooltips so they show in front of any other UI element */
+.tooltip {
+    z-index: 9999 !important;
+}
+
+.text-orange {
+    color: #fd7e14 !important; /* Standard Bootstrap orange shade */
+}
+
+/* Apply vertical text mode only on mobile viewports below 768px */
+@media (max-width: 1200px) {
+    th.th-vertical {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        white-space: nowrap;
+        padding: 8px 0px !important;
+        height: 95px;
+        vertical-align: middle;
+        text-align: left !important;
+    }
+    th.th-vertical i {
+        display: inline-block !important;
+        transform: rotate(90deg); /* Adjusts icon axis to match vertical text flow */
+        vertical-align: bottom;
+        margin-bottom: 2px;
+        padding: 4px 0px !important;
+    }
+}
+
+/* Push the modals down slightly so the navbar/title remains visible */
+.yes-no-cancel-modal {
+    margin-top: 12rem !important; /* Adjust value (e.g., 4rem - 6rem) as needed */
+}
+
+/* Resizable & Centered Log Modal */
+#run_log_modal .modal-dialog {
+    margin: 0 !important;
+    position: fixed;
+    top: 5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 95vw;
+    z-index: 1055;
+}
+
+#run_log_modal .modal-content {
+    resize: both;
+    overflow: auto !important; /* CRITICAL: Enables the bottom-right resize grip */
+    width: 85vw;                /* Default wide layout */
+    min-width: 350px;
+    min-height: 250px;
+    max-width: 95vw;
+    max-height: 80vh;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* Ensure modal body and code block fill the container as it resizes */
+#run_log_modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+#run_log_modal #run_log_content {
+    flex: 1;
+    overflow-y: auto;
+}
+
+/* Drag Handle */
+#run_log_modal .modal-header {
+    cursor: move;
+    user-select: none;
+}
+
+/* Prevent animation glitches during active dragging */
+#run_log_modal .modal-dialog.is-dragging {
+    transition: none !important;
+}
+
+/* ==========================================================================
+   Tab scrolling and fading
+   ========================================================================== */
+
+@property --fade-left {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0rem;
+}
+
+@property --fade-right {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0rem;
+}
+
+.nav-tabs-wrapper {
+    position: relative;
+    width: 100%;
+}
+
+/* Base scrollable container */
+.nav-tabs-scrollable {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap !important;
+    scrollbar-width: none;
+}
+
+.nav-tabs-scrollable::-webkit-scrollbar {
+    display: none;
+}
+
+.nav-tabs-scrollable .nav-link {
+    flex: 0 0 auto !important;
+}
+
+/* Fade Overlay Base Styles */
+.nav-tabs-wrapper::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 4.5rem;
+    pointer-events: none; /* Allows clicks to pass through to underlying tabs */
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.25s ease-in-out;
+}
+
+.nav-tabs-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 4.5rem;
+    background: linear-gradient(to left, var(--bs-body-bg, #212529), transparent);
+    pointer-events: none;
+    z-index: 5;
+    opacity: 1; /* Default to visible on cold load */
+    transition: opacity 0.2s ease-in-out;
+}
+
+.nav-tabs-wrapper.no-scroll-right::after {
+    opacity: 0;
+}
+
+/* Left Fade Gradient */
+.nav-tabs-wrapper::before {
+    left: 0;
+    background: linear-gradient(to right, var(--bs-body-bg, #212529), transparent);
+}
+
+/* Right Fade Gradient */
+.nav-tabs-wrapper::after {
+    right: 0;
+    background: linear-gradient(to left, var(--bs-body-bg, #212529), transparent);
+}
+
+/* Toggle opacity via wrapper state classes */
+.nav-tabs-wrapper.can-scroll-left::before {
+    opacity: 1;
+}
+
+.nav-tabs-wrapper.can-scroll-right::after {
+    opacity: 1;
+}
+
+
+/* Mobile View: Stack sequentially (Plex -> Webhook -> Local Assets) */
+.settings-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+/* On Mobile, put Local Assets back between Plex and Webhook if desired */
+.settings-left-col {
+    display: contents; /* Flattens wrapper so children order naturally */
+}
+
+.card-plex { order: 1; }
+.card-kometa { order: 2; }
+.card-webhook { order: 3; }
+
+/* Desktop View (992px and above) */
+@media (min-width: 992px) {
+    .settings-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 1.5rem;
+        align-items: start; /* Columns grow independently */
+    }
+
+    /* Re-enable the left column container for Desktop */
+    .settings-left-col {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        grid-column: 1;
+        order: initial;
+    }
+
+    .card-kometa {
+        grid-column: 2;
+        order: initial;
+    }
+}

@@ -13,7 +13,7 @@ from plexapi.exceptions import NotFound
 
 from core import globals
 from core.config import Config
-from core.exceptions import NotProcessedByExclusion, NotProcessedByFilter, ShowNotFound
+from core.exceptions import ShowNotFound
 from kometa.kometa_saver import KometaSaver
 from models.options import Options
 from plex.plex_uploader import PlexUploader
@@ -52,7 +52,7 @@ def _tv_artwork(**overrides):
     artwork = {
         "title": "Breaking Bad", "url": "http://example.com/season.jpg", "season": 1,
         "episode": None, "year": 2008, "source": "mediux", "id": "season-1",
-        "type": "season_cover", "author": "someone", "tmdb_id": 1396,
+        "file_type": "season_cover", "author": "someone", "tmdb_id": 1396,
         "checksum": "abc123",
     }
     artwork.update(overrides)
@@ -91,6 +91,7 @@ class FakeSeason:
 class FakeShow:
     def __init__(self, title, seasons):
         self.title = title
+        self.year = 2008
         self._seasons = seasons
         self.librarySectionTitle = "TV Shows"
         self.labels = []
@@ -175,7 +176,7 @@ class TestWholeShowArtwork:
         show = _show_with_season1_episode1()
         proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]))
 
-        results = proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, type="show_cover"))
+        results = proc.process_tv_artwork(_tv_artwork(season="Cover", episode=None, file_type="show_cover"))
 
         assert results[0].startswith("✅")
         assert capture_kometa_saves[0]["dest_file_name"] == "poster"
@@ -184,7 +185,7 @@ class TestWholeShowArtwork:
         show = _show_with_season1_episode1()
         proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]))
 
-        results = proc.process_tv_artwork(_tv_artwork(season="Backdrop", episode=None, type="background"))
+        results = proc.process_tv_artwork(_tv_artwork(season="Backdrop", episode=None, file_type="background"))
 
         assert results[0].startswith("✅")
         assert capture_kometa_saves[0]["dest_file_name"] == "background"
@@ -193,7 +194,7 @@ class TestWholeShowArtwork:
         show = _show_with_season1_episode1()
         proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]))
 
-        results = proc.process_tv_artwork(_tv_artwork(season="SquareArt", episode=None, type="square_art"))
+        results = proc.process_tv_artwork(_tv_artwork(season="SquareArt_0", episode=None, file_type="square_art"))
 
         assert results[0].startswith("✅")
         assert capture_kometa_saves[0]["dest_file_name"] == "square"
@@ -231,25 +232,64 @@ class TestSeasonCoverInPlex:
         assert "Season 02 not available in TV Shows" in results[0]
         assert not capture_kometa_saves
 
-    def test_filtered_artwork_raises_not_processed_by_filter(self, configured, capture_kometa_saves):
+
+class TestSpecialsStagingForExistingShow:
+    """Season 0 missing from Plex and not known to Sonarr - the stage_specials config
+       option should still let it be staged in Kometa mode (independent of Sonarr)."""
+
+    def test_specials_staged_when_stage_specials_enabled(self, configured, capture_kometa_saves):
+        configured.stage_specials = True
+        configured.save()
         show = _show_with_season1_episode1()
-        proc = _processor(
-            FakePlex(items=[show], libraries=["TV Shows"]),
-            options=Options(kometa=True, filters=["background"]),
-        )
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(tv_enabled=False))
 
-        with pytest.raises(NotProcessedByFilter):
-            proc.process_tv_artwork(_tv_artwork(season=1, episode=None))
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
 
-    def test_excluded_artwork_raises_not_processed_by_exclusion(self, configured, capture_kometa_saves):
+        assert results[0].startswith("✅")
+        assert capture_kometa_saves[0]["dest_file_name"] == "Season00"
+
+    def test_specials_skipped_when_stage_specials_disabled(self, configured, capture_kometa_saves):
+        configured.stage_specials = False
+        configured.save()
         show = _show_with_season1_episode1()
-        proc = _processor(
-            FakePlex(items=[show], libraries=["TV Shows"]),
-            options=Options(kometa=True, exclude=["season-1"]),
-        )
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(tv_enabled=False))
 
-        with pytest.raises(NotProcessedByExclusion):
-            proc.process_tv_artwork(_tv_artwork(season=1, episode=None))
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("⚠️")
+        assert "Specials not available in TV Shows" in results[0]
+        assert not capture_kometa_saves
+
+    def test_specials_via_sonarr_blocked_when_stage_specials_disabled(self, configured, capture_kometa_saves):
+        """Season 0 missing from Plex but known to Sonarr: via_sonarr alone must not bypass
+           stage_specials=False (regression for the specials/stage_specials gate)."""
+        configured.stage_specials = False
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(sonarr=FakeSonarr(series=arr_series)))
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("⚠️")
+        assert "Specials not available in TV Shows" in results[0]
+        assert not capture_kometa_saves
+
+    def test_specials_via_sonarr_allowed_when_stage_specials_enabled(self, configured, capture_kometa_saves):
+        """Season 0 missing from Plex but known to Sonarr: via_sonarr still stages specials
+           when stage_specials=True."""
+        configured.stage_specials = True
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(sonarr=FakeSonarr(series=arr_series)))
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=None))
+
+        assert results[0].startswith("✅")
+        assert capture_kometa_saves[0]["dest_file_name"] == "Season00"
+        assert "pre-seeded via Sonarr" in capture_kometa_saves[0]["description"]
+
 
 
 class TestEpisodeTitleCardInPlex:
@@ -257,7 +297,7 @@ class TestEpisodeTitleCardInPlex:
         show = _show_with_season1_episode1()
         proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]))
 
-        results = proc.process_tv_artwork(_tv_artwork(season=1, episode=1, type="title_card"))
+        results = proc.process_tv_artwork(_tv_artwork(season=1, episode=1, file_type="title_card"))
 
         assert results[0].startswith("✅")
         assert capture_kometa_saves[0]["dest_file_name"] == "S01E01"
@@ -266,7 +306,7 @@ class TestEpisodeTitleCardInPlex:
         show = _show_with_season1_episode1()
         proc = _processor(FakePlex(items=[show], libraries=["TV Shows"]), arr=FakeArr(tv_enabled=False))
 
-        results = proc.process_tv_artwork(_tv_artwork(season=1, episode=9, type="title_card"))
+        results = proc.process_tv_artwork(_tv_artwork(season=1, episode=9, file_type="title_card"))
 
         assert results[0].startswith("⚠️")
         assert "Episode 09 not available in TV Shows" in results[0]
@@ -282,7 +322,7 @@ class TestEpisodeTitleCardInPlex:
             options=Options(kometa=True, stage=True),
         )
 
-        results = proc.process_tv_artwork(_tv_artwork(season=1, episode=9, type="title_card"))
+        results = proc.process_tv_artwork(_tv_artwork(season=1, episode=9, file_type="title_card"))
 
         assert results[0].startswith("✅")
 
@@ -294,9 +334,45 @@ class TestEpisodeTitleCardInPlex:
             arr=FakeArr(sonarr=FakeSonarr(series=arr_series)),
         )
 
-        results = proc.process_tv_artwork(_tv_artwork(season=2, episode=3, type="title_card"))
+        results = proc.process_tv_artwork(_tv_artwork(season=2, episode=3, file_type="title_card"))
 
         assert results[0].startswith("✅")
+        assert "pre-seeded via Sonarr" in capture_kometa_saves[0]["description"]
+
+    def test_specials_episode_via_sonarr_blocked_when_stage_specials_disabled(self, configured, capture_kometa_saves):
+        """Season 0 episode missing from Plex but known to Sonarr: via_sonarr alone must not
+           bypass stage_specials=False (regression for the specials/stage_specials gate)."""
+        configured.stage_specials = False
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(
+            FakePlex(items=[show], libraries=["TV Shows"]),
+            arr=FakeArr(sonarr=FakeSonarr(series=arr_series)),
+        )
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=1, file_type="title_card"))
+
+        assert results[0].startswith("⚠️")
+        assert "Specials not available in TV Shows" in results[0]
+        assert not capture_kometa_saves
+
+    def test_specials_episode_via_sonarr_allowed_when_stage_specials_enabled(self, configured, capture_kometa_saves):
+        """Season 0 episode missing from Plex but known to Sonarr: via_sonarr still stages the
+           title card when stage_specials=True."""
+        configured.stage_specials = True
+        configured.save()
+        show = _show_with_season1_episode1()
+        arr_series = _arr_series(season_numbers={0, 1})
+        proc = _processor(
+            FakePlex(items=[show], libraries=["TV Shows"]),
+            arr=FakeArr(sonarr=FakeSonarr(series=arr_series)),
+        )
+
+        results = proc.process_tv_artwork(_tv_artwork(season=0, episode=1, file_type="title_card"))
+
+        assert results[0].startswith("✅")
+        assert capture_kometa_saves[0]["dest_file_name"] == "S00E01"
         assert "pre-seeded via Sonarr" in capture_kometa_saves[0]["description"]
 
 

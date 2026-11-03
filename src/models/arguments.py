@@ -11,48 +11,43 @@ import argparse
 # --add-posters     Adds the "additional posters" section from TPDb page as well as the main posters
 # --force           Forces each poster to upload even, if the same artwork is already there according to the label.
 # --skip-locked     Skips artwork when its target field is locked in Plex (i.e. the artwork has been deliberately set), unless --force is used.
-# --filters         Specify one or more filters, only these types will be applied (e.g., title_card, background, season_cover, show_cover, movie_poster, collection_poster, square_art)
+# --allow-artist-updates   Update locked artwork we applied when the same artist has posted a newer version. Requires --skip-locked (or skip_locked_artwork) and track_artwork_ids.
+# --filters         Specify one or more filters, only these types will be applied (e.g., title_card, background, square_art, season_cover, show_cover, movie_poster, collection_poster)
 # --exclude         Specify one or more IDs to exclude from any uploads
 # --year            Override the year for matching (use the year in Plex)
 # --debug           Spits out debugging information
+# --local_assets    Saves artwork locally alongside media files
 # --kometa          Saves artwork to Kometa asset directory (specified in config file) instead of uploading to Plex.
 # --stage           Downloads artwork for seasons and episodes that are not in Plex yet (except Specials).
 # --temp            Uses a temporary directory (specified in config file) instead of the Kometa asset directory.
+# --no-cache        Ignore the cached ThePosterDB user uploads index for this run and crawl every page.
+# --port            Specify port number for web server (default is 4567)
 # ---------------------------------------------------------
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
     # Adds all the arguments we might want to use
-    parser.add_argument(
-        'command', help="Run mode (leave blank for interactive)", nargs='?', default=None)
-    parser.add_argument(
-        'bulk_file', help="Bulk file (when using bulk as run mode)", nargs='?', default=None)
+    parser.add_argument('command', help="Run mode (leave blank for interactive)", nargs='?', default=None)
+    parser.add_argument('bulk_file', help="Bulk file (when using bulk as run mode)", nargs='?', default=None)
     parser.add_argument("--config", type=str, default=None,
                         help="Path to config file (default: config.json)")
     parser.add_argument("--logs", type=str, default=None,
                         help="Path to logs directory (default: logs)")
-    parser.add_argument('--add-sets', action='store_true',
-                        help="Scrape additional sets from same page - TPDb only")
-    parser.add_argument('--add-posters', action='store_true',
-                        help="Scrape additional posters from same page - TPDb only")
-    parser.add_argument('--force', action='store_true',
-                        help="Force upload/save even if its the same artwork or artwork already exists")
-    parser.add_argument('--skip-locked', action='store_true',
-                        help="Skip artwork when its target field is locked in Plex (already set), unless --force is used")
-    parser.add_argument("--filters", nargs='+',
-                        help="Only these artwork types will be applied (e.g., title_card, background, season_cover, show_cover, movie_poster, collection_poster, square_art).")
-    parser.add_argument("--exclude", nargs='+',
-                        help="Specify one or more IDs to exclude from any uploads.")
-    parser.add_argument(
-        "--year", type=int, help="Override the year for matching (use the year in Plex)")
-    parser.add_argument("--debug", action='store_true',
-                        help="Spits out debugging information")
-    parser.add_argument("--kometa", action='store_true',
-                        help="Saves artwork to Kometa asset directory (specified in config file) instead of uploading to Plex.")
-    parser.add_argument("--stage", action='store_true',
-                        help="Downloads artwork for seasons and episodes that are not in Plex yet (except Specials).")
-    parser.add_argument("--temp", action='store_true',
-                        help="Uses a temporary directory (specified in config file) instead of the Kometa asset directory.")
+    parser.add_argument('--add-sets', action='store_true', help="Scrape additional sets from same page - TPDb only")
+    parser.add_argument('--add-posters', action='store_true', help="Scrape additional posters from same page - TPDb only")
+    parser.add_argument('--force', action='store_true', help="Force upload/save even if its the same artwork or artwork already exists")
+    parser.add_argument('--skip-locked', action='store_true', help="Skip artwork when its target field is locked in Plex (already set), unless --force is used")
+    parser.add_argument('--allow-artist-updates', action='store_true', help="Update locked artwork we applied when the same artist has posted a newer version (requires --skip-locked and track_artwork_ids)")
+    parser.add_argument("--filters", nargs='+', help="Only these artwork types will be applied (e.g., title_card, background, square_art, season_cover, show_cover, movie_poster, collection_poster)")
+    parser.add_argument("--exclude", nargs='+', help="Specify one or more IDs to exclude from any uploads")
+    parser.add_argument("--year", type=int, help="Override the year for matching (use the year in Plex)")
+    parser.add_argument("--debug", action='store_true', help="Spits out debugging information")
+    parser.add_argument("--local_assets", action='store_true', help="Saves artwork locally alongside media files (may require path mappings via config file if Plex and Artwork Uploader see paths differently)")
+    parser.add_argument("--kometa", action='store_true', help="Saves artwork to Kometa asset directory (specified in config file) instead of uploading to Plex")
+    parser.add_argument("--stage", action='store_true', help="Downloads artwork for seasons and episodes that are not in Plex yet (except Specials)")
+    parser.add_argument("--temp", action='store_true', help="Uses a temporary directory (specified in config file) instead of the Kometa asset directory")
+    parser.add_argument("--no-cache", action='store_true', help="Ignore the cached ThePosterDB user uploads index for this run and crawl every page (the run still refreshes the index)")
+    parser.add_argument("--port", type=int, help="Specify port number for web server (default is 4567 if argument omitted)")
 
     return parser.parse_args()

@@ -6,23 +6,32 @@ literal word "Collection" raised:
     UnboundLocalError: cannot access local variable 'year' ...
 because collection artwork was mis-routed into the movie branch (which references
 `year`, only set for individual-movie artwork).
+
+Also covers the bug where a collection set including artwork for a movie outside
+the collection raised KeyError and abandoned the whole set.
 """
+
+from unittest.mock import patch
 
 import pytest
 
-from core import globals
-from core.config import Config
 from models.options import Options
 from scrapers.mediux_scraper import MediuxScraper
 
-pytestmark = pytest.mark.unit
+
+class _NoopCallbacks:
+    """Every callback (debug/log/...) is a no-op that still evaluates its args."""
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
 
 
 def _make_scraper():
     # Avoid touching config.json / Plex; just exercise _process_set in isolation.
-    globals.config = Config()
-    scraper = MediuxScraper(url="https://mediux.pro/sets/1")
+    with patch("core.config.Config.load", lambda self: None):
+        scraper = MediuxScraper(url="test", callbacks=_NoopCallbacks())
     scraper.set_options(Options())  # defaults: no filters, no exclusions
+    scraper.config.mediux_filters = ["collection_poster", "background", "movie_poster"]
     return scraper
 
 
@@ -41,17 +50,69 @@ def _collection_poster_set(collection_name):
     return {"files": [file_entry], "collection": {"collection_name": collection_name}}
 
 
+@pytest.mark.unit
 def test_collection_without_word_collection_in_name_does_not_crash():
     # Regression: this used to raise UnboundLocalError on `year`.
     scraper = _make_scraper()
     scraper._process_set(_collection_poster_set("James Bond"))
     assert len(scraper.collection_artwork) == 1
     assert scraper.collection_artwork[0]["title"] == "James Bond"
-    assert scraper.collection_artwork[0]["type"] == "collection_poster"
+    assert scraper.collection_artwork[0]["file_type"] == "collection_poster"
 
 
+@pytest.mark.unit
 def test_collection_with_word_collection_in_name_still_works():
     scraper = _make_scraper()
     scraper._process_set(_collection_poster_set("James Bond Collection"))
     assert len(scraper.collection_artwork) == 1
     assert scraper.collection_artwork[0]["title"] == "James Bond Collection"
+
+
+def _movie_poster(image_id, movie_id):
+    return {
+        "movie_id": {"id": movie_id},
+        "collection_id": None,
+        "show_id": None,
+        "show_id_backdrop": None,
+        "episode_id": None,
+        "season_id": None,
+        "id": image_id,
+        "fileType": "poster",
+    }
+
+
+def _collection_set_with_orphan_movie():
+    """A collection of two movies, plus artwork for a third movie outside it."""
+    files = [
+        {
+            "movie_id": None,
+            "collection_id": {"id": 1},
+            "show_id": None,
+            "show_id_backdrop": None,
+            "episode_id": None,
+            "season_id": None,
+            "id": "img-collection",
+            "fileType": "poster",
+        },
+        _movie_poster("img-first", "101"),
+        _movie_poster("img-orphan", "999"),  # not in the collection's movie list
+        _movie_poster("img-second", "102"),
+    ]
+    collection = {
+        "collection_name": "Example Collection",
+        "movies": [
+            {"id": "101", "title": "First Movie", "release_date": "1994-02-04"},
+            {"id": "102", "title": "Second Movie", "release_date": "1995-11-10"},
+        ],
+    }
+    return {"files": files, "collection": collection}
+
+
+@pytest.mark.unit
+def test_movie_outside_collection_is_skipped_without_losing_the_set():
+    # Regression: this used to raise KeyError('999') and lose every asset in the set.
+    scraper = _make_scraper()
+    scraper._process_set(_collection_set_with_orphan_movie())
+    assert [a["title"] for a in scraper.movie_artwork] == ["First Movie", "Second Movie"]
+    assert len(scraper.collection_artwork) == 1
+    assert scraper.errored == 1

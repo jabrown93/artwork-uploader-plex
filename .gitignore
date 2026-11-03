@@ -120,3 +120,6 @@ ARCHITECTURE-REVIEW*.md
 docker-compose.yml
 out/
 .pi/
+config/.plex_client_id
+config/asset_index.db*
+config/run_history.json

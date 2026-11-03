@@ -71,11 +71,15 @@ def _make_zip(tmp_path, name, files):
 def _extract(tmp_path, zip_name, files, plex_stub=None, filters=None, plex_title=None, plex_year=None,
              orientation="portrait"):
     zip_path = _make_zip(tmp_path, zip_name, files)
+    # Upstream's caller owns the extraction directory (tempfile.mkdtemp in save_uploaded_file).
+    extract_dir = os.path.join(tmp_path, "extracted")
+    os.makedirs(extract_dir, exist_ok=True)
     globals.plex = plex_stub or StubPlexConnector()
     instance = Instance(id=None, mode="cli")
     return web_routes.extract_and_list_zip(
         instance,
         zip_path,
+        extract_dir,
         FILENAME_PATTERN,
         filters or [],
         plex_title,
@@ -169,6 +173,19 @@ class TestPlexTitleResolutionCascade:
         )
         assert file_list[0]["media"] == "Movie"
         assert file_list[0]["title"] == "World's End"
+
+    def test_upstream_unavailable_sentinel_still_allows_the_cascade(self, tmp_path):
+        """movie_or_show() reports a miss as "unavailable"; the resolver must treat it as a
+        miss and keep trying variants rather than stop at the first one."""
+        plex_stub = StubPlexConnector(
+            default=("unavailable", None, None, None),
+            responses_by_title={"Example Film": ("Movie", 9, "Example Film", 2020)},
+        )
+        file_list, *_ = _extract(
+            tmp_path, "export.zip", {"Example Film extra subtitle (2020).jpg": b"fake"}, plex_stub=plex_stub,
+        )
+        assert file_list[0]["media"] == "Movie"
+        assert file_list[0]["tmdb_id"] == 9
 
     def test_no_match_marks_unavailable(self, tmp_path):
         plex_stub = StubPlexConnector(default=(None, None, None, None))
@@ -284,27 +301,52 @@ class TestResolvePlexTitleMemoization:
         ]
 
     def test_hit_after_library_error_not_cached_and_next_entry_requeries(self, tmp_path):
+        # PlexLibraryIndex builds a persistent per-library index (reload/totalSize snapshot,
+        # then all()), unlike the plain library.search(title=, year=) stubs this test used
+        # before that architecture landed - see test_plex_connector_recovery.py's _library()
+        # helper for the same pattern.
         class ErrorThenMissLibrary:
             title = "Movies"
+            type = "movie"
 
             def __init__(self):
                 self.calls = 0
+                self.totalSize = 1
+
+            def reload(self):
+                pass
 
             def search(self, **_kwargs):
+                # Snapshot peek: errors transiently on the first call, then settles.
                 self.calls += 1
                 if self.calls == 1:
                     raise RuntimeError("transient library error")
                 return []
 
+            def all(self):
+                return []
+
         class HitLibrary:
             title = "Shows"
+            type = "show"
 
             def __init__(self):
                 self.calls = 0
+                self.totalSize = 1
+                self._item = SimpleNamespace(
+                    title="Some Show", year=2020, guids=[], ratingKey=42,
+                    slug=None, originalTitle=None, addedAt=0,
+                )
+
+            def reload(self):
+                pass
 
             def search(self, **_kwargs):
                 self.calls += 1
-                return [SimpleNamespace(title="Some Show", year=2020, guids=[])]
+                return [self._item]
+
+            def all(self):
+                return [self._item]
 
         movie_library = ErrorThenMissLibrary()
         show_library = HitLibrary()
@@ -312,7 +354,6 @@ class TestResolvePlexTitleMemoization:
         plex_connector.plex = object()
         plex_connector.movie_libraries = [movie_library]
         plex_connector.tv_libraries = [show_library]
-        plex_connector._refresh_missing_libraries = lambda: None
 
         file_list, *_ = _extract(
             tmp_path, "export.zip",
@@ -325,6 +366,29 @@ class TestResolvePlexTitleMemoization:
         assert [item["media"] for item in file_list] == ["TV Show", "TV Show"]
         assert [item["tmdb_id"] for item in file_list] == [None, None]
         assert show_library.calls == 2
+
+
+class TestSquareArtNumbering:
+    def test_square_art_is_numbered_per_show(self, tmp_path):
+        """Fork: only SquareArt_0 is a show's primary square asset, so the sequence must restart
+        for every show rather than run across the whole archive."""
+        plex_stub = StubPlexConnector(responses_by_title={
+            "Show A": ("TV Show", 1, "Show A", 2020),
+            "Show B": ("TV Show", 2, "Show B", 2021),
+        })
+        file_list, *_ = _extract(
+            tmp_path, "export.zip",
+            {
+                "Show A (2020) - S1 OST.jpg": b"a1",
+                "Show A (2020) - S2 OST.jpg": b"a2",
+                "Show B (2021) - S1 OST.jpg": b"b1",
+            },
+            plex_stub=plex_stub, orientation="square",
+        )
+        seasons = {(a["title"], a["path"].rsplit("/", 1)[-1]): a["season"] for a in file_list}
+        assert seasons[("Show A", "Show A (2020) - S1 OST.jpg")] == "SquareArt_0"
+        assert seasons[("Show A", "Show A (2020) - S2 OST.jpg")] == "SquareArt_1"
+        assert seasons[("Show B", "Show B (2021) - S1 OST.jpg")] == "SquareArt_0"
 
 
 class TestOrientationReclassification:
@@ -398,6 +462,55 @@ class TestFilters:
         )
         assert len(file_list) == 1
         assert skipped == 0
+
+    def test_empty_filters_falls_back_to_provider_global_filters(self, tmp_path):
+        """'As set by global filters' sends an empty filters list; a MediUX upload must then
+        honor config.mediux_filters, the way the URL-scrape path already does
+        (self.options.has_no_filters() and self.check_master_filters(...)) - the upstream merge
+        dropped that check for ZIP uploads, leaving an empty list treated as 'no restriction'."""
+        globals.config.mediux_filters = ["title_card"]
+        plex_stub = StubPlexConnector(default=("Movie", 1, "Some Movie", 2020))
+        file_list, skipped, *_ = _extract(
+            tmp_path, "export.zip", {"Some Movie (2020).jpg": b"fake"},
+            plex_stub=plex_stub, orientation="portrait", filters=[],
+        )
+        assert file_list == []
+        assert skipped == 1
+
+    def test_empty_filters_includes_types_the_provider_global_filter_allows(self, tmp_path):
+        globals.config.mediux_filters = ["movie_poster"]
+        plex_stub = StubPlexConnector(default=("Movie", 1, "Some Movie", 2020))
+        file_list, skipped, *_ = _extract(
+            tmp_path, "export.zip", {"Some Movie (2020).jpg": b"fake"},
+            plex_stub=plex_stub, orientation="portrait", filters=[],
+        )
+        assert len(file_list) == 1
+        assert skipped == 0
+
+    def test_explicit_filters_override_provider_global_filters(self, tmp_path):
+        """A per-request filter always wins over the global filter, even when the global
+        filter would have excluded the type - matches check_master_filters/has_filter order."""
+        globals.config.mediux_filters = ["title_card"]
+        plex_stub = StubPlexConnector(default=("Movie", 1, "Some Movie", 2020))
+        file_list, skipped, *_ = _extract(
+            tmp_path, "export.zip", {"Some Movie (2020).jpg": b"fake"},
+            plex_stub=plex_stub, orientation="portrait", filters=["movie_poster"],
+        )
+        assert len(file_list) == 1
+        assert skipped == 0
+
+    def test_empty_filters_for_tpdb_zip_use_tpdb_global_filters(self, tmp_path):
+        """A ThePosterDB-named ZIP falls back to tpdb_filters, not mediux_filters."""
+        globals.config.tpdb_filters = ["title_card"]
+        globals.config.mediux_filters = ["movie_poster"]
+        plex_stub = StubPlexConnector(default=("Movie", 1, "Some Movie", 2020))
+        file_list, skipped, *_ = _extract(
+            tmp_path, "Some Movie set by CoolAuthor - abc123.zip",
+            {"Some Movie (2020).jpg": b"fake"},
+            plex_stub=plex_stub, orientation="portrait", filters=[],
+        )
+        assert file_list == []
+        assert skipped == 1
 
 
 class TestPlexTitleYearOverride:
