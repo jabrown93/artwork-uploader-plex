@@ -2095,6 +2095,9 @@ def extract_and_list_zip(
         extract_dir: Directory to extract into. The returned artwork dictionaries hold paths
             into it, so the caller creates it and removes it once it has finished reading them
         filename_pattern: Regex pattern for validating filenames
+        filters: Per-request artwork-type filters from the UI. Empty/falsy means no per-request
+            filter was chosen, so each entry falls back to the provider's global filters
+            (globals.config.tpdb_filters/mediux_filters) instead of including everything
         check_image_orientation_func: Function to check image orientation
         sort_key_func: Function to generate sort keys
 
@@ -2121,6 +2124,15 @@ def extract_and_list_zip(
         debug_me(f"Detected ZIP author: {zip_author}")
     else:
         zip_source = ScraperSource.MEDIUX.value
+    # Fork: a ZIP upload's `filters` list only carries filters the user picked for this request;
+    # the UI's "As set by global filters" option sends an empty list, meaning fall back to the
+    # provider's configured global filters (mirrors check_master_filters/has_no_filters, which
+    # the scrapers' URL-scrape path still applies - see AGENTS.md "Global artwork type filters").
+    # An empty master-filters list itself means "no restriction", same as check_master_filters.
+    master_filters = (
+        globals.config.tpdb_filters if zip_source == ScraperSource.THEPOSTERDB.value
+        else globals.config.mediux_filters
+    ) if globals.config else []
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # Pre-process the file list to determine source and extract valid files
         zip_infos = [zip_info for zip_info in zip_ref.infolist() if os.path.basename(zip_info.filename) and not os.path.basename(zip_info.filename).startswith(".") and os.path.basename(zip_info.filename) not in {"ds_store", "__macosx"}]
@@ -2273,8 +2285,22 @@ def extract_and_list_zip(
                 # nothing upstream that still reads file_type breaks.
                 artwork['type'] = artwork['file_type']
 
-                # Check for filters and exclusions
-                if not filters or artwork["file_type"] in filters:
+                # Check for filters and exclusions. An explicit per-request filter list always
+                # wins. An empty one falls back to the provider's global filters (master_filters),
+                # same semantics as check_master_filters/has_no_filters - except for an
+                # "unavailable" item's file_type, which is the unclassified "poster" placeholder
+                # above rather than a real artwork type: applying master_filters to it would
+                # silently hide every unmatched item from the results instead of surfacing it
+                # (it is also never routed through UploadProcessor's own filter check, since
+                # process_uploaded_files reports "not available on Plex" for media == unavailable
+                # without calling process_movie_artwork/process_tv_artwork at all).
+                if filters:
+                    passes_filter = artwork["file_type"] in filters
+                elif artwork["media"] == "unavailable":
+                    passes_filter = True
+                else:
+                    passes_filter = not master_filters or artwork["file_type"] in master_filters
+                if passes_filter:
                     debug_me(
                         f"✅ Including {artwork["file_type"].replace('_', ' ')} "
                         f"for '{artwork['title']}"
@@ -2292,7 +2318,7 @@ def extract_and_list_zip(
                         + (f" ({artwork['year']})'" if artwork['year'] is not None else "")
                         + (f", Season {artwork['season']}" if isinstance(artwork['season'], int) else "")
                         + (f", Episode {artwork['episode']}" if isinstance(artwork['episode'], int) else "")
-                        + f" based on filters. Type is {artwork['file_type']} and filters are {filters}."
+                        + f" based on filters. Type is {artwork['file_type']} and filters are {filters or master_filters}."
                     )
                     filtered_files += 1
 

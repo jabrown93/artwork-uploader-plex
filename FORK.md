@@ -136,3 +136,20 @@ Dated so a later sync can revisit them.
     (`sqlite3.DatabaseError`, not its `sqlite3.OperationalError` subclass); a lock-contention
     timeout past `busy_timeout` now propagates instead of renaming aside and emptying a healthy
     index, so the caller's existing cache-miss/full-crawl fallback handles it.
+  - Upstream's `write_json_atomically` (`core/config.py`) moves a temp file into place with
+    `os.replace`, which the fork's documented Docker layout breaks: `docker-compose.example.yml`
+    bind-mounts the individual file (`./config.json:/config/config.json`), making the target
+    itself a mount point the kernel refuses to rename over (`EBUSY`), so every save raised
+    `ConfigSaveError` under that deployment. Patched to fall back to a non-atomic in-place write
+    only on `EBUSY`; a directory-mounted (or un-mounted) config path keeps the atomic swap.
+    Worth offering upstream. `src/core/config.py`, `tests/test_config_save.py`.
+  - The "`UploadProcessor` filter/exclusion checks... dropped" decision above only replaced them
+    with scraper-layer checks (`mediux_scraper.py`, `theposterdb_scraper.py`); ZIP uploads
+    (`web_routes.py extract_and_list_zip`) go through neither, so an empty per-request filter
+    list (the UI's "As set by global filters" option) was treating "no restriction" as "allow
+    every type" instead of falling back to `mediux_filters`/`tpdb_filters`. Patched
+    `extract_and_list_zip` with the same `has_no_filters`-style fallback the scrapers use,
+    keyed on the ZIP's detected source; the "unavailable"-media placeholder type (`"poster"`,
+    assigned when Plex can't classify the item) is exempt, since it was never a real filter
+    value and must keep surfacing in the results instead of being silently dropped.
+    `src/web_routes.py`, `tests/test_extract_and_list_zip.py`.

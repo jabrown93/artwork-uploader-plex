@@ -2,8 +2,10 @@
 Application configuration management.
 """
 
+import errno
 import json
 import os
+import shutil
 import uuid
 from typing import List, Dict, Any, Optional
 
@@ -60,6 +62,15 @@ def write_json_atomically(path: str, config_json: Dict[str, Any]) -> None:
     atomic on POSIX and on Windows, so a reader sees either the old file or the new one
     and never a half written one. The temporary file sits in the same directory as the
     target, or the move becomes a cross device copy and stops being atomic.
+
+    Fork: Docker's documented layout (docker-compose.example.yml) bind-mounts the individual
+    file at /config/config.json rather than the containing directory. That makes the target
+    path itself a mount point, and the kernel refuses to rename anything over an active mount
+    point (EBUSY) even though writing into the existing inode is fine. When os.replace hits
+    that, fall back to writing the already-rendered temp file's bytes directly into the
+    existing file - the same non-atomic in-place write this function replaced, so a
+    directory-mounted (or un-mounted) config path keeps full atomicity and only the
+    single-file-bind-mount layout loses it, same as before this function existed.
     """
     parent_dir = os.path.dirname(path)
     if parent_dir and not os.path.isdir(parent_dir):
@@ -73,7 +84,17 @@ def write_json_atomically(path: str, config_json: Dict[str, Any]) -> None:
             # umask gave it, and this one holds credentials, so a config.json an
             # administrator has restricted to its owner stays that way across a save.
             os.chmod(temp_path, os.stat(path).st_mode & 0o777)
-        os.replace(temp_path, path)
+        try:
+            os.replace(temp_path, path)
+        except OSError as e:
+            if e.errno != errno.EBUSY:
+                raise
+            logger.warning(
+                f"os.replace() onto {path!r} failed with EBUSY (likely a Docker single-file "
+                f"bind mount); falling back to a non-atomic in-place write"
+            )
+            shutil.copyfile(temp_path, path)
+            os.remove(temp_path)
     except Exception:
         try:
             os.remove(temp_path)

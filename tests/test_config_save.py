@@ -8,6 +8,7 @@ to a temporary file alongside it and moved into place, the same shape as the run
 and the Kometa asset writer use.
 """
 
+import errno
 import json
 import os
 from unittest.mock import patch
@@ -75,6 +76,46 @@ def test_a_failed_save_leaves_the_existing_configuration_intact(config):
 
     assert reloaded.token == "a-plex-token"
     assert reloaded.auth_password_hash == "a-password-hash"
+    assert not os.path.exists(f"{config.path}.tmp")
+
+
+@pytest.mark.unit
+def test_save_falls_back_to_in_place_write_when_replace_is_ebusy(config):
+    """Docker's documented layout bind-mounts the individual config.json file
+    (docker-compose.example.yml: `./config.json:/config/config.json`), making the target itself
+    a mount point. The kernel refuses to rename anything over an active mount point (EBUSY),
+    even though writing into the existing inode is fine, so os.replace must fall back to an
+    in-place write there instead of failing the save."""
+    config.token = "a-plex-token"
+    config.save()
+
+    with patch("core.config.os.replace", side_effect=OSError(errno.EBUSY, "Device or resource busy")):
+        config.token = "a-newer-token"
+        config.save()
+
+    reloaded = Config(config.path)
+    reloaded.load()
+
+    assert reloaded.token == "a-newer-token"
+    assert not os.path.exists(f"{config.path}.tmp")
+
+
+@pytest.mark.unit
+def test_save_still_raises_for_non_ebusy_replace_failures(config):
+    """Only EBUSY gets the bind-mount fallback; any other os.replace failure still surfaces as
+    a ConfigSaveError rather than silently writing in place."""
+    config.token = "a-plex-token"
+    config.save()
+
+    with patch("core.config.os.replace", side_effect=OSError(errno.EACCES, "Permission denied")):
+        with pytest.raises(ConfigSaveError):
+            config.token = "a-newer-token"
+            config.save()
+
+    reloaded = Config(config.path)
+    reloaded.load()
+
+    assert reloaded.token == "a-plex-token"
     assert not os.path.exists(f"{config.path}.tmp")
 
 
