@@ -190,15 +190,24 @@ class UploadProcessor:
             self.plex._initialize_index()
             status, match = self.plex._index.lookup(artwork.get("title"), artwork.get("year"), kind)
             if status == "not_found":
-                # Fork: when the arr pre-seed fallback is enabled for this kind, a local "not
-                # found" isn't terminal - the TMDb ID is still needed to look the title up in
-                # Radarr/Sonarr, so fall through to the poster page fetch below instead of
-                # raising here.
-                arr_fallback_enabled = self._arr_movie_fallback if kind == MediaType.MOVIE else self._arr_tv_fallback
-                if not arr_fallback_enabled:
-                    if kind == MediaType.MOVIE:
-                        raise MovieNotFound(f'{description} | Movie not available on Plex')
-                    raise ShowNotFound(f'{description} | Show not available on Plex')
+                # Fork: a library that failed to (re)index this pass means the index may be
+                # stale or incomplete for it (see PlexLibraryIndex.has_errors), so a "not_found"
+                # here isn't a confirmed miss - mirrors PlexConnector.movie_or_show(), which
+                # raises PlexLookupError rather than treating such a result as definitive.
+                # Fall through to the poster page fetch instead of raising, so a transient
+                # indexing error doesn't silently drop artwork application for this run.
+                if self.plex._index.has_errors:
+                    debug_me(f"'{artwork.get('title')} ({artwork.get('year')})' not found locally after a library index error, fetching the poster page instead of confirming a miss")
+                else:
+                    # Fork: when the arr pre-seed fallback is enabled for this kind, a local "not
+                    # found" isn't terminal - the TMDb ID is still needed to look the title up in
+                    # Radarr/Sonarr, so fall through to the poster page fetch below instead of
+                    # raising here.
+                    arr_fallback_enabled = self._arr_movie_fallback if kind == MediaType.MOVIE else self._arr_tv_fallback
+                    if not arr_fallback_enabled:
+                        if kind == MediaType.MOVIE:
+                            raise MovieNotFound(f'{description} | Movie not available on Plex')
+                        raise ShowNotFound(f'{description} | Show not available on Plex')
             elif status == "matched":
                 tmdb_id = match.get("tmdb_id")
                 if tmdb_id is not None:

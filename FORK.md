@@ -174,3 +174,12 @@ Dated so a later sync can revisit them.
     the process restarted. Moved the run-state cleanup into its own inner `finally` so a
     persistence failure cannot block it. `src/artwork_uploader.py`,
     `tests/test_run_history_scrape.py`.
+  - `UploadProcessor._resolve_tmdb_id`'s `local_library_matching` path read
+    `PlexLibraryIndex.lookup()` directly and treated `"not_found"` as a confirmed miss,
+    unlike `PlexConnector.movie_or_show()` which checks `PlexLibraryIndex.has_errors` and
+    raises `PlexLookupError` instead. A transient `library.all()`/snapshot failure during
+    `_initialize_index()` therefore silently dropped artwork application for that run
+    instead of falling through to the poster-page fetch. Patched `_resolve_tmdb_id` to
+    check `has_errors` and fall through on a `"not_found"` reached after an index error,
+    the same way it already falls through when the arr pre-seed fallback is enabled.
+    `src/processors/upload_processor.py`, `tests/test_upload_processor_preseed.py`.
