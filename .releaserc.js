@@ -33,8 +33,13 @@ module.exports = {
   branches: ["main", { name: "beta", prerelease: true }],
   tagFormat: "v${version}",
   plugins: [
-    ["@semantic-release/commit-analyzer", { releaseRules: depReleaseRules }],
-    "@semantic-release/release-notes-generator",
+    // The conventionalcommits preset is what parses the `type!:` shorthand as
+    // breaking; the default angular preset only honors a BREAKING CHANGE footer.
+    [
+      "@semantic-release/commit-analyzer",
+      { preset: "conventionalcommits", releaseRules: depReleaseRules },
+    ],
+    ["@semantic-release/release-notes-generator", { preset: "conventionalcommits" }],
     ["@semantic-release/changelog", { changelogFile: "CHANGELOG.md" }],
     [
       "@semantic-release/exec",
