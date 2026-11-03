@@ -67,7 +67,7 @@ markupsafe==3.0.4
     #   flask
     #   jinja2
     #   werkzeug
-oauthlib==4.0.0
+oauthlib==4.0.1
     # via requests-oauthlib
 packaging==26.3
     # via -r requirements.in
