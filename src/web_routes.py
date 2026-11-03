@@ -1150,6 +1150,16 @@ def setup_socket_handlers(
         url = data.get("url", "")
         token = data.get("token", "")
 
+        # Fork: load_config redacts the stored token, so an untouched Settings form sends the
+        # placeholder back. Swap in the stored token, but only for the configured server so a
+        # session cannot make the app present the real token to an arbitrary URL.
+        if token == SECRET_PLACEHOLDER:
+            configured_url = (globals.config.base_url or "").rstrip("/").lower()
+            if not configured_url or url.rstrip("/").lower() != configured_url:
+                notify_web(instance, "get_plex_libraries", { "tv_libraries": [], "movie_libraries": [], "message": "Unable to connect to Plex" })
+                return
+            token = globals.config.token
+
         try:
             plex_server = PlexServer(url, token, timeout=globals.config.plex_connect_timeout)
             debug_me(f"Successfully connected to Plex server at '{url}'")

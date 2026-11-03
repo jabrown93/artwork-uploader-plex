@@ -183,3 +183,11 @@ Dated so a later sync can revisit them.
     check `has_errors` and fall through on a `"not_found"` reached after an index error,
     the same way it already falls through when the arr pre-seed fallback is enabled.
     `src/processors/upload_processor.py`, `tests/test_upload_processor_preseed.py`.
+- **2026-11-03 Plex library lookup with the redacted token.** `load_config` redacts the
+  Plex token, so an unedited Settings form sent `UNCHANGED_STORED_SECRET` to
+  `get_plex_libraries`, which handed it to `PlexServer` and always failed ("Unable to
+  connect to Plex"). The handler now substitutes the stored token, but only when the
+  requested URL equals the configured `base_url` (trailing slash and case ignored); a
+  placeholder aimed at any other URL is refused so a session cannot make the app present
+  the stored token to an arbitrary host. A token typed into the form is used as-is.
+  `src/web_routes.py`, `tests/test_get_plex_libraries_token.py`.
