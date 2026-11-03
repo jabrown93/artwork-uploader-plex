@@ -203,6 +203,61 @@ def test_state_generation_unchanged_without_a_reconnect():
     assert connector.state_generation == before
 
 
+def test_set_tv_libraries_discards_a_resolution_made_stale_by_a_concurrent_reconnect():
+    """Fork: set_tv_libraries snapshots state_generation before resolving (which blocks on
+    plex.library.section() network calls) so a concurrent reconnect() that bumps it mid-call does
+    not get its freshly-published handles clobbered by this call's stale ones, bound to the
+    PlexServer the concurrent reconnect() already replaced."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    fresh_library = Mock(title="TV Shows (fresh)")
+    connector.tv_libraries = [fresh_library]  # already published by a concurrent reconnect()
+
+    def _section(name):
+        # A concurrent reconnect() completes while this call is still resolving.
+        connector.state_generation += 1
+        return Mock(title=name)
+
+    connector.plex.library.section.side_effect = _section
+
+    result = connector.set_tv_libraries(["TV Shows"])
+
+    assert result == [fresh_library]
+    assert connector.tv_libraries == [fresh_library]
+
+
+def test_set_movie_libraries_discards_a_resolution_made_stale_by_a_concurrent_reconnect():
+    """Fork: same guard as set_tv_libraries, for set_movie_libraries."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    fresh_library = Mock(title="Movies (fresh)")
+    connector.movie_libraries = [fresh_library]
+
+    def _section(name):
+        connector.state_generation += 1
+        return Mock(title=name)
+
+    connector.plex.library.section.side_effect = _section
+
+    result = connector.set_movie_libraries(["Movies"])
+
+    assert result == [fresh_library]
+    assert connector.movie_libraries == [fresh_library]
+
+
+def test_set_tv_libraries_publishes_normally_without_a_concurrent_reconnect():
+    """Guards against the stale-generation check above becoming a no-op fix: a resolution that
+    completes without a concurrent reconnect must still be published."""
+    connector = PlexConnector("http://plex:32400", "token")
+    connector.plex = Mock()
+    connector.plex.library.section.side_effect = lambda name: Mock(title=name)
+
+    result = connector.set_tv_libraries(["TV Shows"])
+
+    assert [library.title for library in result] == ["TV Shows"]
+    assert connector.tv_libraries == result
+
+
 def _movie_item(title="The Matrix", year=1999, rating_key=1, tmdb_id=603):
     return SimpleNamespace(
         title=title, year=year, ratingKey=rating_key, slug=None, originalTitle=None,

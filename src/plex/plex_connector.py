@@ -107,6 +107,12 @@ class PlexConnector:
         # Fork: resolve into a local list and publish only on success. A half-filled list would
         # look resolved to ensure_libraries(), so the libraries after the failure would never
         # be retried.
+        #
+        # Fork: snapshot the generation before resolving (which blocks on network calls below).
+        # A concurrent reconnect() bumps state_generation and replaces self.plex while we're
+        # still resolving against the old server; publishing afterwards would clobber the newer
+        # reconnect's handles with stale ones bound to a server that's already gone.
+        generation = self.state_generation
         resolved = []
         for tv_library in tv_libraries:
             try:
@@ -115,6 +121,9 @@ class PlexConnector:
                 raise LibraryNotFound(
                     f'TV library named "{tv_library}" not found. Please check the "tv_library" in config.json or provide one.',
                     f'TV library named "{tv_library}" not found.')
+        if self.state_generation != generation:
+            debug_me(f"Discarding TV libraries resolved under a stale Plex connection (generation {generation} != {self.state_generation})")
+            return self.tv_libraries
         self.tv_libraries = resolved
         debug_me(f"The following TV libraries have been set: {[library.title for library in self.tv_libraries]}")
         return self.tv_libraries
@@ -129,6 +138,8 @@ class PlexConnector:
         elif not isinstance(movie_libraries, list):
             raise PlexConnectorException("movie_libraries must be either a string or a list")
 
+        # Fork: snapshot the generation before resolving (see set_tv_libraries).
+        generation = self.state_generation
         resolved = []  # Fork: published only once every library resolved (see set_tv_libraries)
         for movie_library in movie_libraries:
             try:
@@ -137,6 +148,9 @@ class PlexConnector:
                 raise LibraryNotFound(
                     f'Movie library named "{movie_library}" not found. Please check the "movie_library" in config.json or provide one.',
                     f'Movie library named "{movie_library}" not found')
+        if self.state_generation != generation:
+            debug_me(f"Discarding movie libraries resolved under a stale Plex connection (generation {generation} != {self.state_generation})")
+            return self.movie_libraries
         self.movie_libraries = resolved
         debug_me(f"The following movie libraries have been set: {[library.title for library in self.movie_libraries]}")
         return self.movie_libraries

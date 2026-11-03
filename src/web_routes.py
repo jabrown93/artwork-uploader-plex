@@ -182,12 +182,27 @@ def authentication_required():
         return False
     return config.auth_enabled or config.oidc_enabled
 
+def _oidc_session_expired() -> bool:
+    """Fork: True if this session carries an OIDC id_token exp claim that has passed.
+
+    session['oidc_exp'] is set at login from the same exp that was already validated there
+    (see oidc_callback). Checking it on every request/event, not only at login, means an ID
+    token's expiry actually ends the session instead of session['authenticated'] staying valid
+    for as long as the Flask session cookie itself does - which could outlive the ID token by
+    whatever 'remember me' duration the cookie was issued with."""
+    expires_at = session.get('oidc_exp')
+    return isinstance(expires_at, (int, float)) and time.time() >= expires_at
+
 def login_required(f):
     """Decorator to require authentication for routes."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not authentication_required():
             return f(*args, **kwargs)
+
+        if _oidc_session_expired():
+            debug_me("OIDC session expired; ending the session")
+            session.clear()
 
         # Check if user is logged in
         if not session.get('authenticated'):
@@ -204,10 +219,14 @@ def socket_login_required(f):
     """Decorator to require authentication for Socket.IO events."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if authentication_required() and not session.get('authenticated'):
-            debug_me(f"Rejected unauthenticated Socket.IO event '{f.__name__}'")
-            disconnect()
-            return None
+        if authentication_required():
+            if _oidc_session_expired():
+                debug_me("OIDC session expired; ending the session")
+                session.clear()
+            if not session.get('authenticated'):
+                debug_me(f"Rejected unauthenticated Socket.IO event '{f.__name__}'")
+                disconnect()
+                return None
         return f(*args, **kwargs)
     return decorated_function
 
@@ -458,6 +477,9 @@ def setup_routes(web_app, config: Config):
                     debug_me("OIDC ID token is expired")
                     return render_template("login.html", error="OIDC authentication failed: expired ID token.")
                 session["id_token"] = token_data["id_token"]
+                # Fork: enforced on every later request/event by _oidc_session_expired(), so an
+                # ID token that expires mid-session actually ends it (see login_required).
+                session["oidc_exp"] = expires_at
 
             # Retrieve user information
             user_info = oauth.get(userinfo_endpoint, timeout=OIDC_REQUEST_TIMEOUT).json() if userinfo_endpoint else {}

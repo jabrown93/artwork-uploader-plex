@@ -351,6 +351,77 @@ class TestOidcPkce:
         with client.session_transaction() as session:
             assert "authenticated" not in session
 
+    def test_callback_stores_the_id_token_expiry_in_the_session(self, web_harness, monkeypatch):
+        """session['oidc_exp'] is what login_required/socket_login_required check on every later
+        request/event (see TestOidcSessionExpiry below)."""
+        self._configure_oidc(web_harness.config)
+        expires_at = time.time() + 300
+
+        def fake_fetch_token(self, **kwargs):
+            self.token = {"id_token": _make_id_token(_valid_id_token_claims(exp=expires_at))}
+            return self.token
+
+        monkeypatch.setattr(web_routes.OAuth2Session, "get", _fake_oauth_get)
+        monkeypatch.setattr(web_routes.OAuth2Session, "fetch_token", fake_fetch_token)
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["oauth_state"] = "a-state"
+            session["oidc_code_verifier"] = "a-verifier"
+
+        client.get("/login/oidc/callback?state=a-state&code=an-auth-code")
+
+        with client.session_transaction() as session:
+            assert session["oidc_exp"] == expires_at
+
+
+class TestOidcSessionExpiry:
+    """Fork: login_required and socket_login_required enforce the stored OIDC id_token exp on
+    every request/event, not only at login. Without this, session['authenticated'] alone stays
+    valid for as long as the Flask session cookie does, well past the ID token's own expiry -
+    so an expired ID token no longer actually ends the session."""
+
+    def test_a_request_is_redirected_to_login_once_the_id_token_has_expired(self, web_harness):
+        web_harness.config.oidc_enabled = True
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["username"] = "jared"
+            session["oidc_exp"] = time.time() - 1
+
+        response = client.get("/api/browse")
+
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/login")
+        with client.session_transaction() as session:
+            assert "authenticated" not in session
+
+    def test_a_request_before_expiry_stays_authenticated(self, web_harness):
+        web_harness.config.oidc_enabled = True
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["username"] = "jared"
+            session["oidc_exp"] = time.time() + 300
+
+        response = client.get("/api/browse")
+
+        assert response.status_code == 200
+        with client.session_transaction() as session:
+            assert session["authenticated"] is True
+
+    def test_a_session_with_no_stored_expiry_is_unaffected(self, web_harness):
+        """Basic-auth sessions (and OIDC providers that send no id_token) carry no 'oidc_exp' at
+        all; the expiry check must be a no-op for them, not treat a missing claim as expired."""
+        web_harness.config.auth_enabled = True
+        client = web_harness.http_client()
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["username"] = "jared"
+
+        response = client.get("/api/browse")
+
+        assert response.status_code == 200
+
 
 @pytest.fixture
 def save_config_harness(tmp_path, monkeypatch):
