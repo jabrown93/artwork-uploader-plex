@@ -160,3 +160,10 @@ Dated so a later sync can revisit them.
     first poster's matched/rejected result. Added the poster's own `id` to the cache key so each
     poster is confirmed independently. `src/processors/upload_processor.py`,
     `tests/test_upload_processor_match_confirm_cache.py`.
+  - The arr webhook route (`web_routes.py arr_webhook`) gated on `PlexConnector.has_libraries()`
+    before enqueueing an import. A Plex that was down at start-up left library handles empty
+    forever on a webhook-only install (no scrape ever calls `ensure_libraries()` either), so
+    every future webhook kept 503'ing even after Plex recovered and the right library names
+    were configured. Switched the route's own gate to `ensure_libraries()`, matching the pattern
+    already used by `process_scrape_url_from_web` and `WebhookService._attempt()`.
+    `src/web_routes.py`, `tests/test_arr_webhook_library_recovery.py`.
