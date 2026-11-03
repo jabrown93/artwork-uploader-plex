@@ -1,3 +1,15 @@
+## [2.0.0](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.18...v2.0.0) (2026-11-03)
+
+### ⚠ BREAKING CHANGES
+
+* **release:** the fork's auth config keys (auth_mode, oidc_provider_name, oidc_allow_password_fallback, session_*, trusted_proxy_count, cors_allowed_origins) are replaced by upstream's (auth_enabled, oidc_enabled, oidc_label, ...); the OIDC callback moves from /auth/oidc/callback to /login/oidc/callback; OIDC_CLIENT_ID/OIDC_CLIENT_SECRET env overrides are gone (use the config keys). See #163.
+* **sync:** merge upstream mscodemonkey/artwork-uploader-plex through v1.3.3 (#163)
+
+### Features
+
+* **release:** cut v2.0.0 for the upstream v1.3.3 sync ([#165](https://github.com/jabrown93/artwork-uploader-plex/issues/165)) ([c0dafcb](https://github.com/jabrown93/artwork-uploader-plex/commit/c0dafcb0c8f5f1b28c98e10ab7744e69d36e5d8f)), closes [#163](https://github.com/jabrown93/artwork-uploader-plex/issues/163)
+* **sync:** merge upstream mscodemonkey/artwork-uploader-plex through v1.3.3 ([#163](https://github.com/jabrown93/artwork-uploader-plex/issues/163)) ([edc4635](https://github.com/jabrown93/artwork-uploader-plex/commit/edc4635fe43c424ba85fbe6b14c0dd95dec91840))
+
 ## [1.1.18](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.17...v1.1.18) (2026-11-02)
 
 ## [1.1.17](https://github.com/jabrown93/artwork-uploader-plex/compare/v1.1.16...v1.1.17) (2026-10-22)
