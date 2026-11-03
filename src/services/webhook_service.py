@@ -13,10 +13,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import FrozenSet, List, Optional, Tuple, Union
 
+from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout
+
 from core import globals
 from core.constants import WEBHOOK_RETRY_DELAYS
 from core.enums import ScraperSource, RunType, RunTrigger, RunOutcome, WebhookSource, FileType
-from core.exceptions import MovieNotFound, ShowNotFound
+from core.exceptions import MovieNotFound, ShowNotFound, PlexConnectorException
 from models.callbacks import ProcessingCallbacks
 from models.instance import Instance
 from models.options import Options
@@ -187,6 +189,18 @@ class WebhookService:
         with self._lock:
             self._inflight.discard(key)
 
+    def _retry(self, event, key, started_at, tally, attempt, artwork, log_file) -> bool:
+        if attempt >= len(WEBHOOK_RETRY_DELAYS):
+            return False
+        delay = WEBHOOK_RETRY_DELAYS[attempt]
+        _debug(f"{event.label()} not ready in Plex, retrying in {delay}s")
+        timer = threading.Timer(
+            delay, self._attempt, args=(event, key, started_at, tally, attempt + 1, artwork, log_file)
+        )
+        timer.daemon = True
+        timer.start()
+        return True
+
     def _attempt(self, event: WebhookEvent, key, started_at: str, tally: ProcessingCallbacks,
                  attempt: int = 0, artwork: Optional[List[dict]] = None,
                  log_file: Optional[str] = None) -> None:
@@ -211,7 +225,21 @@ class WebhookService:
                     self._finish(event, key, started_at, tally, RunOutcome.SKIPPED.value)
                     return
                 _log(f"📥 Webhook | {event.source.title()} import: {event.label()}")
-            globals.plex.connect()
+            try:
+                globals.plex.connect()
+            except PlexConnectorException as error:
+                # connect wraps both network failures and permanent configuration/auth errors.
+                # The original requests exception remains the implicit exception context.
+                cause = error.__cause__ or error.__context__
+                if not isinstance(cause, (RequestsConnectionError, Timeout)):
+                    raise
+                if self._retry(event, key, started_at, tally, attempt, artwork, log_file):
+                    return
+                _log(f"⚠️ Webhook | Plex is unreachable for '{event.label()}', leaving it for the next scheduled run")
+                tally.failed(len(artwork))
+                outcome = RunOutcome.PARTIAL.value if tally.success_counter[0] else RunOutcome.FAILED.value
+                self._finish(event, key, started_at, tally, outcome)
+                return
             # Fork: a Plex that was down at start-up left the library lists empty; connect()
             # alone does not fill them, and a webhook-only install has no scrape to do it.
             globals.plex.ensure_libraries()
@@ -246,14 +274,7 @@ class WebhookService:
                 except Exception as error:
                     tally.failed(1)
                     _log(f"❌ Webhook | {event.label()}: {error}")
-            if pending and attempt < len(WEBHOOK_RETRY_DELAYS):
-                delay = WEBHOOK_RETRY_DELAYS[attempt]
-                _debug(f"{event.label()} not in Plex yet, retrying in {delay}s")
-                timer = threading.Timer(
-                    delay, self._attempt, args=(event, key, started_at, tally, attempt + 1, pending, log_file)
-                )
-                timer.daemon = True
-                timer.start()
+            if pending and self._retry(event, key, started_at, tally, attempt, pending, log_file):
                 return                            # keep the in-flight key until the chain ends
             if pending:
                 _log(f"⚠️ Webhook | '{event.label()}' has not appeared in Plex, leaving it for the next scheduled run")

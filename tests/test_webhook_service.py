@@ -419,6 +419,159 @@ def test_an_import_with_no_cached_artwork_is_recorded_as_skipped(monkeypatch, hi
     assert runs[0]["assets_processed"] == 0
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("network_error", ["connection", "timeout"])
+def test_plex_connection_failure_retries_with_original_run_context(
+        monkeypatch, history, tmp_path, network_error):
+    import requests
+    import plex.plex_connector as connector_module
+    import utils.notifications as notifications
+    from core import globals as app_globals
+
+    monkeypatch.setattr(notifications, "DEFAULT_LOG_PATH", str(tmp_path / "logs"))
+    app_globals.run_log.path = None
+    scheduled = []
+
+    class Timer:
+        def __init__(self, interval, function, args=()):
+            self.interval, self.function, self.args = interval, function, args
+            self.daemon = False
+
+        def start(self):
+            scheduled.append(self)
+
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", Timer)
+    service = _applying_service(monkeypatch, ["✅ Poster uploaded"])
+    event = _dune()
+    key = service._dedupe_key(event)
+    artwork = [{"id": 1, "file_type": "movie_poster"}]
+    collected = MagicMock(return_value=artwork)
+    monkeypatch.setattr(service, "_collect_artwork", collected)
+    plex = connector_module.PlexConnector("http://plex", "token")
+    monkeypatch.setattr(plex, "ensure_libraries", lambda: True)
+    monkeypatch.setattr(app_globals, "plex", plex)
+    failure = requests.exceptions.ConnectionError if network_error == "connection" else requests.exceptions.Timeout
+    server = MagicMock(side_effect=[failure("offline"), MagicMock()])
+    monkeypatch.setattr(connector_module, "PlexServer", server)
+    started_at = _now()
+    tally = _tally()
+    service._inflight.add(key)
+
+    service._attempt(event, key, started_at, tally)
+
+    assert history.get_runs() == []
+    assert key in service._inflight
+    assert len(scheduled) == 1
+    assert scheduled[0].interval == webhook_service_module.WEBHOOK_RETRY_DELAYS[0]
+    assert scheduled[0].args[:6] == (event, key, started_at, tally, 1, artwork)
+    log_file = scheduled[0].args[-1]
+    assert log_file
+    app_globals.run_log.path = None
+    # Run the captured timer synchronously, as if it were on a new thread.
+    retry = scheduled.pop(0)
+    retry.function(*retry.args)
+
+    run = history.get_runs()[0]
+    assert run["outcome"] == "success"
+    assert run["success_count"] == 1
+    assert run["error_count"] == 0
+    assert run["started_at"] == started_at
+    assert run["log_file"] == os.path.basename(log_file)
+    assert "Poster uploaded" in (tmp_path / "logs" / run["log_file"]).read_text(encoding="utf-8")
+    assert key not in service._inflight
+    assert collected.call_count == 1
+    assert server.call_count == 2
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("previous_success,expected", [(0, "failed"), (1, "partial")])
+def test_plex_connection_failure_exhausts_ladder_and_counts_pending(
+        monkeypatch, history, previous_success, expected):
+    import requests
+    import plex.plex_connector as connector_module
+    from core import globals as app_globals
+
+    scheduled = []
+
+    class Timer:
+        def __init__(self, interval, function, args=()):
+            self.interval, self.function, self.args = interval, function, args
+            self.daemon = False
+
+        def start(self):
+            scheduled.append(self)
+
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", Timer)
+    service = WebhookService()
+    event = _dune()
+    key = service._dedupe_key(event)
+    service._inflight.add(key)
+    plex = connector_module.PlexConnector("http://plex", "token")
+    monkeypatch.setattr(app_globals, "plex", plex)
+    server = MagicMock(side_effect=requests.exceptions.ConnectionError("offline"))
+    monkeypatch.setattr(connector_module, "PlexServer", server)
+    tally = _tally()
+    if previous_success:
+        tally.record_result("✅ Poster uploaded")
+    artwork = [{"id": 1}, {"id": 2}]
+    service._attempt(event, key, _now(), tally, artwork=artwork)
+
+    for delay in webhook_service_module.WEBHOOK_RETRY_DELAYS:
+        assert history.get_runs() == []
+        assert key in service._inflight
+        assert len(scheduled) == 1
+        retry = scheduled.pop(0)
+        assert retry.interval == delay
+        retry.function(*retry.args)
+
+    assert not scheduled
+    assert server.call_count == len(webhook_service_module.WEBHOOK_RETRY_DELAYS) + 1
+    run = history.get_runs()[0]
+    assert run["outcome"] == expected
+    assert run["success_count"] == previous_success
+    assert run["error_count"] == 2
+    assert key not in service._inflight
+
+
+@pytest.mark.unit
+def test_plex_invalid_configuration_is_not_retried(monkeypatch, history):
+    import plex.plex_connector as connector_module
+    from core import globals as app_globals
+
+    timer = MagicMock()
+    monkeypatch.setattr(webhook_service_module.threading, "Timer", timer)
+    monkeypatch.setattr(app_globals, "plex", connector_module.PlexConnector(None, None))
+    service = WebhookService()
+    event = _dune()
+    key = service._dedupe_key(event)
+    service._inflight.add(key)
+
+    service._attempt(event, key, _now(), _tally(), artwork=[{"id": 1}])
+
+    assert history.get_runs()[0]["outcome"] == "failed"
+    assert key not in service._inflight
+    timer.assert_not_called()
+
+
+@pytest.mark.unit
+def test_no_artwork_skips_even_when_plex_is_unreachable(monkeypatch, history):
+    from core import globals as app_globals
+
+    plex = MagicMock()
+    monkeypatch.setattr(app_globals, "plex", plex)
+    monkeypatch.setattr(app_globals, "config", MagicMock(webhook_tpdb_users=[]))
+    service = WebhookService()
+    event = _dune()
+    key = service._dedupe_key(event)
+    service._inflight.add(key)
+
+    service._attempt(event, key, _now(), _tally())
+
+    assert history.get_runs()[0]["outcome"] == "skipped"
+    assert key not in service._inflight
+    plex.connect.assert_not_called()
+
+
 # ------------------- editions: two Plex rows with the same title and year -------------------
 
 ALIEN_GUID = "plex://movie/5d776825880197001ec967c6"
