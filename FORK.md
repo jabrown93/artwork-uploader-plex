@@ -153,3 +153,10 @@ Dated so a later sync can revisit them.
     assigned when Plex can't classify the item) is exempt, since it was never a real filter
     value and must keep surfacing in the results instead of being silently dropped.
     `src/web_routes.py`, `tests/test_extract_and_list_zip.py`.
+  - `UploadProcessor._artwork_matches_item`'s confirmation cache was keyed on
+    `(kind, title, year, tmdb_id)`. With `local_library_matching` on, two TPDb poster entries
+    sharing a display title/year get the same locally-inferred `tmdb_id`, so they collided on one
+    cache entry: the second poster's confirmation was skipped and it silently inherited the
+    first poster's matched/rejected result. Added the poster's own `id` to the cache key so each
+    poster is confirmed independently. `src/processors/upload_processor.py`,
+    `tests/test_upload_processor_match_confirm_cache.py`.

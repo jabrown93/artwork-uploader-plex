@@ -233,12 +233,12 @@ class UploadProcessor:
     def _artwork_matches_item(self, artwork, plex_item, kind: Literal[MediaType.TV_SHOW, MediaType.MOVIE]) -> bool:
         """
         Called by the uploader/saver just before artwork is actually written, and only for
-        locally-matched items: fetches the poster page once (cached per title) and checks the
+        locally-matched items: fetches the poster page once (cached per poster id) and checks the
         TPDb media id against the matched Plex item's guids, so a title-and-year match can never
         write another title's artwork. Skips, locked items and items not in the library never
         trigger this request.
         """
-        cache_key = (kind, artwork.get("title"), artwork.get("year"), artwork.get("tmdb_id"))
+        cache_key = (kind, artwork.get("title"), artwork.get("year"), artwork.get("tmdb_id"), artwork.get("id"))
         cached = self._match_confirm_cache.get(cache_key)
         if cached is not None:
             return cached
