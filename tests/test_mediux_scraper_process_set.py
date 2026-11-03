@@ -69,3 +69,28 @@ def test_title_card_uses_file_metadata_when_show_omits_episodes(episode_key, sea
         (1, 5, "title_card"),
     ]
     assert scraper.errored == 0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("season_key", ["season_id", "tvdb_season_id"])
+@pytest.mark.parametrize("seasons", [[], [{"id": 10, "season_number": 1}]])
+def test_season_cover_uses_file_metadata_when_show_omits_seasons(season_key, seasons):
+    scraper = _make_scraper()
+    scraper.config.mediux_filters = ["season_cover"]
+    set_data = {
+        "show": {
+            "id": 42, "name": "Some Show", "first_air_date": "2020-01-01",
+            "seasons": seasons,
+        },
+        "files": [{
+            "id": "cover1", "title": "Some Show Season 1",
+            season_key: {"id": 11, "season_number": 1},
+        }],
+    }
+
+    scraper._process_set(set_data)
+
+    assert [(item["season"], item["file_type"]) for item in scraper.tv_artwork] == [
+        (1, "season_cover"),
+    ]
+    assert scraper.errored == 0

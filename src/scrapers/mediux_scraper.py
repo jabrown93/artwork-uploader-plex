@@ -289,6 +289,9 @@ class MediuxScraper:
                     if season_id in show_map["seasons"]:
                         season = show_map["seasons"][season_id]
                         self.callbacks.debug(f"Detected season cover for S{season:02}")
+                    elif str((season_id_data or {}).get("season_number", "")).isdigit():
+                        season = int(season_id_data["season_number"])
+                        self.callbacks.debug(f"Detected season cover for S{season:02}")
                     elif tvdb_season_id: # Fallback for MediUX sets that use TVDb metadata
                         poster_title = poster.get("title", None)
                         if poster_title and "Season" in poster_title:
