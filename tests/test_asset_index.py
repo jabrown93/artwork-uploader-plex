@@ -1,6 +1,7 @@
 """Unit tests for the persistent ThePosterDB user-uploads index (services/asset_index.py)."""
 
 import glob
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -137,6 +138,40 @@ def test_corrupt_file_self_heal(tmp_path):
     assert glob.glob(path + ".corrupt-*")
     index.record("user", [_asset(1)])
     assert index.known_ids("user") == {1}
+
+
+@pytest.mark.unit
+def test_lock_contention_does_not_quarantine_a_healthy_index(tmp_path, monkeypatch):
+    """Fork: sqlite3.OperationalError (e.g. another process holding a write lock past the
+    busy_timeout) is a subclass of sqlite3.DatabaseError. Treating it as corruption renamed a
+    healthy index aside and replaced it with an empty one. Only confirmed corruption should be
+    quarantined; a lock timeout must propagate so the caller's cache-miss fallback handles it."""
+    path = str(tmp_path / "asset_index.db")
+    AssetIndex(path).record("user", [_asset(1)])  # seed a healthy, non-empty index
+
+    # Shrink the busy timeout so the lock-timeout reproduces in well under a second instead
+    # of waiting out the real 30s window _connect() normally uses.
+    def fast_connect(self):
+        conn = sqlite3.connect(self.path, timeout=0.5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=500")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(AssetIndex, "_connect", fast_connect)
+
+    blocker = sqlite3.connect(path, timeout=30)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            AssetIndex(path)
+        assert not glob.glob(path + ".corrupt-*")  # healthy file was not quarantined
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert AssetIndex(path).known_ids("user") == {1}  # data survived the lock timeout
+
 
 
 @pytest.mark.unit

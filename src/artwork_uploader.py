@@ -1220,7 +1220,10 @@ if __name__ == "__main__":
             cli_options.clear_filters()
 
             # Process using the bulk filename if supplied, else the bulk file set in the config
-            parse_bulk_file_from_cli(cli_instance, args.bulk_file if args.bulk_file else os.path.join("bulk_imports", config.bulk_txt))
+            parse_bulk_file_from_cli(
+                cli_instance,
+                args.bulk_file if args.bulk_file else globals.bulk_file_service.get_bulk_file_path(config.bulk_txt)
+            )
 
         # Now we're looking at URLs - firstly one containing a TPDb user
         elif "/user/" in cli_command:

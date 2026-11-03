@@ -73,7 +73,7 @@ patch in code.
 | Sonarr/Radarr pre-seed | Kometa assets for items not yet in Plex are pre-seeded from Sonarr/Radarr (`radarr_*`, `sonarr_*`, `arr_root_folder_library_map`, `preseed_arr`); `ArrService` is reconfigured on settings save. Distinct from upstream's import webhooks. | `src/services/arr_service.py`, `src/processors/upload_processor.py`, settings UI, `tests/test_arr_service.py`, `tests/test_upload_processor_preseed.py` |
 | Kometa staging | `kometa_library_paths` maps a Plex library to its Kometa directory on every save path; `stage_collections` stages artwork for a collection not yet in Plex into each movie library; `stage_specials` controls staging Specials for a show whose season 0 Plex lacks, including when Sonarr knows the season; a forced save removes the stale copies with other extensions once the new file has landed. | `src/processors/upload_processor.py`, `src/kometa/kometa_saver.py`, `src/core/config.py` (`resolve_library_directory`), `tests/test_upload_processor_kometa_staging.py`, `tests/test_kometa_saver_retry.py`, `tests/test_upload_processor_tv_artwork.py` |
 | Scraping | MediUX `movie_poster` files in a collection set without `movie_id` count as the collection poster; title cards fall back to per-file episode metadata when the show omits episode lists. URL validation (IPv6, IDNA, label rules) in `utils.py` instead of the `validators` package. | `src/scrapers/mediux_scraper.py`, `src/utils/utils.py`, `tests/test_mediux_scraper_process_set.py`, `tests/test_utils_urls.py` |
-| Config paths | `CONFIG_PATH`/`LOGS_DIR` env and `--config`/`--logs` CLI overrides; code that re-reads the config (scrapers, upload processor, settings save) uses `Config.at_active_path()` so it follows them. | `src/artwork_uploader.py`, `src/models/arguments.py`, `src/core/config.py`, `tests/test_config_save.py` |
+| Config paths | `CONFIG_PATH`/`LOGS_DIR` env and `--config`/`--logs` CLI overrides; code that re-reads the config (scrapers, upload processor, settings save) uses `Config.at_active_path()` so it follows them. The CLI's default bulk-file argument resolves through `BulkFileService` (honors the Docker `/bulk_imports` mount and `BULK_IMPORTS_DIR`). | `src/artwork_uploader.py`, `src/models/arguments.py`, `src/core/config.py`, `tests/test_config_save.py`, `tests/test_cli_bulk_default_path.py` |
 
 ## Decisions
 
@@ -128,3 +128,11 @@ Dated so a later sync can revisit them.
   - `PlexLibraryIndex.normalize_title` and `AssetIndex`'s key normalizer keep non-Latin letters
     (upstream folds to ASCII, which erases e.g. Japanese titles and makes them unmatchable); the ZIP resolver treats upstream's
     `"unavailable"` miss sentinel as a miss so the title-variant cascade still runs.
+  - The CLI's default bulk-file argument (no filename given on `bulk`) now resolves through
+    `globals.bulk_file_service.get_bulk_file_path(config.bulk_txt)` instead of a bare
+    `os.path.join("bulk_imports", ...)` relative to the process cwd, so it honors the Docker
+    `/bulk_imports` mount and the `BULK_IMPORTS_DIR` override like every other bulk-file read/write.
+  - `AssetIndex.__init__` only quarantines the SQLite file for confirmed corruption
+    (`sqlite3.DatabaseError`, not its `sqlite3.OperationalError` subclass); a lock-contention
+    timeout past `busy_timeout` now propagates instead of renaming aside and emptying a healthy
+    index, so the caller's existing cache-miss/full-crawl fallback handles it.

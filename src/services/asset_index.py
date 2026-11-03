@@ -77,13 +77,21 @@ class AssetIndex:
         self.path = path
         try:
             self._ensure_schema()
+        except sqlite3.OperationalError:
+            # Lock contention (another process holding a write transaction past our
+            # busy_timeout) or another transient operational failure. The database itself
+            # is fine - quarantining it here would destroy a healthy cache for a problem
+            # that resolves on its own. Let the caller's existing cache-miss fallback
+            # handle it instead.
+            raise
         except sqlite3.DatabaseError as e:
             # debug_me lives in utils.notifications, which imports the services package - import
             # it lazily here to avoid a start-up import cycle when the scraper pulls in the index.
             from utils.notifications import debug_me
-            # The file exists but is not a valid SQLite database (corruption, a truncated
-            # write on a flaky filesystem, ...). Preserve it for inspection and start clean:
-            # the next crawl repopulates it, nothing is lost that a scrape can't rebuild.
+            # Confirmed corruption (not a database / malformed schema / a truncated write on
+            # a flaky filesystem, ...), not a transient lock. Preserve it for inspection and
+            # start clean: the next crawl repopulates it, nothing is lost that a scrape can't
+            # rebuild.
             corrupt = f"{self.path}.corrupt-{int(time.time())}"
             try:
                 os.rename(self.path, corrupt)
