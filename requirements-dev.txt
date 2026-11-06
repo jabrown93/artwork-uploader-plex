@@ -56,7 +56,7 @@ markupsafe==3.0.4
     #   werkzeug
 mypy==2.4.1
     # via -r requirements-dev.in
-mypy-extensions==1.1.0
+mypy-extensions==1.2.0
     # via mypy
 oauthlib==4.0.1
     # via requests-oauthlib
