@@ -104,7 +104,7 @@ requests-oauthlib==2.0.0
     # via
     #   -r requirements.in
     #   apprise
-ruff==0.17.3
+ruff==0.17.4
     # via -r requirements-dev.in
 schedule==1.2.2
     # via -r requirements.in
