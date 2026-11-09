@@ -1,3 +1,5 @@
+## [2.0.2](https://github.com/jabrown93/artwork-uploader-plex/compare/v2.0.1...v2.0.2) (2026-11-09)
+
 ## [2.0.1](https://github.com/jabrown93/artwork-uploader-plex/compare/v2.0.0...v2.0.1) (2026-11-03)
 
 ### Bug Fixes
