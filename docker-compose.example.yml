@@ -1,6 +1,6 @@
 services:
   artwork_uploader:
-    image: ghcr.io/jabrown93/artwork-uploader:latest@sha256:8f998278e1ee063b8a92048bb50f9988ac93106d15d47fc1321388ecc5badc73
+    image: ghcr.io/jabrown93/artwork-uploader:latest@sha256:07f485633a39781c6d272fa7aedaacd9aacc9ea826c138286e6b62b642db73cb
     container_name: artwork-uploader
     ports:
       - "4567:4567"
