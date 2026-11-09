@@ -60,7 +60,7 @@ jobs:
       packages: write
       id-token: write
     steps:
-      - uses: jabrown93/ci/actions/docker-image@fe2a2fc918f8095641199e9f43d8cc19b7326d4b # docker-image-v1.0.4
+      - uses: jabrown93/ci/actions/docker-image@5b0515c4e0126f0c98e8433f52c8e0958525051f # docker-image-v1.0.5
         with:
           image: ghcr.io/jabrown93/artwork-uploader
           version: ${{ needs.release.outputs.version }}
