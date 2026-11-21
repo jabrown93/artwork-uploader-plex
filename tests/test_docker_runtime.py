@@ -11,7 +11,7 @@ def test_container_uses_init_then_drops_privileges():
         'ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh", '
         '"python", "/app/src/artwork_uploader.py"]' in dockerfile
     )
-    assert 'CMD ["--debug"]' in dockerfile
+    assert '"--debug"' not in dockerfile
     assert "USER artwork" not in dockerfile
     assert 'exec gosu "$PUID:$PGID" "$@"' in entrypoint
 
