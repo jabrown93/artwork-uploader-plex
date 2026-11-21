@@ -1,3 +1,9 @@
+## [2.0.4](https://github.com/jabrown93/artwork-uploader-plex/compare/v2.0.3...v2.0.4) (2026-11-21)
+
+### Bug Fixes
+
+* **docker:** drop default --debug CMD ([#169](https://github.com/jabrown93/artwork-uploader-plex/issues/169)) ([79d4bbd](https://github.com/jabrown93/artwork-uploader-plex/commit/79d4bbdb24cde52e1383554cfc93c27132d64bd1))
+
 ## [2.0.3](https://github.com/jabrown93/artwork-uploader-plex/compare/v2.0.2...v2.0.3) (2026-11-16)
 
 ## [2.0.2](https://github.com/jabrown93/artwork-uploader-plex/compare/v2.0.1...v2.0.2) (2026-11-09)
