@@ -1,4 +1,4 @@
-FROM python:3.15.2@sha256:fa4f927f66f3ff00a0bd02ef9c8a9afce66b79be6c84741eba258691756803e4
+FROM python:3.15.2@sha256:c3f4160f1cceaf4daa49e2b0b693cae9bb2405efe9e8f8f519dde1ea6c831248
 
 ENV PATH="/app/venv/bin:$PATH"
 
